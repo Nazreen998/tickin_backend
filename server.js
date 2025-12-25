@@ -10,34 +10,66 @@ import usersRoutes from "./src/modules/users/users.routes.js";
 import dashboardRoutes from "./src/modules/dashboard/dashboard.routes.js";
 import ordersRoutes from "./src/modules/orders/orders.routes.js";
 import timelineRoutes from "./src/modules/timeline/timeline.routes.js";
-import slotRoutes from "./src/modules/slot/slot.routes.js"; // ✅ ESM import
+import slotRoutes from "./src/modules/slot/slot.routes.js";
 import productsRoutes from "./src/modules/products/products.routes.js";
-
 
 dotenv.config();
 
 const app = express();
-app.use(cors());
-app.use(express.json());
 
+/**
+ * ✅ Important for Render/Railway/Proxy hosting
+ * so req.ip, secure cookies, etc. work properly behind proxies
+ */
+app.set("trust proxy", 1);
+
+/**
+ * ✅ Middleware
+ */
+app.use(
+  cors({
+    origin: "*", // 🔥 later you can change to frontend domain for security
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    credentials: true,
+  })
+);
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true }));
+
+/**
+ * ✅ Root Route (Fix for Cannot GET /)
+ */
+app.get("/", (req, res) => {
+  res.send("✅ Tickin Backend is running!");
+});
+
+/**
+ * ✅ Health Check Route
+ */
 app.get("/health", (req, res) => {
   res.json({ status: "OK", app: "Tickin Backend" });
 });
 
+/**
+ * ✅ DynamoDB Connection Test (optional)
+ * NOTE: keep it for testing, but you can remove in production for security.
+ */
 app.get("/db-test", async (req, res) => {
   try {
     const result = await dynamoClient.send(new ListTablesCommand({}));
     res.json({
-      message: "DynamoDB connected successfully",
+      message: "✅ DynamoDB connected successfully",
       tables: result.TableNames,
     });
   } catch (err) {
-    console.error(err);
+    console.error("❌ DynamoDB Error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ✅ Routes
+/**
+ * ✅ API Routes
+ */
 app.use("/auth", authRoutes);
 app.use("/users", usersRoutes);
 app.use("/dashboard", dashboardRoutes);
@@ -45,12 +77,45 @@ app.use("/orders", ordersRoutes);
 app.use("/timeline", timelineRoutes);
 app.use("/products", productsRoutes);
 
-
-// ✅ Slot routes
+/**
+ * ✅ Slot Routes
+ */
 app.use("/api", slotRoutes);
 
-// ✅ Start server only once
+/**
+ * ✅ 404 Handler
+ */
+app.use((req, res) => {
+  res.status(404).json({
+    error: "Route not found",
+    path: req.originalUrl,
+  });
+});
+
+/**
+ * ✅ Global Error Handler
+ */
+app.use((err, req, res, next) => {
+  console.error("❌ Server Error:", err);
+  res.status(err.status || 500).json({
+    error: err.message || "Internal Server Error",
+  });
+});
+
+/**
+ * ✅ Start Server
+ */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Tickin API running on port", PORT);
+  console.log(`✅ Tickin API running on port ${PORT}`);
+});
+
+/**
+ * ✅ Prevent server crash on unhandled errors
+ */
+process.on("unhandledRejection", (reason) => {
+  console.error("❌ Unhandled Rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("❌ Uncaught Exception:", err);
 });
