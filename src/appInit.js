@@ -1,7 +1,7 @@
 import { loadDistributorPairingMap } from "./helpers/excelPairing.js";
 import { loadProductsFromExcel } from "./helpers/excelProducts.js";
-import productRoutes from "./modules/products/products.routes.js";
-app.use("/products", productRoutes);
+
+// ✅ ONLY exports (NO app.use here)
 
 export const pairingMap = loadDistributorPairingMap(
   process.env.PAIRING_EXCEL_PATH || "./data/distributor_location.xlsx"
