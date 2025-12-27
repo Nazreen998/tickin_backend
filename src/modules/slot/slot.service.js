@@ -115,9 +115,8 @@ export async function managerOpenLastSlot({
 
           // ✅ Manager cannot modify BOOKED + FULL
           ConditionExpression: "NOT (#status = :booked AND vehicleType = :full)",
-
-          UpdateExpression: "SET #status = :s, time = :t, vehicleType = :vt, pos = :p",
-          ExpressionAttributeNames: { "#status": "status" },
+          UpdateExpression: "SET #status = :s, #t = :t, vehicleType = :vt, pos = :p",
+ExpressionAttributeNames: { "#status": "status", "#t": "time" },
           ExpressionAttributeValues: {
             ":s": newStatus,
             ":booked": "BOOKED",
@@ -176,11 +175,12 @@ export async function bookSlot({
 
             // ✅ allow booking only if not booked
             ConditionExpression: "attribute_not_exists(#status) OR #status = :available",
-
             UpdateExpression:
-              "SET #status = :booked, userId = :uid, time = :t, vehicleType = :vt, pos = :p",
-
-            ExpressionAttributeNames: { "#status": "status" },
+  "SET #status = :booked, userId = :uid, #t = :t, vehicleType = :vt, pos = :p",
+ExpressionAttributeNames: {
+  "#status": "status",
+  "#t": "time"
+},        
             ExpressionAttributeValues: {
               ":available": "AVAILABLE",
               ":booked": "BOOKED",
