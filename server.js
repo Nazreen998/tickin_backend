@@ -13,6 +13,7 @@ import timelineRoutes from "./src/modules/timeline/timeline.routes.js";
 import slotRoutes from "./src/modules/slot/slot.routes.js";
 import productsRoutes from "./src/modules/products/products.routes.js";
 import salesRoutes from "./src/modules/sales/sales.routes.js";
+import tripsRoutes from "./src/modules/trips/trips.routes.js";
 
 
 dotenv.config();
@@ -79,6 +80,9 @@ app.use("/orders", ordersRoutes);
 app.use("/timeline", timelineRoutes);
 app.use("/products", productsRoutes);
 app.use("/sales", salesRoutes);
+app.use("/trips", tripsRoutes);
+
+
 /**
  * ✅ Slot Routes
  */

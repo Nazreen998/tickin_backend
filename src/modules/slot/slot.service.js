@@ -1,6 +1,7 @@
 import dayjs from "dayjs";
 import { v4 as uuidv4 } from "uuid";
 import { ddb } from "../../config/dynamo.js";
+import { addTimelineEvent } from "../timeline/timeline.helper.js";
 
 import {
   GetCommand,
@@ -108,9 +109,6 @@ export async function managerOpenLastSlot({
   const openAfter = rule?.lastSlotOpenAfter || "17:00";
   const nowTime = dayjs().format("HH:mm");
 
-  // Optional strict rule
-  // if (nowTime < openAfter) throw new Error(`Last slot open only after ${openAfter}`);
-
   const updates = [];
 
   for (const pos of ALL_POSITIONS) {
@@ -148,6 +146,7 @@ export async function managerOpenLastSlot({
   }
 
   await Promise.all(updates);
+
   return { ok: true, message: "Last slot updated", allowedPositions };
 }
 
@@ -196,6 +195,7 @@ export async function bookSlot({
   userId,
   distributorCode,
   amount = 0,
+  orderId, // ✅ for timeline
 }) {
   const pk = pkFor(companyCode, date);
 
@@ -215,7 +215,7 @@ export async function bookSlot({
     }
   }
 
-  // ✅ FULL booking (current existing logic)
+  // ✅ FULL booking
   if (vehicleType === "FULL") {
     const slotSk = skForSlot(time, vehicleType, pos);
     const bookingSk = skForBooking(time, vehicleType, pos, userId);
@@ -272,6 +272,22 @@ export async function bookSlot({
       })
     );
 
+    // ✅ TIMELINE EVENT
+    if (orderId) {
+      await addTimelineEvent({
+        orderId,
+        event: "SLOT_BOOKED",
+        by: userId,
+        extra: {
+          vehicleType: "FULL",
+          time,
+          pos,
+          distributorCode,
+          bookingId,
+        },
+      });
+    }
+
     return { ok: true, bookingId, type: "FULL" };
   }
 
@@ -308,7 +324,6 @@ export async function bookSlot({
   }
 
   const newTotal = currentTotal + Number(amount || 0);
-
   const newTripStatus = newTotal >= maxAmount ? "FULL" : "PARTIAL";
 
   // 3️⃣ Transaction: update capacity + add booking
@@ -320,7 +335,6 @@ export async function bookSlot({
             TableName: TABLE_CAPACITY,
             Key: { pk, sk: locSk },
 
-            // ✅ allow only if not full already
             ConditionExpression:
               "attribute_not_exists(tripStatus) OR tripStatus <> :full",
 
@@ -362,6 +376,26 @@ export async function bookSlot({
     })
   );
 
+  // ✅ TIMELINE EVENT
+  if (orderId) {
+    await addTimelineEvent({
+      orderId,
+      event: newTripStatus === "FULL" ? "HALF_MERGED_FULL" : "HALF_BOOKED",
+      by: userId,
+      extra: {
+        vehicleType: "HALF",
+        time,
+        location,
+        amount: Number(amount || 0),
+        totalAmount: newTotal,
+        maxAmount,
+        tripStatus: newTripStatus,
+        bookingId,
+        distributorCode,
+      },
+    });
+  }
+
   return {
     ok: true,
     bookingId,
@@ -385,10 +419,11 @@ export async function cancelSlot({
   vehicleType = "FULL",
   pos,
   userId,
+  orderId,
 }) {
   const pk = pkFor(companyCode, date);
 
-  // ✅ FULL cancel same existing
+  // ✅ FULL cancel
   if (vehicleType === "FULL") {
     const slotSk = skForSlot(time, vehicleType, pos);
     const bookingSk = skForBooking(time, vehicleType, pos, userId);
@@ -420,11 +455,22 @@ export async function cancelSlot({
       })
     );
 
+    if (orderId) {
+      await addTimelineEvent({
+        orderId,
+        event: "SLOT_CANCELLED",
+        by: userId,
+        extra: {
+          vehicleType,
+          time,
+          pos,
+        },
+      });
+    }
+
     return { ok: true };
   }
 
-  // ✅ HALF cancel needs bookingSk known; we will scan booking table (simple)
-  // for now: cancel not implemented for HALF (keep simple)
   throw new Error("HALF cancel not supported yet (manager can clear manually)");
 }
 
@@ -438,6 +484,7 @@ export async function joinWaiting({
   vehicleType = "HALF",
   userId,
   distributorCode,
+  orderId,
 }) {
   const pk = `COMPANY#${companyCode}#DATE#${date}#SLOT#${time}#TYPE#${vehicleType}`;
   const sk = `WAIT#${new Date().toISOString()}#USER#${userId}`;
@@ -458,6 +505,20 @@ export async function joinWaiting({
       ConditionExpression: "attribute_not_exists(pk) AND attribute_not_exists(sk)",
     })
   );
+
+  // ✅ TIMELINE EVENT
+  if (orderId) {
+    await addTimelineEvent({
+      orderId,
+      event: "SLOT_WAITING",
+      by: userId,
+      extra: {
+        vehicleType,
+        time,
+        distributorCode,
+      },
+    });
+  }
 
   return { ok: true, message: "Added to waiting queue" };
 }

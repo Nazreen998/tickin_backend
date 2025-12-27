@@ -10,7 +10,6 @@ export const login = async (req, res) => {
       return res.status(400).json({ message: "Mobile and password required" });
     }
 
-    // ✅ Get user
     const userRes = await ddb.send(
       new GetCommand({
         TableName: "tickin_users",
@@ -39,7 +38,6 @@ export const login = async (req, res) => {
       return res.status(403).json({ message: "Company not assigned" });
     }
 
-    // ✅ Get company config (PK/SK caps)
     const companyRes = await ddb.send(
       new GetCommand({
         TableName: "tickin_company",
@@ -54,19 +52,18 @@ export const login = async (req, res) => {
       return res.status(403).json({ message: "App blocked by company admin" });
     }
 
-    // ✅ Create JWT token
+    // ✅ JWT Token (added distributorId)
     const token = jwt.sign(
-  {
-    userId: user.pk,                 // ✅ ADD THIS
-    pk: user.pk,
-    mobile: user.mobile,
-    role: user.role,
-    companyId: user.companyId,
-    location: user.location || null, // ✅ future use (sales/home)
-  },
-  process.env.JWT_SECRET,
-  { expiresIn: "7d" }
-);
+      {
+        pk: user.pk,
+        mobile: user.mobile,
+        role: user.role,
+        companyId: user.companyId,
+        distributorId: user.distributorId || null, // ✅ IMPORTANT
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
 
     return res.json({
       message: "Login success",
@@ -76,6 +73,7 @@ export const login = async (req, res) => {
         role: user.role,
         mobile: user.mobile,
         companyId: user.companyId,
+        distributorId: user.distributorId || null,
         companyName: companyRes.Item.companyName,
       },
     });

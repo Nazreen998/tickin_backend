@@ -1,17 +1,25 @@
-import { ScanCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import {
+  ScanCommand,
+  PutCommand,
+  UpdateCommand,
+  GetCommand,
+} from "@aws-sdk/lib-dynamodb";
+
 import { ddb } from "../../config/dynamo.js";
 import { v4 as uuidv4 } from "uuid";
+
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
-import { GetCommand } from "@aws-sdk/lib-dynamodb";
 
-// ✅ Confirm Draft Order (DRAFT → PENDING) — Salesman only
+/* ==========================
+   ✅ Confirm Draft Order
+   DRAFT → PENDING (Salesman)
+========================== */
 export const confirmDraftOrder = async (req, res) => {
   try {
     const { orderId } = req.params;
     const user = req.user;
 
-    // ✅ get order
     const existing = await ddb.send(
       new GetCommand({
         TableName: "tickin_orders",
@@ -25,22 +33,19 @@ export const confirmDraftOrder = async (req, res) => {
 
     const order = existing.Item;
 
-    // ✅ only creator confirm
     if (order.createdBy !== user.mobile) {
       return res.status(403).json({ message: "Only creator can confirm" });
     }
 
-    // ✅ only draft confirm
     if (order.status !== "DRAFT") {
       return res.status(403).json({ message: "Order already confirmed" });
     }
 
-    // ✅ update status to PENDING
     await ddb.send(
       new UpdateCommand({
         TableName: "tickin_orders",
         Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression: "set #st = :p, confirmedAt = :t",
+        UpdateExpression: "SET #st = :p, confirmedAt = :t",
         ExpressionAttributeNames: { "#st": "status" },
         ExpressionAttributeValues: {
           ":p": "PENDING",
@@ -49,13 +54,16 @@ export const confirmDraftOrder = async (req, res) => {
       })
     );
 
-    await addTimelineEvent(
+    // ✅ FIXED Timeline Call
+    await addTimelineEvent({
       orderId,
-      "ORDER_CONFIRMED",
-      `Order confirmed by Salesman`,
-      user.mobile,
-      user.role
-    );
+      event: "ORDER_CONFIRMED",
+      by: user.mobile,
+      extra: {
+        role: user.role,
+        note: "Order confirmed by Salesman",
+      },
+    });
 
     return res.json({
       message: "✅ Order confirmed successfully",
@@ -69,39 +77,47 @@ export const confirmDraftOrder = async (req, res) => {
     res.status(500).json({ message: "Error", error: err.message });
   }
 };
-// ✅ CREATE ORDER (Sales Officer only)
+
+/* ==========================
+   ✅ Create Order (DRAFT)
+========================== */
 export const createOrder = async (req, res) => {
   try {
     const user = req.user;
     const { distributorId, distributorName, items } = req.body;
 
     if (!distributorId || !distributorName) {
-      return res.status(400).json({ message: "DistributorId + DistributorName required" });
+      return res
+        .status(400)
+        .json({ message: "DistributorId + DistributorName required" });
     }
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ message: "Items required" });
     }
 
-    // ✅ Build finalItems by fetching products
     let finalItems = [];
     let totalAmount = 0;
 
     for (const it of items) {
-      const pid = it.productId.startsWith("P#") ? it.productId : `P#${it.productId}`;
+      const pid = it.productId.startsWith("P#")
+        ? it.productId
+        : `P#${it.productId}`;
 
       const prodRes = await ddb.send(
         new GetCommand({
           TableName: "tickin_products",
           Key: {
             pk: "PRODUCT",
-            sk: pid
-          }
+            sk: pid,
+          },
         })
       );
 
       if (!prodRes.Item) {
-        return res.status(400).json({ message: `Product not found: ${it.productId}` });
+        return res
+          .status(400)
+          .json({ message: `Product not found: ${it.productId}` });
       }
 
       const prod = prodRes.Item;
@@ -113,7 +129,7 @@ export const createOrder = async (req, res) => {
         category: prod.category,
         price: prod.price,
         qty: it.qty,
-        total: itemTotal
+        total: itemTotal,
       });
 
       totalAmount += itemTotal;
@@ -133,21 +149,28 @@ export const createOrder = async (req, res) => {
       pendingReason: "",
       createdBy: user.mobile,
       createdRole: user.role,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
 
-    await ddb.send(new PutCommand({
-      TableName: "tickin_orders",
-      Item: orderItem
-    }));
-
-    await addTimelineEvent(
-      orderId,
-      "ORDER_DRAFT_CREATED",
-      `Draft created by ${user.role}`,
-      user.mobile,
-      user.role
+    await ddb.send(
+      new PutCommand({
+        TableName: "tickin_orders",
+        Item: orderItem,
+      })
     );
+
+    // ✅ FIXED Timeline Call
+    await addTimelineEvent({
+      orderId,
+      event: "ORDER_DRAFT_CREATED",
+      by: user.mobile,
+      extra: {
+        role: user.role,
+        distributorId,
+        distributorName,
+        totalAmount,
+      },
+    });
 
     return res.json({
       message: "Order created ✅",
@@ -159,17 +182,18 @@ export const createOrder = async (req, res) => {
         distributor: distributorName,
         items: finalItems,
         grandTotal: totalAmount,
-        status: "DRAFT"
-      }
+        status: "DRAFT",
+      },
     });
-
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Error", error: err.message });
   }
 };
 
-// ✅ Pending Orders (Master / Manager)
+/* ==========================
+   ✅ Pending Orders (Master / Manager)
+========================== */
 export const getPendingOrders = async (req, res) => {
   try {
     const result = await ddb.send(
@@ -192,7 +216,9 @@ export const getPendingOrders = async (req, res) => {
   }
 };
 
-// ✅ Today Orders (Master only)
+/* ==========================
+   ✅ Today Orders (Master only)
+========================== */
 export const getTodayOrders = async (req, res) => {
   try {
     const today = new Date().toISOString().split("T")[0];
@@ -217,7 +243,9 @@ export const getTodayOrders = async (req, res) => {
   }
 };
 
-// ✅ Delivery Orders (Master only)
+/* ==========================
+   ✅ Delivery Orders (Master only)
+========================== */
 export const getDeliveryOrders = async (req, res) => {
   try {
     const today = new Date().toISOString().split("T")[0];
@@ -242,7 +270,9 @@ export const getDeliveryOrders = async (req, res) => {
   }
 };
 
-// ✅ Update Pending Reason (Manager only)
+/* ==========================
+   ✅ Update Pending Reason (Manager only)
+========================== */
 export const updatePendingReason = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -255,44 +285,67 @@ export const updatePendingReason = async (req, res) => {
       new UpdateCommand({
         TableName: "tickin_orders",
         Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression: "set pendingReason = :r",
+        UpdateExpression: "SET pendingReason = :r",
         ExpressionAttributeValues: { ":r": reason },
       })
     );
 
-    await addTimelineEvent(
+    await addTimelineEvent({
       orderId,
-      "REASON_UPDATED",
-      `Reason updated: ${reason}`,
-      user.mobile,
-      user.role
-    );
+      event: "REASON_UPDATED",
+      by: user.mobile,
+      extra: {
+        role: user.role,
+        reason,
+      },
+    });
 
-    return res.json({ message: "Pending reason updated successfully", orderId, reason });
+    return res.json({
+      message: "Pending reason updated successfully",
+      orderId,
+      reason,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Error", error: err.message });
   }
 };
 
-// ✅ Confirm Order + Slot Booking (Master/Manager)
+/* ==========================
+   ✅ Confirm Order + Slot Booking
+   (Master / Manager)
+========================== */
 export const confirmOrder = async (req, res) => {
   try {
     const { orderId } = req.params;
     const user = req.user;
 
-    const { slot, companyCode, distributorId } = req.body;
+    const { slot, companyCode } = req.body;
 
     if (!companyCode) {
       return res.status(400).json({ message: "companyCode required" });
     }
+
+    // ✅ Read order first to get distributorId + totalAmount
+    const orderRes = await ddb.send(
+      new GetCommand({
+        TableName: "tickin_orders",
+        Key: { pk: `ORDER#${orderId}`, sk: "META" },
+      })
+    );
+
+    if (!orderRes.Item) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    const order = orderRes.Item;
 
     // ✅ Update order status CONFIRMED
     await ddb.send(
       new UpdateCommand({
         TableName: "tickin_orders",
         Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression: "set #st = :c, confirmedBy = :u, confirmedAt = :t",
+        UpdateExpression: "SET #st = :c, confirmedBy = :u, confirmedAt = :t",
         ExpressionAttributeNames: { "#st": "status" },
         ExpressionAttributeValues: {
           ":c": "CONFIRMED",
@@ -302,15 +355,17 @@ export const confirmOrder = async (req, res) => {
       })
     );
 
-    await addTimelineEvent(
+    await addTimelineEvent({
       orderId,
-      "ORDER_CONFIRMED",
-      `Order confirmed by ${user.role}`,
-      user.mobile,
-      user.role
-    );
+      event: "ORDER_CONFIRMED",
+      by: user.mobile,
+      extra: {
+        role: user.role,
+        note: "Order confirmed by manager/master",
+      },
+    });
 
-    // ✅ SLOT BOOKING
+    // ✅ SLOT BOOKING (passes amount + distributorId + orderId)
     if (slot?.date && slot?.time && slot?.vehicleType && slot?.pos) {
       await bookSlot({
         companyCode,
@@ -319,20 +374,26 @@ export const confirmOrder = async (req, res) => {
         vehicleType: slot.vehicleType,
         pos: slot.pos,
         userId: user.mobile,
-        distributorCode: distributorId || null,
+        distributorCode: order.distributorId,
+        amount: order.totalAmount, // ✅ IMPORTANT
+        orderId,                   // ✅ IMPORTANT
       });
 
-      await addTimelineEvent(
+      await addTimelineEvent({
         orderId,
-        "SLOT_BOOKED",
-        `Slot booked: ${slot.time} (${slot.vehicleType}-${slot.pos})`,
-        user.mobile,
-        user.role
-      );
+        event: "SLOT_BOOKED",
+        by: user.mobile,
+        extra: {
+          role: user.role,
+          time: slot.time,
+          vehicleType: slot.vehicleType,
+          pos: slot.pos,
+        },
+      });
     }
 
     return res.json({
-      message: "Order confirmed successfully",
+      message: "✅ Order confirmed successfully",
       orderId,
       slotBooked: !!slot,
     });
@@ -341,6 +402,10 @@ export const confirmOrder = async (req, res) => {
     return res.status(500).json({ message: "Error", error: err.message });
   }
 };
+
+/* ==========================
+   ✅ View Order
+========================== */
 export const getOrderById = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -359,80 +424,6 @@ export const getOrderById = async (req, res) => {
     return res.json({
       message: "Order fetched ✅",
       order: result.Item,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Error", error: err.message });
-  }
-};
-export const updateOrderItems = async (req, res) => {
-  try {
-    const { orderId } = req.params;
-    const { items } = req.body;
-    const user = req.user;
-
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ message: "Items required" });
-    }
-
-    // ✅ get existing order
-    const existing = await ddb.send(
-      new GetCommand({
-        TableName: "tickin_orders",
-        Key: { pk: `ORDER#${orderId}`, sk: "META" },
-      })
-    );
-
-    if (!existing.Item) {
-      return res.status(404).json({ message: "Order not found" });
-    }
-
-    const order = existing.Item;
-
-    // ✅ Only creator can edit
-    if (order.createdBy !== user.mobile) {
-      return res.status(403).json({ message: "Only creator can edit" });
-    }
-
-    // ✅ Only DRAFT editable
-    if (order.status !== "DRAFT") {
-      return res.status(403).json({ message: "Order already confirmed. Cannot edit." });
-    }
-
-    // ✅ recalc total
-    let totalAmount = 0;
-    items.forEach((i) => {
-      totalAmount += Number(i.qty) * Number(i.price);
-    });
-
-    // ✅ update order
-    await ddb.send(
-      new UpdateCommand({
-        TableName: "tickin_orders",
-        Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression: "set items = :it, totalAmount = :ta, updatedAt = :u",
-        ExpressionAttributeValues: {
-          ":it": items,
-          ":ta": totalAmount,
-          ":u": new Date().toISOString(),
-        },
-      })
-    );
-
-    await addTimelineEvent(
-      orderId,
-      "ORDER_UPDATED",
-      "Order updated by Salesman",
-      user.mobile,
-      user.role
-    );
-
-    return res.json({
-      message: "✅ Order updated successfully",
-      orderId,
-      status: "DRAFT",
-      totalAmount,
-      items,
     });
   } catch (err) {
     console.error(err);

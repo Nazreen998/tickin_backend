@@ -8,7 +8,7 @@ const router = express.Router();
 router.get(
   "/:orderId",
   verifyToken,
-  allowRoles("MASTER", "MANAGER", "DISTRIBUTOR", "DRIVER", "SALES OFFICER"),
+  allowRoles("MASTER", "MANAGER", "DISTRIBUTOR", "SALES OFFICER"),
   getOrderTimeline
 );
 
