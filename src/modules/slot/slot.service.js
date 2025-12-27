@@ -41,14 +41,17 @@ async function getRule(companyCode) {
       Key: { pk, sk },
     })
   );
+
   return res.Item || null;
 }
 
-// ✅ GET SLOT GRID (ALWAYS RETURN DEFAULT GRID)
+/**
+ * ✅ GET SLOT GRID (ALWAYS RETURN DEFAULT GRID)
+ * DB stores only overrides
+ */
 export async function getSlotGrid({ companyCode, date }) {
   const pk = pkFor(companyCode, date);
 
-  // 1️⃣ Fetch DB overrides / bookings
   const res = await ddb.send(
     new QueryCommand({
       TableName: TABLE_CAPACITY,
@@ -59,9 +62,7 @@ export async function getSlotGrid({ companyCode, date }) {
 
   const overrides = res.Items || [];
 
-  // 2️⃣ Generate SYSTEM default slots
   const defaultSlots = [];
-
   for (const time of DEFAULT_SLOTS) {
     for (const pos of ALL_POSITIONS) {
       defaultSlots.push({
@@ -75,7 +76,6 @@ export async function getSlotGrid({ companyCode, date }) {
     }
   }
 
-  // 3️⃣ Merge overrides on top of defaults
   const finalSlots = defaultSlots.map((slot) => {
     const override = overrides.find((o) => o.sk === slot.sk);
     return override ? { ...slot, ...override } : slot;
@@ -84,7 +84,10 @@ export async function getSlotGrid({ companyCode, date }) {
   return finalSlots;
 }
 
-// ✅ Manager Open Last Slot (ONLY opens last slot positions, cannot touch BOOKED+FULL)
+/**
+ * ✅ Manager Open Last Slot
+ * Manager cannot modify BOOKED + FULL slots
+ */
 export async function managerOpenLastSlot({
   companyCode,
   date,
@@ -98,7 +101,7 @@ export async function managerOpenLastSlot({
   const openAfter = rule?.lastSlotOpenAfter || "17:00";
   const nowTime = dayjs().format("HH:mm");
 
-  // Optional strict check
+  // Optional strict rule
   // if (nowTime < openAfter) throw new Error(`Last slot open only after ${openAfter}`);
 
   const updates = [];
@@ -113,10 +116,17 @@ export async function managerOpenLastSlot({
           TableName: TABLE_CAPACITY,
           Key: { pk, sk },
 
-          // ✅ Manager cannot modify BOOKED + FULL
-          ConditionExpression: "NOT (#status = :booked AND vehicleType = :full)",
-          UpdateExpression: "SET #status = :s, #t = :t, vehicleType = :vt, pos = :p",
-ExpressionAttributeNames: { "#status": "status", "#t": "time" },
+          ConditionExpression: "NOT (#s = :booked AND #vt = :full)",
+
+          UpdateExpression: "SET #s = :s, #t = :t, #vt = :vt, #p = :p",
+
+          ExpressionAttributeNames: {
+            "#s": "status",
+            "#t": "time",
+            "#vt": "vehicleType",
+            "#p": "pos",
+          },
+
           ExpressionAttributeValues: {
             ":s": newStatus,
             ":booked": "BOOKED",
@@ -134,7 +144,9 @@ ExpressionAttributeNames: { "#status": "status", "#t": "time" },
   return { ok: true, message: "Last slot updated", allowedPositions };
 }
 
-// ✅ BOOK SLOT (UPSERT – works even if slot row not in DB)
+/**
+ * ✅ BOOK SLOT (UPSERT - works even if slot row missing)
+ */
 export async function bookSlot({
   companyCode,
   date,
@@ -151,6 +163,7 @@ export async function bookSlot({
   // last slot rule check
   if (time === "20:30") {
     const rule = await getRule(companyCode);
+
     if (rule && rule.lastSlotEnabled === false) {
       throw new Error("Last slot not enabled by manager");
     }
@@ -170,30 +183,30 @@ export async function bookSlot({
       TransactItems: [
         {
           Update: {
-  TableName: TABLE_CAPACITY,
-  Key: { pk, sk: slotSk },
+            TableName: TABLE_CAPACITY,
+            Key: { pk, sk: slotSk },
 
-  ConditionExpression: "attribute_not_exists(#s) OR #s = :available",
+            ConditionExpression: "attribute_not_exists(#s) OR #s = :available",
 
-  UpdateExpression:
-    "SET #s = :booked, userId = :uid, #t = :t, #vt = :vt, #p = :p",
+            UpdateExpression:
+              "SET #s = :booked, userId = :uid, #t = :t, #vt = :vt, #p = :p",
 
-  ExpressionAttributeNames: {
-    "#s": "status",
-    "#t": "time",
-    "#vt": "vehicleType",
-    "#p": "pos",
-  },
+            ExpressionAttributeNames: {
+              "#s": "status",
+              "#t": "time",
+              "#vt": "vehicleType",
+              "#p": "pos",
+            },
 
-  ExpressionAttributeValues: {
-    ":available": "AVAILABLE",
-    ":booked": "BOOKED",
-    ":uid": userId,          // ✅ THIS LINE IS IMPORTANT FIX
-    ":t": time,
-    ":vt": vehicleType,
-    ":p": pos,
-  },
-},
+            ExpressionAttributeValues: {
+              ":available": "AVAILABLE",
+              ":booked": "BOOKED",
+              ":uid": userId,
+              ":t": time,
+              ":vt": vehicleType,
+              ":p": pos,
+            },
+          },
         },
         {
           Put: {
@@ -219,7 +232,9 @@ export async function bookSlot({
   return { ok: true, bookingId };
 }
 
-// ✅ CANCEL SLOT
+/**
+ * ✅ CANCEL SLOT
+ */
 export async function cancelSlot({
   companyCode,
   date,
@@ -239,9 +254,9 @@ export async function cancelSlot({
           Update: {
             TableName: TABLE_CAPACITY,
             Key: { pk, sk: slotSk },
-            ConditionExpression: "userId = :uid AND #status = :booked",
-            UpdateExpression: "SET #status = :available REMOVE userId",
-            ExpressionAttributeNames: { "#status": "status" },
+            ConditionExpression: "userId = :uid AND #s = :booked",
+            UpdateExpression: "SET #s = :available REMOVE userId",
+            ExpressionAttributeNames: { "#s": "status" },
             ExpressionAttributeValues: {
               ":uid": userId,
               ":booked": "BOOKED",
@@ -262,7 +277,9 @@ export async function cancelSlot({
   return { ok: true };
 }
 
-// ✅ WAITING QUEUE
+/**
+ * ✅ WAITING QUEUE JOIN
+ */
 export async function joinWaiting({
   companyCode,
   date,
