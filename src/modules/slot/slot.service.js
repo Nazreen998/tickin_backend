@@ -170,26 +170,30 @@ export async function bookSlot({
       TransactItems: [
         {
           Update: {
-            TableName: TABLE_CAPACITY,
-            Key: { pk, sk: slotSk },
+  TableName: TABLE_CAPACITY,
+  Key: { pk, sk: slotSk },
 
-            // ✅ allow booking only if not booked
-            ConditionExpression: "attribute_not_exists(#status) OR #status = :available",
-            UpdateExpression:
-  "SET #status = :booked, userId = :uid, #t = :t, vehicleType = :vt, pos = :p",
-ExpressionAttributeNames: {
-  "#status": "status",
-  "#t": "time"
-},        
-            ExpressionAttributeValues: {
-              ":available": "AVAILABLE",
-              ":booked": "BOOKED",
-              ":uid": userId,
-              ":t": time,
-              ":vt": vehicleType,
-              ":p": pos,
-            },
-          },
+  ConditionExpression: "attribute_not_exists(#s) OR #s = :available",
+
+  UpdateExpression:
+    "SET #s = :booked, userId = :uid, #t = :t, #vt = :vt, #p = :p",
+
+  ExpressionAttributeNames: {
+    "#s": "status",
+    "#t": "time",
+    "#vt": "vehicleType",
+    "#p": "pos",
+  },
+
+  ExpressionAttributeValues: {
+    ":available": "AVAILABLE",
+    ":booked": "BOOKED",
+    ":uid": userId,          // ✅ THIS LINE IS IMPORTANT FIX
+    ":t": time,
+    ":vt": vehicleType,
+    ":p": pos,
+  },
+},
         },
         {
           Put: {
