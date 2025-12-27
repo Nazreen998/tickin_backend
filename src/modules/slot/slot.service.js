@@ -11,6 +11,8 @@ import {
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 
+import { pairingMap } from "../../appInit.js"; // ✅ uses distributor excel mapping
+
 const TABLE_CAPACITY = "tickin_slot_capacity";
 const TABLE_BOOKINGS = "tickin_slot_bookings";
 const TABLE_QUEUE = "tickin_slot_waiting_queue";
@@ -20,12 +22,17 @@ const TABLE_RULES = "tickin_slot_rules";
 const DEFAULT_SLOTS = ["09:00", "12:30", "16:30", "20:30"];
 const ALL_POSITIONS = ["A", "B", "C", "D"];
 
+const DEFAULT_MAX_AMOUNT = 80000;
+
 /** Utils */
 function pkFor(companyCode, date) {
   return `COMPANY#${companyCode}#DATE#${date}`;
 }
 function skForSlot(time, vehicleType, pos) {
   return `SLOT#${time}#TYPE#${vehicleType}#POS#${pos}`;
+}
+function skForLocationSlot(time, location) {
+  return `LOC_SLOT#${time}#LOC#${location}`;
 }
 function skForBooking(time, vehicleType, pos, userId) {
   return `BOOKING#${time}#TYPE#${vehicleType}#POS#${pos}#USER#${userId}`;
@@ -145,7 +152,40 @@ export async function managerOpenLastSlot({
 }
 
 /**
- * ✅ BOOK SLOT (UPSERT - works even if slot row missing)
+ * ✅ Manager Set Slot Max Amount (override 80k)
+ * creates/updates location slot row
+ */
+export async function managerSetSlotMaxAmount({
+  companyCode,
+  date,
+  time,
+  location,
+  maxAmount,
+}) {
+  const pk = pkFor(companyCode, date);
+  const sk = skForLocationSlot(time, location);
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk },
+      UpdateExpression: "SET maxAmount = :m, #t = :t, location = :loc",
+      ExpressionAttributeNames: { "#t": "time" },
+      ExpressionAttributeValues: {
+        ":m": Number(maxAmount),
+        ":t": time,
+        ":loc": Number(location),
+      },
+    })
+  );
+
+  return { ok: true, message: "MaxAmount updated ✅", maxAmount };
+}
+
+/**
+ * ✅ BOOK SLOT
+ * FULL = normal direct book
+ * HALF = merge by location, totalAmount based FULL conversion
  */
 export async function bookSlot({
   companyCode,
@@ -155,12 +195,11 @@ export async function bookSlot({
   pos,
   userId,
   distributorCode,
+  amount = 0,
 }) {
   const pk = pkFor(companyCode, date);
-  const slotSk = skForSlot(time, vehicleType, pos);
-  const bookingSk = skForBooking(time, vehicleType, pos, userId);
 
-  // last slot rule check
+  // ✅ last slot rule check
   if (time === "20:30") {
     const rule = await getRule(companyCode);
 
@@ -176,35 +215,126 @@ export async function bookSlot({
     }
   }
 
-  const bookingId = uuidv4();
+  // ✅ FULL booking (current existing logic)
+  if (vehicleType === "FULL") {
+    const slotSk = skForSlot(time, vehicleType, pos);
+    const bookingSk = skForBooking(time, vehicleType, pos, userId);
+    const bookingId = uuidv4();
 
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Update: {
+              TableName: TABLE_CAPACITY,
+              Key: { pk, sk: slotSk },
+
+              ConditionExpression: "attribute_not_exists(#s) OR #s = :available",
+
+              UpdateExpression:
+                "SET #s = :booked, userId = :uid, #t = :t, #vt = :vt, #p = :p",
+
+              ExpressionAttributeNames: {
+                "#s": "status",
+                "#t": "time",
+                "#vt": "vehicleType",
+                "#p": "pos",
+              },
+
+              ExpressionAttributeValues: {
+                ":available": "AVAILABLE",
+                ":booked": "BOOKED",
+                ":uid": userId,
+                ":t": time,
+                ":vt": vehicleType,
+                ":p": pos,
+              },
+            },
+          },
+          {
+            Put: {
+              TableName: TABLE_BOOKINGS,
+              Item: {
+                pk,
+                sk: bookingSk,
+                bookingId,
+                slotTime: time,
+                vehicleType,
+                pos,
+                userId,
+                distributorCode: distributorCode || null,
+                status: "CONFIRMED",
+                createdAt: new Date().toISOString(),
+              },
+            },
+          },
+        ],
+      })
+    );
+
+    return { ok: true, bookingId, type: "FULL" };
+  }
+
+  /**
+   * ✅ HALF Booking Logic (Merge by Location)
+   */
+  const distributorInfo = pairingMap?.[distributorCode];
+  const location = distributorInfo?.location;
+
+  if (!location) {
+    throw new Error(`Distributor location not found for ${distributorCode}`);
+  }
+
+  const locSk = skForLocationSlot(time, location);
+  const bookingId = uuidv4();
+  const bookingSk = `BOOKING#${time}#LOC#${location}#USER#${userId}#${bookingId}`;
+
+  // 1️⃣ Get current slot totals
+  const current = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: locSk },
+    })
+  );
+
+  const existing = current.Item || null;
+
+  const currentTotal = Number(existing?.totalAmount || 0);
+  const maxAmount = Number(existing?.maxAmount || DEFAULT_MAX_AMOUNT);
+
+  // 2️⃣ Check if already FULL
+  if (existing?.tripStatus === "FULL") {
+    throw new Error("Trip already full for this location slot");
+  }
+
+  const newTotal = currentTotal + Number(amount || 0);
+
+  const newTripStatus = newTotal >= maxAmount ? "FULL" : "PARTIAL";
+
+  // 3️⃣ Transaction: update capacity + add booking
   await ddb.send(
     new TransactWriteCommand({
       TransactItems: [
         {
           Update: {
             TableName: TABLE_CAPACITY,
-            Key: { pk, sk: slotSk },
+            Key: { pk, sk: locSk },
 
-            ConditionExpression: "attribute_not_exists(#s) OR #s = :available",
+            // ✅ allow only if not full already
+            ConditionExpression:
+              "attribute_not_exists(tripStatus) OR tripStatus <> :full",
 
             UpdateExpression:
-              "SET #s = :booked, userId = :uid, #t = :t, #vt = :vt, #p = :p",
+              "SET #t = :t, location = :loc, maxAmount = if_not_exists(maxAmount, :m), totalAmount = :newTotal, tripStatus = :ts",
 
-            ExpressionAttributeNames: {
-              "#s": "status",
-              "#t": "time",
-              "#vt": "vehicleType",
-              "#p": "pos",
-            },
-
+            ExpressionAttributeNames: { "#t": "time" },
             ExpressionAttributeValues: {
-              ":available": "AVAILABLE",
-              ":booked": "BOOKED",
-              ":uid": userId,
               ":t": time,
-              ":vt": vehicleType,
-              ":p": pos,
+              ":loc": Number(location),
+              ":m": maxAmount,
+              ":newTotal": newTotal,
+              ":ts": newTripStatus,
+              ":full": "FULL",
             },
           },
         },
@@ -216,10 +346,13 @@ export async function bookSlot({
               sk: bookingSk,
               bookingId,
               slotTime: time,
-              vehicleType,
+              vehicleType: "HALF",
               pos,
               userId,
-              distributorCode: distributorCode || null,
+              distributorCode,
+              location: Number(location),
+              amount: Number(amount || 0),
+              tripStatus: newTripStatus,
               status: "CONFIRMED",
               createdAt: new Date().toISOString(),
             },
@@ -229,11 +362,21 @@ export async function bookSlot({
     })
   );
 
-  return { ok: true, bookingId };
+  return {
+    ok: true,
+    bookingId,
+    type: "HALF",
+    location,
+    totalAmount: newTotal,
+    maxAmount,
+    tripStatus: newTripStatus,
+  };
 }
 
 /**
- * ✅ CANCEL SLOT
+ * ✅ CANCEL SLOT (Only manager uses)
+ * for FULL booking -> same logic
+ * for HALF booking -> reduce totalAmount
  */
 export async function cancelSlot({
   companyCode,
@@ -244,37 +387,45 @@ export async function cancelSlot({
   userId,
 }) {
   const pk = pkFor(companyCode, date);
-  const slotSk = skForSlot(time, vehicleType, pos);
-  const bookingSk = skForBooking(time, vehicleType, pos, userId);
 
-  await ddb.send(
-    new TransactWriteCommand({
-      TransactItems: [
-        {
-          Update: {
-            TableName: TABLE_CAPACITY,
-            Key: { pk, sk: slotSk },
-            ConditionExpression: "userId = :uid AND #s = :booked",
-            UpdateExpression: "SET #s = :available REMOVE userId",
-            ExpressionAttributeNames: { "#s": "status" },
-            ExpressionAttributeValues: {
-              ":uid": userId,
-              ":booked": "BOOKED",
-              ":available": "AVAILABLE",
+  // ✅ FULL cancel same existing
+  if (vehicleType === "FULL") {
+    const slotSk = skForSlot(time, vehicleType, pos);
+    const bookingSk = skForBooking(time, vehicleType, pos, userId);
+
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Update: {
+              TableName: TABLE_CAPACITY,
+              Key: { pk, sk: slotSk },
+              ConditionExpression: "userId = :uid AND #s = :booked",
+              UpdateExpression: "SET #s = :available REMOVE userId",
+              ExpressionAttributeNames: { "#s": "status" },
+              ExpressionAttributeValues: {
+                ":uid": userId,
+                ":booked": "BOOKED",
+                ":available": "AVAILABLE",
+              },
             },
           },
-        },
-        {
-          Delete: {
-            TableName: TABLE_BOOKINGS,
-            Key: { pk, sk: bookingSk },
+          {
+            Delete: {
+              TableName: TABLE_BOOKINGS,
+              Key: { pk, sk: bookingSk },
+            },
           },
-        },
-      ],
-    })
-  );
+        ],
+      })
+    );
 
-  return { ok: true };
+    return { ok: true };
+  }
+
+  // ✅ HALF cancel needs bookingSk known; we will scan booking table (simple)
+  // for now: cancel not implemented for HALF (keep simple)
+  throw new Error("HALF cancel not supported yet (manager can clear manually)");
 }
 
 /**
