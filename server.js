@@ -12,6 +12,8 @@ import ordersRoutes from "./src/modules/orders/orders.routes.js";
 import timelineRoutes from "./src/modules/timeline/timeline.routes.js";
 import slotRoutes from "./src/modules/slot/slot.routes.js";
 import productsRoutes from "./src/modules/products/products.routes.js";
+import salesRoutes from "./src/modules/sales/sales.routes.js";
+
 
 dotenv.config();
 
@@ -76,7 +78,7 @@ app.use("/dashboard", dashboardRoutes);
 app.use("/orders", ordersRoutes);
 app.use("/timeline", timelineRoutes);
 app.use("/products", productsRoutes);
-
+app.use("/sales", salesRoutes);
 /**
  * ✅ Slot Routes
  */
@@ -119,3 +121,5 @@ process.on("unhandledRejection", (reason) => {
 process.on("uncaughtException", (err) => {
   console.error("❌ Uncaught Exception:", err);
 });
+import listEndpoints from "express-list-endpoints";
+console.log(listEndpoints(app));

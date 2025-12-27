@@ -1,31 +1,35 @@
-const XLSX = require("xlsx");
+import xlsx from "xlsx";
+import path from "path";
 
-/**
- * Adjust these column names based on your excel
- * Example columns:
- *  - distributor_code
- *  - paired_distributor_code
- */
-function loadDistributorPairingMap(excelPath) {
-  const wb = XLSX.readFile(excelPath);
-  const sheetName = wb.SheetNames[0];
-  const sheet = wb.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+export function loadDistributorPairingMap(filePath) {
+  const fullPath = path.join(process.cwd(), filePath);
+  const workbook = xlsx.readFile(fullPath);
+
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+
+  const rows = xlsx.utils.sheet_to_json(sheet);
 
   const map = {};
 
-  for (const r of rows) {
-    // ✅ Change these keys if your excel has different column headers
-    const from = (r.distributor_code || r.DIST || r.from || "").toString().trim();
-    const to = (r.paired_distributor_code || r.PAIR || r.to || "").toString().trim();
+  for (const row of rows) {
+    const location = String(row["Location"] || row["location"] || "").trim();
+    if (!location) continue;
 
-    if (from && to) {
-      map[from] = to;
-      map[to] = from; // symmetric pairing (optional)
-    }
+    const distributorName = row["Agency Name"] || row["AgencyName"] || row["agencyName"];
+    const area = row["Area"] || row["area"];
+    const phone = row["Phone Number"] || row["PhoneNumber"] || row["phone"];
+
+    if (!map[location]) map[location] = [];
+
+    map[location].push({
+      distributorId: `${location}-${(distributorName || "").slice(0, 5)}`, // optional temp id
+      distributorName: distributorName || "",
+      area: area || "",
+      phoneNumber: phone || "",
+      location,
+    });
   }
 
   return map;
 }
-
-module.exports = { loadDistributorPairingMap };

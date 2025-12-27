@@ -16,6 +16,10 @@ const TABLE_BOOKINGS = "tickin_slot_bookings";
 const TABLE_QUEUE = "tickin_slot_waiting_queue";
 const TABLE_RULES = "tickin_slot_rules";
 
+// ✅ SYSTEM DEFAULT SLOTS (DO NOT STORE IN DB)
+const DEFAULT_SLOTS = ["09:00", "12:30", "16:30", "20:30"];
+const ALL_POSITIONS = ["A", "B", "C", "D"];
+
 /** Utils */
 function pkFor(companyCode, date) {
   return `COMPANY#${companyCode}#DATE#${date}`;
@@ -40,10 +44,11 @@ async function getRule(companyCode) {
   return res.Item || null;
 }
 
-// ✅ GET SLOT GRID
+// ✅ GET SLOT GRID (ALWAYS RETURN DEFAULT GRID)
 export async function getSlotGrid({ companyCode, date }) {
   const pk = pkFor(companyCode, date);
 
+  // 1️⃣ Fetch DB overrides / bookings
   const res = await ddb.send(
     new QueryCommand({
       TableName: TABLE_CAPACITY,
@@ -52,11 +57,34 @@ export async function getSlotGrid({ companyCode, date }) {
     })
   );
 
-  const items = (res.Items || []).sort((a, b) => (a.sk > b.sk ? 1 : -1));
-  return items;
+  const overrides = res.Items || [];
+
+  // 2️⃣ Generate SYSTEM default slots
+  const defaultSlots = [];
+
+  for (const time of DEFAULT_SLOTS) {
+    for (const pos of ALL_POSITIONS) {
+      defaultSlots.push({
+        pk,
+        sk: skForSlot(time, "FULL", pos),
+        time,
+        vehicleType: "FULL",
+        pos,
+        status: "AVAILABLE",
+      });
+    }
+  }
+
+  // 3️⃣ Merge overrides on top of defaults
+  const finalSlots = defaultSlots.map((slot) => {
+    const override = overrides.find((o) => o.sk === slot.sk);
+    return override ? { ...slot, ...override } : slot;
+  });
+
+  return finalSlots;
 }
 
-// ✅ Manager Open Last Slot
+// ✅ Manager Open Last Slot (ONLY opens last slot positions, cannot touch BOOKED+FULL)
 export async function managerOpenLastSlot({
   companyCode,
   date,
@@ -73,10 +101,9 @@ export async function managerOpenLastSlot({
   // Optional strict check
   // if (nowTime < openAfter) throw new Error(`Last slot open only after ${openAfter}`);
 
-  const allPos = ["A", "B", "C", "D"];
   const updates = [];
 
-  for (const pos of allPos) {
+  for (const pos of ALL_POSITIONS) {
     const sk = skForSlot(time, vehicleType, pos);
     const newStatus = allowedPositions.includes(pos) ? "AVAILABLE" : "CLOSED";
 
@@ -85,9 +112,20 @@ export async function managerOpenLastSlot({
         new UpdateCommand({
           TableName: TABLE_CAPACITY,
           Key: { pk, sk },
-          UpdateExpression: "SET #status = :s",
+
+          // ✅ Manager cannot modify BOOKED + FULL
+          ConditionExpression: "NOT (#status = :booked AND vehicleType = :full)",
+
+          UpdateExpression: "SET #status = :s, time = :t, vehicleType = :vt, pos = :p",
           ExpressionAttributeNames: { "#status": "status" },
-          ExpressionAttributeValues: { ":s": newStatus },
+          ExpressionAttributeValues: {
+            ":s": newStatus,
+            ":booked": "BOOKED",
+            ":full": "FULL",
+            ":t": time,
+            ":vt": vehicleType,
+            ":p": pos,
+          },
         })
       )
     );
@@ -97,7 +135,7 @@ export async function managerOpenLastSlot({
   return { ok: true, message: "Last slot updated", allowedPositions };
 }
 
-// ✅ BOOK SLOT
+// ✅ BOOK SLOT (UPSERT – works even if slot row not in DB)
 export async function bookSlot({
   companyCode,
   date,
@@ -135,13 +173,21 @@ export async function bookSlot({
           Update: {
             TableName: TABLE_CAPACITY,
             Key: { pk, sk: slotSk },
-            ConditionExpression: "#status = :available",
-            UpdateExpression: "SET #status = :booked, userId = :uid",
+
+            // ✅ allow booking only if not booked
+            ConditionExpression: "attribute_not_exists(#status) OR #status = :available",
+
+            UpdateExpression:
+              "SET #status = :booked, userId = :uid, time = :t, vehicleType = :vt, pos = :p",
+
             ExpressionAttributeNames: { "#status": "status" },
             ExpressionAttributeValues: {
               ":available": "AVAILABLE",
               ":booked": "BOOKED",
               ":uid": userId,
+              ":t": time,
+              ":vt": vehicleType,
+              ":p": pos,
             },
           },
         },
