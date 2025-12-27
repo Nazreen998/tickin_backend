@@ -56,15 +56,17 @@ export const login = async (req, res) => {
 
     // ✅ Create JWT token
     const token = jwt.sign(
-      {
-        pk: user.pk,
-        mobile: user.mobile,
-        role: user.role,
-        companyId: user.companyId,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+  {
+    userId: user.pk,                 // ✅ ADD THIS
+    pk: user.pk,
+    mobile: user.mobile,
+    role: user.role,
+    companyId: user.companyId,
+    location: user.location || null, // ✅ future use (sales/home)
+  },
+  process.env.JWT_SECRET,
+  { expiresIn: "7d" }
+);
 
     return res.json({
       message: "Login success",
