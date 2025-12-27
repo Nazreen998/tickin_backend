@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-
+import "./src/appInit.js";
 import { ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import { dynamoClient } from "./src/config/dynamo.js";
 
