@@ -54,7 +54,27 @@ export const confirmDraftOrder = async (req, res) => {
         },
       })
     );
+    /* ========================================
+   ✅ NEW: Monthly Goal Deduction (Salesman)
+   Runs when Draft is Confirmed (DRAFT → PENDING)
+======================================== */
 
+const items = order.items || [];
+
+if (Array.isArray(items) && items.length > 0) {
+  for (const item of items) {
+    const productId = item.productId;
+    const qty = Number(item.qty || 0);
+
+    if (productId && qty > 0) {
+      await deductMonthlyGoal({
+        salesmanId: user.mobile, // ✅ salesman wise tracking
+        productId,
+        qty,
+      });
+    }
+  }
+}
     await addTimelineEvent({
       orderId,
       event: "ORDER_CONFIRMED",
