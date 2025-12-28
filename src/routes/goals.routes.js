@@ -1,15 +1,10 @@
 import express from "express";
-import { requireAuth } from "../middleware/auth.middleware.js";
+import { verifyToken } from "../middleware/auth.middleware.js";
 import { getMonthlyGoalsForSalesman } from "../services/goals.service.js";
 
 const router = express.Router();
 
-/**
- * ✅ GET /api/goals/monthly
- * Salesman -> see own product goals
- * Manager/Master -> blocked for now (you can allow later if needed)
- */
-router.get("/monthly", requireAuth, async (req, res) => {
+router.get("/monthly", verifyToken, async (req, res) => {
   try {
     const user = req.user;
 
@@ -18,7 +13,7 @@ router.get("/monthly", requireAuth, async (req, res) => {
     }
 
     const data = await getMonthlyGoalsForSalesman({
-      salesmanId: user.userId,
+      salesmanId: user.mobile, // ✅ salesman wise tracking mobile
     });
 
     return res.json(data);
