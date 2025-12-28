@@ -14,7 +14,7 @@ import slotRoutes from "./src/modules/slot/slot.routes.js";
 import productsRoutes from "./src/modules/products/products.routes.js";
 import salesRoutes from "./src/modules/sales/sales.routes.js";
 import tripsRoutes from "./src/modules/trips/trips.routes.js";
-import goalsRoutes from "./routes/goals.routes.js";
+import goalsRoutes from "./src/routes/goals.routes.js";
 
 dotenv.config();
 
