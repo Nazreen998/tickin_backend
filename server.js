@@ -1,10 +1,12 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+
 import "./src/appInit.js";
 import { ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import { dynamoClient } from "./src/config/dynamo.js";
 
+// ✅ modules imports
 import authRoutes from "./src/modules/auth/auth.routes.js";
 import usersRoutes from "./src/modules/users/users.routes.js";
 import dashboardRoutes from "./src/modules/dashboard/dashboard.routes.js";
@@ -14,7 +16,10 @@ import slotRoutes from "./src/modules/slot/slot.routes.js";
 import productsRoutes from "./src/modules/products/products.routes.js";
 import salesRoutes from "./src/modules/sales/sales.routes.js";
 import tripsRoutes from "./src/modules/trips/trips.routes.js";
+
+// ✅ goals routes should be inside src/routes OR move into src/modules/goals
 import goalsRoutes from "./src/routes/goals.routes.js";
+
 
 dotenv.config();
 
