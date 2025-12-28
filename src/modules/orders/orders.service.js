@@ -10,7 +10,8 @@ import { v4 as uuidv4 } from "uuid";
 
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
-import { deductMonthlyGoal } from "../../../services/goals.service.js";
+import { deductMonthlyGoal } from "../services/goals.service.js";
+
 
 /* ==========================
    ✅ Confirm Draft Order
