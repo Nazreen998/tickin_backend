@@ -10,7 +10,8 @@ import { v4 as uuidv4 } from "uuid";
 
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
-
+import { deductMonthlyGoal } from "./goals.service.js";
+import { addTimelineEvent } from "./timeline.service.js";
 /* ==========================
    ✅ Confirm Draft Order
    DRAFT → PENDING (Salesman)
@@ -294,7 +295,6 @@ export const updatePendingReason = async (req, res) => {
     res.status(500).json({ message: "Error", error: err.message });
   }
 };
-
 /* ==========================
    ✅ Confirm Order + Slot Booking
 ========================== */
@@ -321,6 +321,7 @@ export const confirmOrder = async (req, res) => {
 
     const order = orderRes.Item;
 
+    // ✅ Confirm status update
     await ddb.send(
       new UpdateCommand({
         TableName: "tickin_orders",
@@ -335,12 +336,45 @@ export const confirmOrder = async (req, res) => {
       })
     );
 
+    // ✅ Timeline: Order confirmed
     await addTimelineEvent({
       orderId,
       event: "ORDER_CONFIRMED",
       by: user.mobile,
-      extra: { role: user.role, note: "Order confirmed by manager/master" },
+      extra: { role: user.role, note: "Order confirmed" },
     });
+
+    /* ========================================
+       ✅ NEW: Salesman Goal Deduction Logic
+    ======================================== */
+
+    // ✅ Only Sales Officer deducts goal
+    const role = (user.role || "").toUpperCase();
+
+    if (role === "SALES OFFICER" || role === "SALES_OFFICER") {
+
+      // ✅ Order items should exist in order
+      const items = order.items || order.products || [];
+
+      if (Array.isArray(items) && items.length > 0) {
+        for (const item of items) {
+          const productId = item.productId || item.pid || item.id;
+          const qty = Number(item.qty || item.quantity || 0);
+
+          if (productId && qty > 0) {
+            await deductMonthlyGoal({
+              salesmanId: user.mobile, // ✅ salesman wise tracking (mobile)
+              productId,
+              qty,
+            });
+          }
+        }
+      }
+    }
+
+    /* ========================================
+       ✅ Slot booking if slot object provided
+    ======================================== */
 
     if (slot?.date && slot?.time && slot?.vehicleType && slot?.pos) {
       await bookSlot({
@@ -378,7 +412,6 @@ export const confirmOrder = async (req, res) => {
     return res.status(500).json({ message: "Error", error: err.message });
   }
 };
-
 /* ==========================
    ✅ View Order
 ========================== */
