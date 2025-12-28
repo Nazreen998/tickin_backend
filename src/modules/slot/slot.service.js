@@ -291,16 +291,27 @@ export async function bookSlot({
     return { ok: true, bookingId, type: "FULL" };
   }
 
-  /**
-   * ✅ HALF Booking Logic (Merge by Location)
-   */
-  const distributorInfo = pairingMap?.[distributorCode];
-  const location = distributorInfo?.location;
+ // ✅ HALF Booking Logic (Merge by Location)
+// 1) Try from pairingMap (appInit excel mapping)
+// 2) Fallback to DynamoDB tickin_distributors if pairingMap missing
 
-  if (!location) {
-    throw new Error(`Distributor location not found for ${distributorCode}`);
-  }
+let location = pairingMap?.[distributorCode]?.location;
 
+if (!location) {
+  // ✅ fallback: read from DynamoDB
+  const distRes = await ddb.send(
+    new GetCommand({
+      TableName: "tickin_distributors",
+      Key: { pk: "DISTRIBUTOR", sk: distributorCode },
+    })
+  );
+
+  location = distRes.Item?.location;
+}
+
+if (!location) {
+  throw new Error(`Distributor location not found for ${distributorCode}`);
+}
   const locSk = skForLocationSlot(time, location);
   const bookingId = uuidv4();
   const bookingSk = `BOOKING#${time}#LOC#${location}#USER#${userId}#${bookingId}`;
