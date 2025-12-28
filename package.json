@@ -17,6 +17,7 @@
     "@aws-sdk/lib-dynamodb": "^3.958.0",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.5",
+    "csv-parser": "^3.2.0",
     "dayjs": "^1.11.19",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
