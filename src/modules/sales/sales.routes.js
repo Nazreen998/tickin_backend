@@ -15,7 +15,7 @@ router.get(
     try {
       // ✅ IMPORTANT: token must contain location (1/2/3/4/5)
       const location = String(req.user.location || req.user.Location || "").trim();
-      
+
       if (!location) {
         return res.status(400).json({
           ok: false,
@@ -23,13 +23,30 @@ router.get(
         });
       }
 
-      const distributors = (pairingMap?.[location] || []);
+      // ✅ This returns full distributor objects from excel (location wise)
+      const distributors = pairingMap?.[location] || [];
+
+      // ✅ Dropdown-ready list (value + label) WITHOUT deleting old response
+      const distributorDropdown = distributors.map((d) => ({
+        code: String(d?.distributorId || "").trim(),          // ✅ This is your distributor code (D001...)
+        name: String(d?.distributorName || "").trim(),
+        area: String(d?.area || "").trim(),
+        phoneNumber: String(d?.phoneNumber || "").trim(),
+        location: String(d?.location || location).trim(),
+      }));
 
       return res.json({
         ok: true,
         salesmanLocation: location,
+
         distributorCount: distributors.length,
+
+        // ✅ keep your old full list (NO DELETE)
         distributors,
+
+        // ✅ new: frontend dropdown use pannika (value=code, label=name)
+        distributorDropdown,
+
         productCount: productsList.length,
         products: productsList,
       });

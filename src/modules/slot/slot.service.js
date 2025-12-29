@@ -12,7 +12,12 @@ import {
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 
-import { distributorMap } from "../../appInit.js"; // ✅ uses distributor excel mapping
+import { pairingMap } from "../../appInit.js"; 
+// ✅ pairingMap structure:
+// {
+//   "1": [{ distributorId: "D001", ... }, { distributorId: "D002", ... }],
+//   "2": [{ distributorId: "D010", ... }]
+// }
 
 const TABLE_CAPACITY = "tickin_slot_capacity";
 const TABLE_BOOKINGS = "tickin_slot_bookings";
@@ -37,6 +42,29 @@ function skForLocationSlot(time, location) {
 }
 function skForBooking(time, vehicleType, pos, userId) {
   return `BOOKING#${time}#TYPE#${vehicleType}#POS#${pos}#USER#${userId}`;
+}
+
+/**
+ * ✅ Find location + distributor details from pairingMap (Excel)
+ * pairingMap[location] = [{ distributorId, distributorName, ... }]
+ */
+function findDistributorFromPairingMap(map, distributorCode) {
+  const code = String(distributorCode || "").trim();
+  if (!code) return { location: null, distributor: null };
+
+  for (const [location, distributors] of Object.entries(map || {})) {
+    if (!Array.isArray(distributors)) continue;
+
+    const found = distributors.find(
+      (d) => String(d?.distributorId || "").trim() === code
+    );
+
+    if (found) {
+      return { location, distributor: found };
+    }
+  }
+
+  return { location: null, distributor: null };
 }
 
 async function getRule(companyCode) {
@@ -94,7 +122,6 @@ export async function getSlotGrid({ companyCode, date }) {
 
 /**
  * ✅ Manager Open Last Slot
- * Manager cannot modify BOOKED + FULL slots
  */
 export async function managerOpenLastSlot({
   companyCode,
@@ -104,10 +131,6 @@ export async function managerOpenLastSlot({
   allowedPositions = ["A", "B"],
 }) {
   const pk = pkFor(companyCode, date);
-
-  const rule = await getRule(companyCode);
-  const openAfter = rule?.lastSlotOpenAfter || "17:00";
-  const nowTime = dayjs().format("HH:mm");
 
   const updates = [];
 
@@ -120,18 +143,14 @@ export async function managerOpenLastSlot({
         new UpdateCommand({
           TableName: TABLE_CAPACITY,
           Key: { pk, sk },
-
           ConditionExpression: "NOT (#s = :booked AND #vt = :full)",
-
           UpdateExpression: "SET #s = :s, #t = :t, #vt = :vt, #p = :p",
-
           ExpressionAttributeNames: {
             "#s": "status",
             "#t": "time",
             "#vt": "vehicleType",
             "#p": "pos",
           },
-
           ExpressionAttributeValues: {
             ":s": newStatus,
             ":booked": "BOOKED",
@@ -151,8 +170,7 @@ export async function managerOpenLastSlot({
 }
 
 /**
- * ✅ Manager Set Slot Max Amount (override 80k)
- * creates/updates location slot row
+ * ✅ Manager Set Slot Max Amount
  */
 export async function managerSetSlotMaxAmount({
   companyCode,
@@ -169,22 +187,20 @@ export async function managerSetSlotMaxAmount({
       TableName: TABLE_CAPACITY,
       Key: { pk, sk },
       UpdateExpression: "SET maxAmount = :m, #t = :t, #loc = :loc",
-ExpressionAttributeNames: { "#t": "time", "#loc": "location" },
-ExpressionAttributeValues: {
-  ":m": Number(maxAmount),
-  ":t": time,
-  ":loc": Number(location),
-},
+      ExpressionAttributeNames: { "#t": "time", "#loc": "location" },
+      ExpressionAttributeValues: {
+        ":m": Number(maxAmount),
+        ":t": time,
+        ":loc": Number(location),
+      },
     })
   );
 
-  return { ok: true, message: "MaxAmount updated ✅", maxAmount };
+  return { ok: true, message: "MaxAmount updated ✅", maxAmount: Number(maxAmount) };
 }
 
 /**
  * ✅ BOOK SLOT
- * FULL = normal direct book
- * HALF = merge by location, totalAmount based FULL conversion
  */
 export async function bookSlot({
   companyCode,
@@ -195,7 +211,7 @@ export async function bookSlot({
   userId,
   distributorCode,
   amount = 0,
-  orderId, // ✅ for timeline
+  orderId,
 }) {
   const pk = pkFor(companyCode, date);
 
@@ -228,19 +244,15 @@ export async function bookSlot({
             Update: {
               TableName: TABLE_CAPACITY,
               Key: { pk, sk: slotSk },
-
               ConditionExpression: "attribute_not_exists(#s) OR #s = :available",
-
               UpdateExpression:
                 "SET #s = :booked, userId = :uid, #t = :t, #vt = :vt, #p = :p",
-
               ExpressionAttributeNames: {
                 "#s": "status",
                 "#t": "time",
                 "#vt": "vehicleType",
                 "#p": "pos",
               },
-
               ExpressionAttributeValues: {
                 ":available": "AVAILABLE",
                 ":booked": "BOOKED",
@@ -272,7 +284,6 @@ export async function bookSlot({
       })
     );
 
-    // ✅ TIMELINE EVENT
     if (orderId) {
       await addTimelineEvent({
         orderId,
@@ -291,32 +302,33 @@ export async function bookSlot({
     return { ok: true, bookingId, type: "FULL" };
   }
 
- // ✅ HALF Booking Logic (Merge by Location)
-// 1) Try from pairingMap (appInit excel mapping)
-// 2) Fallback to DynamoDB tickin_distributors if pairingMap missing
+  // ✅ HALF Booking Logic
+  // 1) Try from pairingMap (Excel)
+  // 2) Fallback to DynamoDB tickin_distributors
 
-let location = distributorMap?.[distributorCode]?.location;
+  let { location, distributor } = findDistributorFromPairingMap(pairingMap, distributorCode);
 
-if (!location) {
-  // ✅ fallback: read from DynamoDB
-  const distRes = await ddb.send(
-    new GetCommand({
-      TableName: "tickin_distributors",
-      Key: { pk: "DISTRIBUTOR", sk: distributorCode },
-    })
-  );
+  if (!location) {
+    const distRes = await ddb.send(
+      new GetCommand({
+        TableName: "tickin_distributors",
+        Key: { pk: "DISTRIBUTOR", sk: String(distributorCode) },
+      })
+    );
 
-  location = distRes.Item?.location;
-}
+    location = distRes.Item?.location;
+    distributor = distRes.Item || null;
+  }
 
-if (!location) {
-  throw new Error(`Distributor location not found for ${distributorCode}`);
-}
+  if (!location) {
+    throw new Error(`Distributor location not found for ${distributorCode}`);
+  }
+
   const locSk = skForLocationSlot(time, location);
   const bookingId = uuidv4();
   const bookingSk = `BOOKING#${time}#LOC#${location}#USER#${userId}#${bookingId}`;
 
-  // 1️⃣ Get current slot totals
+  // 1️⃣ Get current totals
   const current = await ddb.send(
     new GetCommand({
       TableName: TABLE_CAPACITY,
@@ -329,7 +341,6 @@ if (!location) {
   const currentTotal = Number(existing?.totalAmount || 0);
   const maxAmount = Number(existing?.maxAmount || DEFAULT_MAX_AMOUNT);
 
-  // 2️⃣ Check if already FULL
   if (existing?.tripStatus === "FULL") {
     throw new Error("Trip already full for this location slot");
   }
@@ -337,7 +348,6 @@ if (!location) {
   const newTotal = currentTotal + Number(amount || 0);
   const newTripStatus = newTotal >= maxAmount ? "FULL" : "PARTIAL";
 
-  // 3️⃣ Transaction: update capacity + add booking
   await ddb.send(
     new TransactWriteCommand({
       TransactItems: [
@@ -345,20 +355,19 @@ if (!location) {
           Update: {
             TableName: TABLE_CAPACITY,
             Key: { pk, sk: locSk },
-
             ConditionExpression:
               "attribute_not_exists(tripStatus) OR tripStatus <> :full",
-UpdateExpression:
-  "SET #t = :t, #loc = :loc, maxAmount = if_not_exists(maxAmount, :m), totalAmount = :newTotal, tripStatus = :ts",
-ExpressionAttributeNames: { "#t": "time", "#loc": "location" },
-ExpressionAttributeValues: {
-  ":t": time,
-  ":loc": Number(location),
-  ":m": maxAmount,
-  ":newTotal": newTotal,
-  ":ts": newTripStatus,
-  ":full": "FULL",
-},
+            UpdateExpression:
+              "SET #t = :t, #loc = :loc, maxAmount = if_not_exists(maxAmount, :m), totalAmount = :newTotal, tripStatus = :ts",
+            ExpressionAttributeNames: { "#t": "time", "#loc": "location" },
+            ExpressionAttributeValues: {
+              ":t": time,
+              ":loc": Number(location),
+              ":m": maxAmount,
+              ":newTotal": newTotal,
+              ":ts": newTripStatus,
+              ":full": "FULL",
+            },
           },
         },
         {
@@ -378,6 +387,11 @@ ExpressionAttributeValues: {
               tripStatus: newTripStatus,
               status: "CONFIRMED",
               createdAt: new Date().toISOString(),
+
+              // ✅ optional: save distributor info too
+              distributorName: distributor?.distributorName || distributor?.name || null,
+              area: distributor?.area || null,
+              phoneNumber: distributor?.phoneNumber || distributor?.phone || null,
             },
           },
         },
@@ -385,7 +399,6 @@ ExpressionAttributeValues: {
     })
   );
 
-  // ✅ TIMELINE EVENT
   if (orderId) {
     await addTimelineEvent({
       orderId,
@@ -417,9 +430,7 @@ ExpressionAttributeValues: {
 }
 
 /**
- * ✅ CANCEL SLOT (Only manager uses)
- * for FULL booking -> same logic
- * for HALF booking -> reduce totalAmount
+ * ✅ CANCEL SLOT
  */
 export async function cancelSlot({
   companyCode,
@@ -432,7 +443,6 @@ export async function cancelSlot({
 }) {
   const pk = pkFor(companyCode, date);
 
-  // ✅ FULL cancel
   if (vehicleType === "FULL") {
     const slotSk = skForSlot(time, vehicleType, pos);
     const bookingSk = skForBooking(time, vehicleType, pos, userId);
@@ -469,11 +479,7 @@ export async function cancelSlot({
         orderId,
         event: "SLOT_CANCELLED",
         by: userId,
-        extra: {
-          vehicleType,
-          time,
-          pos,
-        },
+        extra: { vehicleType, time, pos },
       });
     }
 
@@ -515,17 +521,12 @@ export async function joinWaiting({
     })
   );
 
-  // ✅ TIMELINE EVENT
   if (orderId) {
     await addTimelineEvent({
       orderId,
       event: "SLOT_WAITING",
       by: userId,
-      extra: {
-        vehicleType,
-        time,
-        distributorCode,
-      },
+      extra: { vehicleType, time, distributorCode },
     });
   }
 

@@ -8,7 +8,7 @@ import {
   bookSlot,
   cancelSlot,
   joinWaiting,
-  managerSetSlotMaxAmount,   // ✅ NEW
+  managerSetSlotMaxAmount,
 } from "./slot.service.js";
 
 const router = express.Router();
@@ -26,7 +26,10 @@ router.get(
     try {
       const { companyCode, date } = req.query;
       if (!companyCode || !date) {
-        return res.status(400).json({ ok: false, error: "companyCode & date required" });
+        return res.status(400).json({
+          ok: false,
+          error: "companyCode & date required",
+        });
       }
 
       const data = await getSlotGrid({ companyCode, date });
@@ -50,7 +53,10 @@ router.post(
     try {
       const { companyCode, date } = req.body;
       if (!companyCode || !date) {
-        return res.status(400).json({ ok: false, error: "companyCode & date required" });
+        return res.status(400).json({
+          ok: false,
+          error: "companyCode & date required",
+        });
       }
 
       const data = await managerOpenLastSlot(req.body);
@@ -99,8 +105,7 @@ router.post(
 /**
  * ✅ Book Slot
  * URL: /api/slots/book
- * ✅ MANAGER can book
- * ✅ SALES OFFICER can book
+ * ✅ MANAGER + SALES OFFICER can book
  */
 router.post(
   "/slots/book",
@@ -108,12 +113,29 @@ router.post(
   allowRoles("MANAGER", "SALES OFFICER"),
   async (req, res) => {
     try {
-      const { companyCode, date, time, vehicleType, pos, distributorCode, amount } = req.body;
+      const { companyCode, date, time, vehicleType, pos, distributorCode, amount } =
+        req.body;
 
-      if (!companyCode || !date || !time || !vehicleType || !pos || !distributorCode) {
+      if (!companyCode || !date || !time || !vehicleType || !distributorCode) {
         return res.status(400).json({
           ok: false,
-          error: "companyCode,date,time,vehicleType,pos,distributorCode required",
+          error: "companyCode,date,time,vehicleType,distributorCode required",
+        });
+      }
+
+      // ✅ FULL booking requires pos
+      if (vehicleType === "FULL" && !pos) {
+        return res.status(400).json({
+          ok: false,
+          error: "pos required for FULL booking",
+        });
+      }
+
+      // ✅ HALF booking requires amount
+      if (vehicleType === "HALF" && (!amount || Number(amount) <= 0)) {
+        return res.status(400).json({
+          ok: false,
+          error: "amount required for HALF booking",
         });
       }
 
@@ -128,10 +150,10 @@ router.post(
         date,
         time,
         vehicleType,
-        pos,
+        pos, // ✅ optional for HALF
         distributorCode,
         userId,
-        amount: Number(amount || 0), // ✅ optional now; later fetch from order
+        amount: Number(amount || 0),
       });
 
       return res.json(data);
@@ -144,7 +166,7 @@ router.post(
 /**
  * ✅ Cancel Slot
  * URL: /api/slots/cancel
- * ✅ Only MANAGER can cancel (as per your final rule)
+ * ✅ Only MANAGER can cancel
  */
 router.post(
   "/slots/cancel",
@@ -154,14 +176,21 @@ router.post(
     try {
       const { companyCode, date, time, vehicleType, pos, targetUserId } = req.body;
 
-      if (!companyCode || !date || !time || !vehicleType || !pos) {
+      if (!companyCode || !date || !time || !vehicleType) {
         return res.status(400).json({
           ok: false,
-          error: "companyCode,date,time,vehicleType,pos required",
+          error: "companyCode,date,time,vehicleType required",
         });
       }
 
-      // ✅ manager can cancel anyone by passing targetUserId
+      // ✅ FULL cancel requires pos
+      if (vehicleType === "FULL" && !pos) {
+        return res.status(400).json({
+          ok: false,
+          error: "pos required for FULL cancel",
+        });
+      }
+
       const userId = targetUserId || req.user?.userId || req.user?.id;
       if (!userId) {
         return res.status(401).json({ ok: false, error: "Invalid token userId" });
