@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import listEndpoints from "express-list-endpoints";
 
 import "./src/appInit.js";
 import { ListTablesCommand } from "@aws-sdk/client-dynamodb";
@@ -17,9 +18,8 @@ import productsRoutes from "./src/modules/products/products.routes.js";
 import salesRoutes from "./src/modules/sales/sales.routes.js";
 import tripsRoutes from "./src/modules/trips/trips.routes.js";
 
-// ✅ goals routes should be inside src/routes OR move into src/modules/goals
+// ✅ goals routes
 import goalsRoutes from "./src/routes/goals.routes.js";
-
 
 dotenv.config();
 
@@ -27,7 +27,6 @@ const app = express();
 
 /**
  * ✅ Important for Render/Railway/Proxy hosting
- * so req.ip, secure cookies, etc. work properly behind proxies
  */
 app.set("trust proxy", 1);
 
@@ -36,7 +35,7 @@ app.set("trust proxy", 1);
  */
 app.use(
   cors({
-    origin: "*", // 🔥 later you can change to frontend domain for security
+    origin: "*",
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     credentials: true,
   })
@@ -45,7 +44,7 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 /**
- * ✅ Root Route (Fix for Cannot GET /)
+ * ✅ Root Route
  */
 app.get("/", (req, res) => {
   res.send("✅ Tickin Backend is running!");
@@ -59,8 +58,7 @@ app.get("/health", (req, res) => {
 });
 
 /**
- * ✅ DynamoDB Connection Test (optional)
- * NOTE: keep it for testing, but you can remove in production for security.
+ * ✅ DynamoDB Connection Test
  */
 app.get("/db-test", async (req, res) => {
   try {
@@ -86,7 +84,7 @@ app.use("/timeline", timelineRoutes);
 app.use("/products", productsRoutes);
 app.use("/sales", salesRoutes);
 app.use("/trips", tripsRoutes);
-app.use("/api/goals", goalsRoutes);
+app.use("/goals", goalsRoutes);
 
 /**
  * ✅ Slot Routes
@@ -119,6 +117,15 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Tickin API running on port ${PORT}`);
+
+  // ✅ Print all registered endpoints (debug)
+  console.log("✅ Registered Endpoints:");
+  console.table(
+    listEndpoints(app).map((e) => ({
+      methods: e.methods.join(","),
+      path: e.path,
+    }))
+  );
 });
 
 /**
@@ -130,5 +137,3 @@ process.on("unhandledRejection", (reason) => {
 process.on("uncaughtException", (err) => {
   console.error("❌ Uncaught Exception:", err);
 });
-import listEndpoints from "express-list-endpoints";
-console.log(listEndpoints(app));

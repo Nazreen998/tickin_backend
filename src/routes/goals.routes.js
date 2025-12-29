@@ -9,11 +9,17 @@ router.get("/monthly", verifyToken, async (req, res) => {
     const user = req.user;
 
     if (user.role !== "SALES OFFICER") {
-      return res.status(403).json({ message: "Only Sales Officer can view goals" });
+      return res.status(403).json({
+        message: "Only Sales Officer can view goals",
+      });
     }
 
+    // ✅ month optional (example: 2025-12)
+    const month = req.query.month;
+
     const data = await getMonthlyGoalsForSalesman({
-      salesmanId: user.mobile, // ✅ salesman wise tracking mobile
+      salesmanId: user.mobile,
+      month,
     });
 
     return res.json(data);
