@@ -168,12 +168,12 @@ export async function managerSetSlotMaxAmount({
     new UpdateCommand({
       TableName: TABLE_CAPACITY,
       Key: { pk, sk },
-      UpdateExpression: "SET maxAmount = :m, #t = :t, location = :loc",
+      UpdateExpression: "SET #t = :t, #loc = :loc, maxAmount = if_not_exists(maxAmount, :m), totalAmount = :newTotal, tripStatus = :ts",
       ExpressionAttributeNames: { "#t": "time" },
       ExpressionAttributeValues: {
         ":m": Number(maxAmount),
         ":t": time,
-        ":loc": Number(location),
+        "#loc": "location",
       },
     })
   );

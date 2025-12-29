@@ -15,22 +15,15 @@ export function loadDistributorPairingMap(filePath) {
 
   for (const row of rows) {
     const location = String(row["Location"] || row["location"] || "").trim();
-    const distributorCode = String(
-      row["distributorCode"] ||
-      row["DistributorCode"] ||
-      row["distributorId"] ||
-      row["DistributorId"] ||
-      ""
-    ).trim();
+    const distributorCode = String(row["distributorCode"] || "").trim();
 
     if (!location || !distributorCode) continue;
 
-    const distributorName =
-      row["Agency Name"] || row["AgencyName"] || row["agencyName"] || "";
-    const area = row["Area"] || row["area"] || "";
-    const phone = row["Phone Number"] || row["PhoneNumber"] || row["phone"] || "";
+    const distributorName = row["Agency Name"] || "";
+    const area = row["Area"] || "";
+    const phone = row["Phone Number"] || "";
 
-    // ✅ 1) Location wise map
+    // ✅ location wise map for sales/home
     if (!locationWise[location]) locationWise[location] = [];
 
     locationWise[location].push({
@@ -41,13 +34,13 @@ export function loadDistributorPairingMap(filePath) {
       location,
     });
 
-    // ✅ 2) Distributor wise map (important for slot booking)
+    // ✅ distributor wise map for slot booking
     distributorWise[distributorCode] = {
       distributorCode,
       distributorName,
       area,
       phoneNumber: phone,
-      location: Number(location), // slot.service expects number sometimes
+      location: Number(location),
     };
   }
 
