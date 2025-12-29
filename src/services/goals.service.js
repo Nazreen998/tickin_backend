@@ -22,28 +22,30 @@ const getMonthKey = (month) => {
 };
 
 /**
- * ✅ Distributor wise PK
+ * ✅ Salesman wise PK
  */
-const buildGoalKeys = ({ distributorCode, productId, monthKey }) => ({
-  pk: `GOAL#${distributorCode}#${monthKey}`,
+const buildGoalKeys = ({ salesmanId, productId, monthKey }) => ({
+  pk: `GOAL#${salesmanId}#${monthKey}`,
   sk: `PRODUCT#${productId}`,
 });
 
 /**
  * ✅ Deduct goal when order confirmed
+ * salesmanId = user.mobile
  */
 export const deductMonthlyGoal = async ({
-  distributorCode,
+  salesmanId,
   productId,
   qty,
   month,
 }) => {
-  if (!distributorCode || !productId)
-    throw new Error("distributorCode & productId required");
+  if (!salesmanId || !productId)
+    throw new Error("salesmanId & productId required");
+
   if (!qty || qty <= 0) throw new Error("qty must be > 0");
 
   const monthKey = getMonthKey(month);
-  const { pk, sk } = buildGoalKeys({ distributorCode, productId, monthKey });
+  const { pk, sk } = buildGoalKeys({ salesmanId, productId, monthKey });
   const now = new Date().toISOString();
 
   // ✅ 1) Ensure record exists
@@ -62,7 +64,7 @@ export const deductMonthlyGoal = async ({
           Item: {
             pk,
             sk,
-            distributorCode,
+            salesmanId,
             productId,
             month: monthKey,
             defaultGoal: DEFAULT_GOAL,
@@ -125,16 +127,13 @@ export const deductMonthlyGoal = async ({
 };
 
 /**
- * ✅ Get Monthly goals for Distributor
+ * ✅ Get Monthly goals for Salesman
  */
-export const getMonthlyGoalsForDistributor = async ({
-  distributorCode,
-  month,
-}) => {
-  if (!distributorCode) throw new Error("distributorCode required");
+export const getMonthlyGoalsForSalesman = async ({ salesmanId, month }) => {
+  if (!salesmanId) throw new Error("salesmanId required");
 
   const monthKey = getMonthKey(month);
-  const pk = `GOAL#${distributorCode}#${monthKey}`;
+  const pk = `GOAL#${salesmanId}#${monthKey}`;
 
   const res = await ddb.send(
     new QueryCommand({
@@ -148,7 +147,7 @@ export const getMonthlyGoalsForDistributor = async ({
   );
 
   return {
-    distributorCode,
+    salesmanId,
     month: monthKey,
     goals: res.Items || [],
   };
