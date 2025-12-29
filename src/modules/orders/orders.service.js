@@ -54,27 +54,7 @@ export const confirmDraftOrder = async (req, res) => {
         },
       })
     );
-    /* ========================================
-   ✅ NEW: Monthly Goal Deduction (Salesman)
-   Runs when Draft is Confirmed (DRAFT → PENDING)
-======================================== */
 
-const items = order.items || [];
-
-if (Array.isArray(items) && items.length > 0) {
-  for (const item of items) {
-    const productId = item.productId;
-    const qty = Number(item.qty || 0);
-
-    if (productId && qty > 0) {
-      await deductMonthlyGoal({
-        salesmanId: user.mobile, // ✅ salesman wise tracking
-        productId,
-        qty,
-      });
-    }
-  }
-}
     await addTimelineEvent({
       orderId,
       event: "ORDER_CONFIRMED",
@@ -341,17 +321,24 @@ export const confirmOrder = async (req, res) => {
 
     const order = orderRes.Item;
 
+    // ✅ Prevent double confirm
+    if (order.status === "CONFIRMED") {
+      return res.status(400).json({ message: "Order already CONFIRMED" });
+    }
+
     // ✅ Confirm status update
     await ddb.send(
       new UpdateCommand({
         TableName: "tickin_orders",
         Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression: "SET #st = :c, confirmedBy = :u, confirmedAt = :t",
+        UpdateExpression:
+          "SET #st = :c, confirmedBy = :u, confirmedAt = :t, goalDeducted = if_not_exists(goalDeducted, :false)",
         ExpressionAttributeNames: { "#st": "status" },
         ExpressionAttributeValues: {
           ":c": "CONFIRMED",
           ":u": user.mobile,
           ":t": new Date().toISOString(),
+          ":false": false,
         },
       })
     );
@@ -365,37 +352,48 @@ export const confirmOrder = async (req, res) => {
     });
 
     /* ========================================
-       ✅ NEW: Salesman Goal Deduction Logic
+       ✅ Distributor wise Goal Deduction Logic
     ======================================== */
-
-    // ✅ Only Sales Officer deducts goal
     const role = (user.role || "").toUpperCase();
 
-    if (role === "SALES OFFICER" || role === "SALES_OFFICER") {
-
-      // ✅ Order items should exist in order
-      const items = order.items || order.products || [];
+    if (
+      (role === "SALES OFFICER" || role === "SALES_OFFICER") &&
+      order.goalDeducted !== true
+    ) {
+      const distributorCode = order.distributorId; // ✅ D001 / D031 etc
+      const items = order.items || [];
 
       if (Array.isArray(items) && items.length > 0) {
         for (const item of items) {
-          const productId = item.productId || item.pid || item.id;
-          const qty = Number(item.qty || item.quantity || 0);
+          const productId = item.productId;
+          const qty = Number(item.qty || 0);
 
-          if (productId && qty > 0) {
+          if (distributorCode && productId && qty > 0) {
             await deductMonthlyGoal({
-              salesmanId: user.mobile, // ✅ salesman wise tracking (mobile)
+              distributorCode,
               productId,
               qty,
             });
           }
         }
       }
+
+      // ✅ Mark order as goalDeducted true
+      await ddb.send(
+        new UpdateCommand({
+          TableName: "tickin_orders",
+          Key: { pk: `ORDER#${orderId}`, sk: "META" },
+          UpdateExpression: "SET goalDeducted = :true",
+          ExpressionAttributeValues: {
+            ":true": true,
+          },
+        })
+      );
     }
 
     /* ========================================
        ✅ Slot booking if slot object provided
     ======================================== */
-
     if (slot?.date && slot?.time && slot?.vehicleType && slot?.pos) {
       await bookSlot({
         companyCode,
@@ -426,6 +424,7 @@ export const confirmOrder = async (req, res) => {
       message: "✅ Order confirmed successfully",
       orderId,
       slotBooked: !!slot,
+      goalDeducted: true,
     });
   } catch (err) {
     console.error(err);

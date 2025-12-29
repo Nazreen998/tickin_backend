@@ -1,24 +1,34 @@
 import express from "express";
 import { verifyToken } from "../middleware/auth.middleware.js";
-import { getMonthlyGoalsForSalesman } from "../services/goals.service.js";
+import { getMonthlyGoalsForDistributor } from "../services/goals.service.js";
 
 const router = express.Router();
 
+/**
+ * ✅ GET /goals/monthly?distributorCode=D031&month=2025-12
+ */
 router.get("/monthly", verifyToken, async (req, res) => {
   try {
     const user = req.user;
 
-    if (user.role !== "SALES OFFICER") {
+    const role = (user.role || "").toUpperCase();
+    if (role !== "SALES OFFICER" && role !== "SALES_OFFICER") {
       return res.status(403).json({
         message: "Only Sales Officer can view goals",
       });
     }
 
-    // ✅ month optional (example: 2025-12)
-    const month = req.query.month;
+    const month = req.query.month; // optional
+    const distributorCode = req.query.distributorCode;
 
-    const data = await getMonthlyGoalsForSalesman({
-      salesmanId: user.mobile,
+    if (!distributorCode) {
+      return res.status(400).json({
+        message: "distributorCode required (ex: D031)",
+      });
+    }
+
+    const data = await getMonthlyGoalsForDistributor({
+      distributorCode,
       month,
     });
 

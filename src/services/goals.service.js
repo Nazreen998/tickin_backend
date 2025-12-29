@@ -9,27 +9,44 @@ import {
 const GOALS_TABLE = process.env.GOALS_TABLE || "tickin_goals";
 const DEFAULT_GOAL = 500;
 
-const getMonthKey = () => {
+/**
+ * ✅ MonthKey format: YYYY-MM
+ * month optional param: 2025-12
+ */
+const getMonthKey = (month) => {
+  if (month) return month;
   const now = new Date();
   const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  return `${year}-${month}`;
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  return `${year}-${m}`;
 };
 
-const buildGoalKeys = ({ salesmanId, productId, monthKey }) => ({
-  pk: `GOAL#${salesmanId}#${monthKey}`,
+/**
+ * ✅ Distributor wise PK
+ */
+const buildGoalKeys = ({ distributorCode, productId, monthKey }) => ({
+  pk: `GOAL#${distributorCode}#${monthKey}`,
   sk: `PRODUCT#${productId}`,
 });
 
-export const deductMonthlyGoal = async ({ salesmanId, productId, qty }) => {
-  if (!salesmanId || !productId) throw new Error("salesmanId & productId required");
+/**
+ * ✅ Deduct goal when order confirmed
+ */
+export const deductMonthlyGoal = async ({
+  distributorCode,
+  productId,
+  qty,
+  month,
+}) => {
+  if (!distributorCode || !productId)
+    throw new Error("distributorCode & productId required");
   if (!qty || qty <= 0) throw new Error("qty must be > 0");
 
-  const monthKey = getMonthKey();
-  const { pk, sk } = buildGoalKeys({ salesmanId, productId, monthKey });
+  const monthKey = getMonthKey(month);
+  const { pk, sk } = buildGoalKeys({ distributorCode, productId, monthKey });
   const now = new Date().toISOString();
 
-  // ✅ 1) Ensure record exists (create if not exists)
+  // ✅ 1) Ensure record exists
   const existing = await ddb.send(
     new GetCommand({
       TableName: GOALS_TABLE,
@@ -45,7 +62,7 @@ export const deductMonthlyGoal = async ({ salesmanId, productId, qty }) => {
           Item: {
             pk,
             sk,
-            salesmanId,
+            distributorCode,
             productId,
             month: monthKey,
             defaultGoal: DEFAULT_GOAL,
@@ -85,7 +102,7 @@ export const deductMonthlyGoal = async ({ salesmanId, productId, qty }) => {
 
   const updated = updateRes.Attributes;
 
-  // ✅ 3) Calculate remainingQty safely (never negative)
+  // ✅ 3) remainingQty never negative
   const remaining = Math.max(
     0,
     (updated.defaultGoal || DEFAULT_GOAL) - (updated.usedQty || 0)
@@ -107,11 +124,17 @@ export const deductMonthlyGoal = async ({ salesmanId, productId, qty }) => {
   return finalRes.Attributes;
 };
 
-export const getMonthlyGoalsForSalesman = async ({ salesmanId }) => {
-  if (!salesmanId) throw new Error("salesmanId required");
+/**
+ * ✅ Get Monthly goals for Distributor
+ */
+export const getMonthlyGoalsForDistributor = async ({
+  distributorCode,
+  month,
+}) => {
+  if (!distributorCode) throw new Error("distributorCode required");
 
-  const monthKey = getMonthKey();
-  const pk = `GOAL#${salesmanId}#${monthKey}`;
+  const monthKey = getMonthKey(month);
+  const pk = `GOAL#${distributorCode}#${monthKey}`;
 
   const res = await ddb.send(
     new QueryCommand({
@@ -125,7 +148,7 @@ export const getMonthlyGoalsForSalesman = async ({ salesmanId }) => {
   );
 
   return {
-    salesmanId,
+    distributorCode,
     month: monthKey,
     goals: res.Items || [],
   };
