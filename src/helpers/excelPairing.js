@@ -10,26 +10,46 @@ export function loadDistributorPairingMap(filePath) {
 
   const rows = xlsx.utils.sheet_to_json(sheet);
 
-  const map = {};
+  const locationWise = {};
+  const distributorWise = {};
 
   for (const row of rows) {
     const location = String(row["Location"] || row["location"] || "").trim();
-    if (!location) continue;
+    const distributorCode = String(
+      row["distributorCode"] ||
+      row["DistributorCode"] ||
+      row["distributorId"] ||
+      row["DistributorId"] ||
+      ""
+    ).trim();
 
-    const distributorName = row["Agency Name"] || row["AgencyName"] || row["agencyName"];
-    const area = row["Area"] || row["area"];
-    const phone = row["Phone Number"] || row["PhoneNumber"] || row["phone"];
+    if (!location || !distributorCode) continue;
 
-    if (!map[location]) map[location] = [];
+    const distributorName =
+      row["Agency Name"] || row["AgencyName"] || row["agencyName"] || "";
+    const area = row["Area"] || row["area"] || "";
+    const phone = row["Phone Number"] || row["PhoneNumber"] || row["phone"] || "";
 
-    map[location].push({
-      distributorId: `${location}-${(distributorName || "").slice(0, 5)}`, // optional temp id
-      distributorName: distributorName || "",
-      area: area || "",
-      phoneNumber: phone || "",
+    // ✅ 1) Location wise map
+    if (!locationWise[location]) locationWise[location] = [];
+
+    locationWise[location].push({
+      distributorCode,
+      distributorName,
+      area,
+      phoneNumber: phone,
       location,
     });
+
+    // ✅ 2) Distributor wise map (important for slot booking)
+    distributorWise[distributorCode] = {
+      distributorCode,
+      distributorName,
+      area,
+      phoneNumber: phone,
+      location: Number(location), // slot.service expects number sometimes
+    };
   }
 
-  return map;
+  return { locationWise, distributorWise };
 }

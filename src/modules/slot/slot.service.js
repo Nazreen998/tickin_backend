@@ -12,7 +12,7 @@ import {
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 
-import { pairingMap } from "../../appInit.js"; // ✅ uses distributor excel mapping
+import { distributorMap } from "../../appInit.js"; // ✅ uses distributor excel mapping
 
 const TABLE_CAPACITY = "tickin_slot_capacity";
 const TABLE_BOOKINGS = "tickin_slot_bookings";
@@ -295,7 +295,7 @@ export async function bookSlot({
 // 1) Try from pairingMap (appInit excel mapping)
 // 2) Fallback to DynamoDB tickin_distributors if pairingMap missing
 
-let location = pairingMap?.[distributorCode]?.location;
+let location = distributorMap?.[distributorCode]?.location;
 
 if (!location) {
   // ✅ fallback: read from DynamoDB
