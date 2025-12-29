@@ -168,13 +168,13 @@ export async function managerSetSlotMaxAmount({
     new UpdateCommand({
       TableName: TABLE_CAPACITY,
       Key: { pk, sk },
-      UpdateExpression: "SET #t = :t, #loc = :loc, maxAmount = if_not_exists(maxAmount, :m), totalAmount = :newTotal, tripStatus = :ts",
-      ExpressionAttributeNames: { "#t": "time" },
-      ExpressionAttributeValues: {
-        ":m": Number(maxAmount),
-        ":t": time,
-        "#loc": "location",
-      },
+      UpdateExpression: "SET maxAmount = :m, #t = :t, #loc = :loc",
+ExpressionAttributeNames: { "#t": "time", "#loc": "location" },
+ExpressionAttributeValues: {
+  ":m": Number(maxAmount),
+  ":t": time,
+  ":loc": Number(location),
+},
     })
   );
 
@@ -348,19 +348,17 @@ if (!location) {
 
             ConditionExpression:
               "attribute_not_exists(tripStatus) OR tripStatus <> :full",
-
-            UpdateExpression:
-              "SET #t = :t, location = :loc, maxAmount = if_not_exists(maxAmount, :m), totalAmount = :newTotal, tripStatus = :ts",
-
-            ExpressionAttributeNames: { "#t": "time" },
-            ExpressionAttributeValues: {
-              ":t": time,
-              ":loc": Number(location),
-              ":m": maxAmount,
-              ":newTotal": newTotal,
-              ":ts": newTripStatus,
-              ":full": "FULL",
-            },
+UpdateExpression:
+  "SET #t = :t, #loc = :loc, maxAmount = if_not_exists(maxAmount, :m), totalAmount = :newTotal, tripStatus = :ts",
+ExpressionAttributeNames: { "#t": "time", "#loc": "location" },
+ExpressionAttributeValues: {
+  ":t": time,
+  ":loc": Number(location),
+  ":m": maxAmount,
+  ":newTotal": newTotal,
+  ":ts": newTripStatus,
+  ":full": "FULL",
+},
           },
         },
         {

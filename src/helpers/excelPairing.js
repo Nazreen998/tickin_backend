@@ -5,44 +5,41 @@ export function loadDistributorPairingMap(filePath) {
   const fullPath = path.join(process.cwd(), filePath);
   const workbook = xlsx.readFile(fullPath);
 
-  const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rows = xlsx.utils.sheet_to_json(sheet);
 
-  const locationWise = {};
-  const distributorWise = {};
+  const map = {};
 
   for (const row of rows) {
-    const location = String(row["Location"] || row["location"] || "").trim();
-    const distributorCode = String(row["distributorCode"] || "").trim();
+    const location = String(
+      row["Location"] ?? row["location"] ?? ""
+    ).trim();
+
+    const distributorCode = String(
+      row["distributorCode"] ?? row["DistributorCode"] ?? row["distributorCode "] ?? ""
+    ).trim();
+
+    const distributorName = String(
+      row["Agency Name"] ?? row["AgencyName"] ?? row["agencyName"] ?? ""
+    ).trim();
+
+    const area = String(row["Area"] ?? row["area"] ?? "").trim();
+    const phoneNumber = String(
+      row["Phone Number"] ?? row["PhoneNumber"] ?? row["phone"] ?? ""
+    ).trim();
 
     if (!location || !distributorCode) continue;
 
-    const distributorName = row["Agency Name"] || "";
-    const area = row["Area"] || "";
-    const phone = row["Phone Number"] || "";
+    if (!map[location]) map[location] = [];
 
-    // ✅ location wise map for sales/home
-    if (!locationWise[location]) locationWise[location] = [];
-
-    locationWise[location].push({
-      distributorCode,
+    map[location].push({
+      distributorId: distributorCode,        // ✅ NO SPACE, REAL CODE (D001...)
       distributorName,
       area,
-      phoneNumber: phone,
+      phoneNumber,
       location,
     });
-
-    // ✅ distributor wise map for slot booking
-    distributorWise[distributorCode] = {
-      distributorCode,
-      distributorName,
-      area,
-      phoneNumber: phone,
-      location: Number(location),
-    };
   }
 
-  return { locationWise, distributorWise };
+  return map;
 }
