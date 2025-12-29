@@ -53,37 +53,34 @@ export const login = async (req, res) => {
     }
 
     // ✅ JWT Token (added distributorId)
-    const token = jwt.sign(
+    // ✅ JWT Token
+const token = jwt.sign(
   {
     pk: user.pk,
     mobile: user.mobile,
     role: user.role,
     companyId: user.companyId,
-
-    // ✅ required fields
     distributorId: user.distributorId || null,
-
-    // ✅ NEW FIX: location add
-    location: user.location || user.Location || null,
+    location: user.location || null,   // ✅ ADD THIS
   },
   process.env.JWT_SECRET,
   { expiresIn: "7d" }
 );
 
+return res.json({
+  message: "Login success",
+  token,
+  user: {
+    name: user.name,
+    role: user.role,
+    mobile: user.mobile,
+    companyId: user.companyId,
+    distributorId: user.distributorId || null,
+    location: user.location || null,   // ✅ ADD THIS
+    companyName: companyRes.Item.companyName,
+  },
+});
 
-    return res.json({
-      message: "Login success",
-      token,
-      user: {
-  name: user.name,
-  role: user.role,
-  mobile: user.mobile,
-  companyId: user.companyId,
-  distributorId: user.distributorId || null,
-  location: user.location || user.Location || null,
-  companyName: companyRes.Item.companyName,
-},
-    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error", error: err.message });
