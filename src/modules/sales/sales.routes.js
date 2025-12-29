@@ -15,7 +15,7 @@ router.get(
     try {
       // ✅ IMPORTANT: token must contain location (1/2/3/4/5)
       const location = String(req.user.location || req.user.Location || "").trim();
-
+      
       if (!location) {
         return res.status(400).json({
           ok: false,
@@ -23,7 +23,7 @@ router.get(
         });
       }
 
-      const distributors = pairingMap[location] || [];
+      const distributors = (pairingMap?.[location] || []);
 
       return res.json({
         ok: true,
