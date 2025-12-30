@@ -1,18 +1,9 @@
 import { ddb } from "../config/dynamo.js";
-import {
-  GetCommand,
-  PutCommand,
-  UpdateCommand,
-  QueryCommand,
-} from "@aws-sdk/lib-dynamodb";
+import { GetCommand, PutCommand, UpdateCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 
 const GOALS_TABLE = process.env.GOALS_TABLE || "tickin_goals";
 const DEFAULT_GOAL = 500;
 
-/**
- * ✅ MonthKey format: YYYY-MM
- * month optional param: 2025-12
- */
 const getMonthKey = (month) => {
   if (month) return month;
   const now = new Date();
@@ -21,20 +12,11 @@ const getMonthKey = (month) => {
   return `${year}-${m}`;
 };
 
-/**
- * ✅ Distributor wise PK (matches your DynamoDB)
- * pk = GOAL#D024#2025-12
- * sk = PRODUCT#1015
- */
 const buildGoalKeys = ({ distributorCode, productId, monthKey }) => ({
   pk: `GOAL#${distributorCode}#${monthKey}`,
   sk: `PRODUCT#${productId}`,
 });
 
-/**
- * ✅ Deduct goal when order confirmed (Distributor-wise + Product-wise)
- * distributorCode = D001 / D024 / D028 etc
- */
 export const deductMonthlyGoal = async ({
   distributorCode,
   productId,
@@ -52,12 +34,10 @@ export const deductMonthlyGoal = async ({
   const monthKey = getMonthKey(month);
   const { pk, sk } = buildGoalKeys({ distributorCode, productId, monthKey });
   const now = new Date().toISOString();
+
   qty = Number(qty);
 
-  /**
-   * ✅ 1) Ensure record exists
-   * If not exists -> create with defaultGoal = 500
-   */
+  // ✅ Ensure record exists
   const existing = await ddb.send(
     new GetCommand({
       TableName: GOALS_TABLE,
@@ -74,7 +54,7 @@ export const deductMonthlyGoal = async ({
             pk,
             sk,
             distributorCode,
-            productId,
+            productId: String(productId),
             month: monthKey,
             defaultGoal: DEFAULT_GOAL,
             usedQty: 0,
@@ -83,19 +63,15 @@ export const deductMonthlyGoal = async ({
             updatedAt: now,
             active: true,
           },
-          ConditionExpression:
-            "attribute_not_exists(pk) AND attribute_not_exists(sk)",
+          ConditionExpression: "attribute_not_exists(pk) AND attribute_not_exists(sk)",
         })
       );
     } catch (e) {
-      // ignore race condition (another request might have created it)
+      // ignore race condition
     }
   }
 
-  /**
-   * ✅ OPTIONAL (Recommended):
-   * Prevent remainingQty from going negative by checking current remaining
-   */
+  // ✅ Prevent goal going negative
   const currentRemaining = existing.Item
     ? Number(existing.Item.remainingQty ?? DEFAULT_GOAL)
     : DEFAULT_GOAL;
@@ -105,41 +81,33 @@ export const deductMonthlyGoal = async ({
   }
 
   /**
-   * ✅ 2) Atomic update usedQty + remainingQty (SINGLE UPDATE ✅)
-   * remainingQty is recalculated automatically:
-   * remainingQty = defaultGoal - (usedQty + qty)
-   *
-   * ✅ No second update required.
+   * ✅ SINGLE UpdateExpression
+   * ✅ NO backticks
+   * ✅ NO escaping "\+\"
    */
-    const updateRes = await ddb.send(
-  new UpdateCommand({
-    TableName: GOALS_TABLE,
-    Key: { pk, sk },
-    UpdateExpression:
-      "SET defaultGoal = if_not_exists(defaultGoal, :goal), " +
-      "usedQty = if_not_exists(usedQty, :zero) + :qty, " +
-      "remainingQty = if_not_exists(defaultGoal, :goal) - (if_not_exists(usedQty, :zero) + :qty), " +
-      "updatedAt = :now",
-    ExpressionAttributeValues: {
-      ":goal": DEFAULT_GOAL,
-      ":zero": 0,
-      ":qty": Number(qty),
-      ":now": now,
-    },
-    ReturnValues: "ALL_NEW",
-  })
-);
+  const updateRes = await ddb.send(
+    new UpdateCommand({
+      TableName: GOALS_TABLE,
+      Key: { pk, sk },
+      UpdateExpression:
+        "SET defaultGoal = if_not_exists(defaultGoal, :goal), " +
+        "usedQty = if_not_exists(usedQty, :zero) + :qty, " +
+        "remainingQty = if_not_exists(defaultGoal, :goal) - (if_not_exists(usedQty, :zero) + :qty), " +
+        "updatedAt = :now",
+      ExpressionAttributeValues: {
+        ":goal": DEFAULT_GOAL,
+        ":zero": 0,
+        ":qty": qty,
+        ":now": now,
+      },
+      ReturnValues: "ALL_NEW",
+    })
+  );
 
-return updateRes.Attributes;
+  return updateRes.Attributes;
 };
-/**
- * ✅ Get Monthly goals for Distributor
- * pk = GOAL#D024#2025-12
- */
-export const getMonthlyGoalsForDistributor = async ({
-  distributorCode,
-  month,
-}) => {
+
+export const getMonthlyGoalsForDistributor = async ({ distributorCode, month }) => {
   if (!distributorCode) throw new Error("distributorCode required");
 
   const monthKey = getMonthKey(month);
