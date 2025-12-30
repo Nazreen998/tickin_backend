@@ -589,3 +589,36 @@ export const getAllOrders = async ({ status }) => {
     orders: res.Items || [],
   };
 };
+export const getOrderById = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    if (!orderId) {
+      return res.status(400).json({ message: "orderId required" });
+    }
+
+    // ✅ Support both "ORDxxxx" and "ORDER#ORDxxxx"
+    const cleanId = String(orderId).startsWith("ORDER#")
+      ? String(orderId).replace("ORDER#", "")
+      : String(orderId);
+
+    const result = await ddb.send(
+      new GetCommand({
+        TableName: "tickin_orders",
+        Key: { pk: `ORDER#${cleanId}`, sk: "META" },
+      })
+    );
+
+    if (!result.Item) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    return res.json({
+      ok: true,
+      order: result.Item,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Error", error: err.message });
+  }
+};
