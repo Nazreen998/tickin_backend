@@ -1,65 +1,59 @@
 import jwt from "jsonwebtoken";
 import { ddb } from "../config/dynamo.js";
-import { GetCommand } from "@aws-sdk/lib-dynamodb";
+import { QueryCommand } from "@aws-sdk/lib-dynamodb";
 
-/**
- * ✅ Load salesman -> distributor mapping from DynamoDB
- * Table: tickin_salesman_distributor_map
- * PK: SALESMAN#<mobile>
- * SK: DISTRIBUTOR
- */
-async function attachSalesmanDistributor(decoded) {
+async function attachAllowedDistributors(decoded) {
   try {
     const role = decoded?.role;
 
-    // ✅ only for Sales Officer / Salesman / Distributor roles
-    if (
-      role !== "SALES OFFICER" &&
-      role !== "SALESMAN" &&
-      role !== "DISTRIBUTOR"
-    ) {
-      return decoded;
+    const isSales =
+      role === "SALES OFFICER" || role === "SALESMAN" || role === "DISTRIBUTOR";
+
+    if (!isSales) return decoded;
+
+    // ✅ get mobile
+    let mobile = decoded?.mobile;
+
+    // fallback: pk = USER#8825...
+    if (!mobile && decoded?.pk && String(decoded.pk).includes("#")) {
+      mobile = String(decoded.pk).split("#").pop();
     }
 
-    // ✅ If already has distributorCode, no need lookup
-    if (decoded?.distributorCode || decoded?.distributorId) {
-      // normalize distributorCode if it is in distributorId
-      if (!decoded.distributorCode && decoded.distributorId) {
-        decoded.distributorCode = decoded.distributorId;
-      }
+    if (!mobile) return decoded;
 
-      // if format like "DISTRIBUTOR#D015"
-      if (
-        typeof decoded.distributorCode === "string" &&
-        decoded.distributorCode.includes("#")
-      ) {
-        decoded.distributorCode = decoded.distributorCode.split("#").pop();
-      }
-
-      return decoded;
-    }
-
-    const mobile = decoded?.mobile;
-    if (!mobile) return decoded; // cannot lookup without mobile
+    // ✅ Query all distributors for that salesman
+    const pk = `SALESMAN#${String(mobile).trim()}`;
 
     const res = await ddb.send(
-      new GetCommand({
+      new QueryCommand({
         TableName: "tickin_salesman_distributor_map",
-        Key: {
-          pk: `SALESMAN#${mobile}`,
-          sk: "DISTRIBUTOR",
+        KeyConditionExpression: "pk = :pk",
+        ExpressionAttributeValues: {
+          ":pk": pk,
         },
       })
     );
 
-    if (res.Item) {
-      decoded.distributorCode = res.Item.distributorCode;
-      decoded.location = res.Item.location ?? decoded.location ?? null;
+    const items = res.Items || [];
+
+    // allowed distributors list
+    const allowed = items
+      .map((x) => String(x?.distributorCode || "").trim())
+      .filter(Boolean);
+
+    if (allowed.length > 0) {
+      decoded.allowedDistributors = allowed;
+
+      // ✅ also keep one distributorCode for backward compatibility
+      // (first one as default)
+      if (!decoded.distributorCode) {
+        decoded.distributorCode = allowed[0];
+      }
     }
 
     return decoded;
   } catch (e) {
-    // ✅ Don't block auth if mapping missing
+    // do not block auth
     return decoded;
   }
 }
@@ -67,7 +61,6 @@ async function attachSalesmanDistributor(decoded) {
 export const verifyToken = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
-
     if (!authHeader) {
       return res.status(401).json({ message: "Token missing" });
     }
@@ -75,8 +68,8 @@ export const verifyToken = async (req, res, next) => {
     const token = authHeader.split(" ")[1];
     let decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // ✅ attach distributorCode for Sales Officer if missing
-    decoded = await attachSalesmanDistributor(decoded);
+    // ✅ attach allowed distributors for Sales Officer/Salesman
+    decoded = await attachAllowedDistributors(decoded);
 
     req.user = decoded;
     next();

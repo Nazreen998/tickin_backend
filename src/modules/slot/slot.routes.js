@@ -36,10 +36,16 @@ function getUserDistributorCode(req) {
   if (typeof v === "string" && v.includes("#")) return v.split("#").pop();
   return v;
 }
-
 function validateOwnDistributor(req, distributorCode) {
   if (isManager(req)) return true;
 
+  // ✅ multi distributor support for salesman/sales officer
+  const allowed = req.user?.allowedDistributors || [];
+  if (Array.isArray(allowed) && allowed.length > 0) {
+    return allowed.map(String).includes(String(distributorCode).trim());
+  }
+
+  // fallback old behavior
   const userDist = getUserDistributorCode(req);
   if (!userDist) return false;
 
