@@ -87,26 +87,25 @@ export const deductMonthlyGoal = async ({
    */
   console.log("✅ deductMonthlyGoal called", { distributorCode, productId, qty });
   const updateRes = await ddb.send(
-    new UpdateCommand({
-      TableName: GOALS_TABLE,
-      Key: { pk, sk },
-      UpdateExpression:
-        "SET defaultGoal = if_not_exists(defaultGoal, :goal), " +
-        "usedQty = if_not_exists(usedQty, :zero) + :qty, " +
-        "remainingQty = if_not_exists(defaultGoal, :goal) - (if_not_exists(usedQty, :zero) + :qty), " +
-        "updatedAt = :now",
-      ExpressionAttributeValues: {
-        ":goal": DEFAULT_GOAL,
-        ":zero": 0,
-        ":qty": qty,
-        ":now": now,
-      },
-      
-      ReturnValues: "ALL_NEW",
-    })
-  );
-console.log("✅ UPDATE EXPRESSION SENT =>", updateExpression);
-  return updateRes.Attributes;
+  new UpdateCommand({
+    TableName: GOALS_TABLE,
+    Key: { pk, sk },
+    ConditionExpression: "remainingQty >= :qty OR attribute_not_exists(remainingQty)",
+    UpdateExpression:
+      "SET defaultGoal = if_not_exists(defaultGoal, :goal), " +
+      "usedQty = if_not_exists(usedQty, :zero) + :qty, " +
+      "remainingQty = if_not_exists(remainingQty, :goal) - :qty, " +
+      "updatedAt = :now",
+    ExpressionAttributeValues: {
+      ":goal": DEFAULT_GOAL,
+      ":zero": 0,
+      ":qty": Number(qty),
+      ":now": now,
+    },
+    ReturnValues: "ALL_NEW",
+  })
+);
+return updateRes.Attributes;
 };
 
 export const getMonthlyGoalsForDistributor = async ({ distributorCode, month }) => {
