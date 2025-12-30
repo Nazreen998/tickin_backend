@@ -446,8 +446,8 @@ export async function bookSlot({
             Key: { pk, sk: mergeSk },
             ConditionExpression: "attribute_not_exists(tripStatus) OR tripStatus <> :full",
             UpdateExpression:
-              "SET #t = :t, mergeKey = :mk, mergeType = :mt, location = :loc, maxAmount = if_not_exists(maxAmount, :m), totalAmount = :newTotal, tripStatus = :ts",
-            ExpressionAttributeNames: { "#t": "time" },
+  "SET #t = :t, mergeKey = :mk, mergeType = :mt, #loc = :loc, maxAmount = if_not_exists(maxAmount, :m), totalAmount = :newTotal, tripStatus = :ts",
+ExpressionAttributeNames: { "#t": "time", "#loc": "location" },
             ExpressionAttributeValues: {
               ":t": time,
               ":mk": mergeKey,

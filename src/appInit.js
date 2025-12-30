@@ -6,7 +6,7 @@ let productsList = [];
 
 try {
   pairingMap = loadDistributorPairingMap(
-    process.env.PAIRING_EXCEL_PATH || "./data/distributor_location.xlsx"
+    process.env.PAIRING_EXCEL_PATH || "./data/location.xlsx"
   );
   console.log("✅ pairingMap loaded locations:", Object.keys(pairingMap).length);
 } catch (err) {
