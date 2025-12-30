@@ -293,12 +293,15 @@ export async function bookSlot({
   // ✅ SERVICE-LEVEL SECURITY (non-manager can only book own distributorCode)
   const isMgr = requesterRole === "MANAGER" || requesterRole === "MASTER";
   if (!isMgr) {
-    if (!requesterDistributorCode) throw new Error("User distributorCode missing in token");
+  // ✅ if token doesn't have distributorCode, allow but log warning
+  if (!requesterDistributorCode) {
+    console.log("⚠️ distributorCode missing in token, allowing booking for:", distributorCode);
+  } else {
     if (String(requesterDistributorCode).trim() !== String(distributorCode).trim()) {
       throw new Error("You can book slot only for your own distributorCode");
     }
   }
-
+}
   // ✅ Amount based HARD RULE
   const amt = Number(amount || 0);
   const computedType = amt >= DEFAULT_MAX_AMOUNT ? "FULL" : "HALF";
