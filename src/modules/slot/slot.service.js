@@ -12,19 +12,13 @@ import {
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 
-import { pairingMap } from "../../appInit.js"; 
-// ✅ pairingMap structure:
-// {
-//   "1": [{ distributorId: "D001", ... }, { distributorId: "D002", ... }],
-//   "2": [{ distributorId: "D010", ... }]
-// }
+import { pairingMap } from "../../appInit.js";
 
 const TABLE_CAPACITY = "tickin_slot_capacity";
 const TABLE_BOOKINGS = "tickin_slot_bookings";
 const TABLE_QUEUE = "tickin_slot_waiting_queue";
 const TABLE_RULES = "tickin_slot_rules";
 
-// ✅ SYSTEM DEFAULT SLOTS (DO NOT STORE IN DB)
 const DEFAULT_SLOTS = ["09:00", "12:30", "16:30", "20:30"];
 const ALL_POSITIONS = ["A", "B", "C", "D"];
 
@@ -46,7 +40,6 @@ function skForBooking(time, vehicleType, pos, userId) {
 
 /**
  * ✅ Find location + distributor details from pairingMap (Excel)
- * pairingMap[location] = [{ distributorId, distributorName, ... }]
  */
 function findDistributorFromPairingMap(map, distributorCode) {
   const code = String(distributorCode || "").trim();
@@ -81,9 +74,30 @@ async function getRule(companyCode) {
   return res.Item || null;
 }
 
+// ✅ Update rule table (used for last slot enable)
+async function setRule(companyCode, patch) {
+  const pk = `COMPANY#${companyCode}`;
+  const sk = "RULES";
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_RULES,
+      Key: { pk, sk },
+      UpdateExpression:
+        "SET lastSlotEnabled = :e, lastSlotOpenAfter = :oa, updatedAt = :u",
+      ExpressionAttributeValues: {
+        ":e": Boolean(patch.lastSlotEnabled),
+        ":oa": patch.lastSlotOpenAfter || "17:00",
+        ":u": new Date().toISOString(),
+      },
+    })
+  );
+
+  return { ok: true };
+}
+
 /**
- * ✅ GET SLOT GRID (ALWAYS RETURN DEFAULT GRID)
- * DB stores only overrides
+ * ✅ GET SLOT GRID
  */
 export async function getSlotGrid({ companyCode, date }) {
   const pk = pkFor(companyCode, date);
@@ -122,18 +136,32 @@ export async function getSlotGrid({ companyCode, date }) {
 
 /**
  * ✅ Manager Open Last Slot
+ * ✅ AFTER 5PM ONLY
+ * ✅ updates tickin_slot_rules so bookSlot passes validation
+ * ✅ 4×4 default (A,B,C,D)
  */
 export async function managerOpenLastSlot({
   companyCode,
   date,
   vehicleType = "FULL",
   time = "20:30",
-  allowedPositions = ["A", "B"],
+  allowedPositions = ["A", "B", "C", "D"],
+  openAfter = "17:00",
 }) {
+  const nowTime = dayjs().format("HH:mm");
+  if (nowTime < openAfter) {
+    throw new Error(`Last slot can be opened only after ${openAfter}`);
+  }
+
+  // ✅ enable last slot in RULES table
+  await setRule(companyCode, {
+    lastSlotEnabled: true,
+    lastSlotOpenAfter: openAfter,
+  });
+
   const pk = pkFor(companyCode, date);
 
   const updates = [];
-
   for (const pos of ALL_POSITIONS) {
     const sk = skForSlot(time, vehicleType, pos);
     const newStatus = allowedPositions.includes(pos) ? "AVAILABLE" : "CLOSED";
@@ -166,7 +194,7 @@ export async function managerOpenLastSlot({
 
   await Promise.all(updates);
 
-  return { ok: true, message: "Last slot updated", allowedPositions };
+  return { ok: true, message: "Last slot updated ✅", allowedPositions, openAfter };
 }
 
 /**
@@ -201,6 +229,8 @@ export async function managerSetSlotMaxAmount({
 
 /**
  * ✅ BOOK SLOT
+ * ✅ Security: non-manager can book only own distributorCode (service-level)
+ * ✅ Amount decides FULL/HALF (service-level)
  */
 export async function bookSlot({
   companyCode,
@@ -212,8 +242,30 @@ export async function bookSlot({
   distributorCode,
   amount = 0,
   orderId,
+
+  // ✅ NEW fields from route
+  requesterRole = "UNKNOWN",
+  requesterDistributorCode = null,
 }) {
   const pk = pkFor(companyCode, date);
+
+  // ✅ SECURITY (cannot bypass routes)
+  const isMgr = requesterRole === "MANAGER" || requesterRole === "MASTER";
+  if (!isMgr) {
+    if (!requesterDistributorCode) {
+      throw new Error("User distributorCode missing in token");
+    }
+    if (
+      String(requesterDistributorCode).trim() !== String(distributorCode).trim()
+    ) {
+      throw new Error("You can book slot only for your own distributorCode");
+    }
+  }
+
+  // ✅ Amount based HARD RULE (>=80k FULL else HALF)
+  const amt = Number(amount || 0);
+  const computedType = amt >= DEFAULT_MAX_AMOUNT ? "FULL" : "HALF";
+  vehicleType = computedType;
 
   // ✅ last slot rule check
   if (time === "20:30") {
@@ -231,7 +283,7 @@ export async function bookSlot({
     }
   }
 
-  // ✅ FULL booking
+  // ✅ FULL booking (4×4)
   if (vehicleType === "FULL") {
     const slotSk = skForSlot(time, vehicleType, pos);
     const bookingSk = skForBooking(time, vehicleType, pos, userId);
@@ -302,11 +354,11 @@ export async function bookSlot({
     return { ok: true, bookingId, type: "FULL" };
   }
 
-  // ✅ HALF Booking Logic
-  // 1) Try from pairingMap (Excel)
-  // 2) Fallback to DynamoDB tickin_distributors
-
-  let { location, distributor } = findDistributorFromPairingMap(pairingMap, distributorCode);
+  // ✅ HALF Booking Logic (location merge)
+  let { location, distributor } = findDistributorFromPairingMap(
+    pairingMap,
+    distributorCode
+  );
 
   if (!location) {
     const distRes = await ddb.send(
@@ -328,7 +380,6 @@ export async function bookSlot({
   const bookingId = uuidv4();
   const bookingSk = `BOOKING#${time}#LOC#${location}#USER#${userId}#${bookingId}`;
 
-  // 1️⃣ Get current totals
   const current = await ddb.send(
     new GetCommand({
       TableName: TABLE_CAPACITY,
@@ -337,7 +388,6 @@ export async function bookSlot({
   );
 
   const existing = current.Item || null;
-
   const currentTotal = Number(existing?.totalAmount || 0);
   const maxAmount = Number(existing?.maxAmount || DEFAULT_MAX_AMOUNT);
 
@@ -345,7 +395,7 @@ export async function bookSlot({
     throw new Error("Trip already full for this location slot");
   }
 
-  const newTotal = currentTotal + Number(amount || 0);
+  const newTotal = currentTotal + amt;
   const newTripStatus = newTotal >= maxAmount ? "FULL" : "PARTIAL";
 
   await ddb.send(
@@ -383,13 +433,13 @@ export async function bookSlot({
               userId,
               distributorCode,
               location: Number(location),
-              amount: Number(amount || 0),
+              amount: amt,
               tripStatus: newTripStatus,
               status: "CONFIRMED",
               createdAt: new Date().toISOString(),
 
-              // ✅ optional: save distributor info too
-              distributorName: distributor?.distributorName || distributor?.name || null,
+              distributorName:
+                distributor?.distributorName || distributor?.name || null,
               area: distributor?.area || null,
               phoneNumber: distributor?.phoneNumber || distributor?.phone || null,
             },
@@ -408,7 +458,7 @@ export async function bookSlot({
         vehicleType: "HALF",
         time,
         location,
-        amount: Number(amount || 0),
+        amount: amt,
         totalAmount: newTotal,
         maxAmount,
         tripStatus: newTripStatus,
@@ -431,6 +481,7 @@ export async function bookSlot({
 
 /**
  * ✅ CANCEL SLOT
+ * ✅ only manager route allows; service keeps same behaviour
  */
 export async function cancelSlot({
   companyCode,
