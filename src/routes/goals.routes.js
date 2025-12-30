@@ -1,12 +1,13 @@
 import express from "express";
 import { verifyToken } from "../middleware/auth.middleware.js";
-import { getMonthlyGoalsForSalesman } from "../services/goals.service.js";
+import { getMonthlyGoalsForDistributor } from "../services/goals.service.js";
 
 const router = express.Router();
 
 /**
- * ✅ GET /goals/monthly
- * Optional: /goals/monthly?month=2025-12
+ * ✅ GET /goals/monthly?distributorCode=D024&month=2025-12
+ * month optional
+ * distributorCode REQUIRED (because goals are distributor-wise)
  */
 router.get("/monthly", verifyToken, async (req, res) => {
   try {
@@ -20,9 +21,17 @@ router.get("/monthly", verifyToken, async (req, res) => {
     }
 
     const month = req.query.month; // optional
+    const distributorCode = String(req.query.distributorCode || "").trim();
 
-    const data = await getMonthlyGoalsForSalesman({
-      salesmanId: user.mobile,
+    if (!distributorCode) {
+      return res.status(400).json({
+        ok: false,
+        message: "distributorCode query param required",
+      });
+    }
+
+    const data = await getMonthlyGoalsForDistributor({
+      distributorCode,
       month,
     });
 

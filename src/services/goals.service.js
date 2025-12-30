@@ -22,30 +22,32 @@ const getMonthKey = (month) => {
 };
 
 /**
- * ✅ Salesman wise PK
+ * ✅ Distributor wise PK (matches your DynamoDB)
+ * pk = GOAL#D024#2025-12
+ * sk = PRODUCT#1015
  */
-const buildGoalKeys = ({ salesmanId, productId, monthKey }) => ({
-  pk: `GOAL#${salesmanId}#${monthKey}`,
+const buildGoalKeys = ({ distributorCode, productId, monthKey }) => ({
+  pk: `GOAL#${distributorCode}#${monthKey}`,
   sk: `PRODUCT#${productId}`,
 });
 
 /**
- * ✅ Deduct goal when order confirmed
- * salesmanId = user.mobile
+ * ✅ Deduct goal when order confirmed (Distributor-wise)
+ * distributorCode = D001 / D024 / D028 etc
  */
 export const deductMonthlyGoal = async ({
-  salesmanId,
+  distributorCode,
   productId,
   qty,
   month,
 }) => {
-  if (!salesmanId || !productId)
-    throw new Error("salesmanId & productId required");
+  if (!distributorCode || !productId)
+    throw new Error("distributorCode & productId required");
 
   if (!qty || qty <= 0) throw new Error("qty must be > 0");
 
   const monthKey = getMonthKey(month);
-  const { pk, sk } = buildGoalKeys({ salesmanId, productId, monthKey });
+  const { pk, sk } = buildGoalKeys({ distributorCode, productId, monthKey });
   const now = new Date().toISOString();
 
   // ✅ 1) Ensure record exists
@@ -64,7 +66,7 @@ export const deductMonthlyGoal = async ({
           Item: {
             pk,
             sk,
-            salesmanId,
+            distributorCode,
             productId,
             month: monthKey,
             defaultGoal: DEFAULT_GOAL,
@@ -72,8 +74,9 @@ export const deductMonthlyGoal = async ({
             remainingQty: DEFAULT_GOAL,
             createdAt: now,
             updatedAt: now,
+            active: true,
           },
-          ConditionExpression: "attribute_not_exists(pk)",
+          ConditionExpression: "attribute_not_exists(pk) AND attribute_not_exists(sk)",
         })
       );
     } catch (e) {
@@ -81,7 +84,10 @@ export const deductMonthlyGoal = async ({
     }
   }
 
-  // ✅ 2) Atomic update usedQty
+  /**
+   * ✅ 2) Atomic update usedQty + remainingQty (single update)
+   * remainingQty recalculated using defaultGoal - usedQty
+   */
   const updateRes = await ddb.send(
     new UpdateCommand({
       TableName: GOALS_TABLE,
@@ -115,9 +121,10 @@ export const deductMonthlyGoal = async ({
     new UpdateCommand({
       TableName: GOALS_TABLE,
       Key: { pk, sk },
-      UpdateExpression: "SET remainingQty = :remaining",
+      UpdateExpression: "SET remainingQty = :remaining, updatedAt = :now",
       ExpressionAttributeValues: {
         ":remaining": remaining,
+        ":now": now,
       },
       ReturnValues: "ALL_NEW",
     })
@@ -127,13 +134,17 @@ export const deductMonthlyGoal = async ({
 };
 
 /**
- * ✅ Get Monthly goals for Salesman
+ * ✅ Get Monthly goals for Distributor
+ * pk = GOAL#D024#2025-12
  */
-export const getMonthlyGoalsForSalesman = async ({ salesmanId, month }) => {
-  if (!salesmanId) throw new Error("salesmanId required");
+export const getMonthlyGoalsForDistributor = async ({
+  distributorCode,
+  month,
+}) => {
+  if (!distributorCode) throw new Error("distributorCode required");
 
   const monthKey = getMonthKey(month);
-  const pk = `GOAL#${salesmanId}#${monthKey}`;
+  const pk = `GOAL#${distributorCode}#${monthKey}`;
 
   const res = await ddb.send(
     new QueryCommand({
@@ -147,7 +158,7 @@ export const getMonthlyGoalsForSalesman = async ({ salesmanId, month }) => {
   );
 
   return {
-    salesmanId,
+    distributorCode,
     month: monthKey,
     goals: res.Items || [],
   };
