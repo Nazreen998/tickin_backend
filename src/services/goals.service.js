@@ -32,7 +32,7 @@ const buildGoalKeys = ({ distributorCode, productId, monthKey }) => ({
 });
 
 /**
- * ✅ Deduct goal when order confirmed (Distributor-wise)
+ * ✅ Deduct goal when order confirmed (Distributor-wise + Product-wise)
  * distributorCode = D001 / D024 / D028 etc
  */
 export const deductMonthlyGoal = async ({
@@ -41,16 +41,23 @@ export const deductMonthlyGoal = async ({
   qty,
   month,
 }) => {
-  if (!distributorCode || !productId)
+  if (!distributorCode || !productId) {
     throw new Error("distributorCode & productId required");
+  }
 
-  if (!qty || qty <= 0) throw new Error("qty must be > 0");
+  if (!qty || qty <= 0) {
+    throw new Error("qty must be > 0");
+  }
 
   const monthKey = getMonthKey(month);
   const { pk, sk } = buildGoalKeys({ distributorCode, productId, monthKey });
   const now = new Date().toISOString();
+  qty = Number(qty);
 
-  // ✅ 1) Ensure record exists
+  /**
+   * ✅ 1) Ensure record exists
+   * If not exists -> create with defaultGoal = 500
+   */
   const existing = await ddb.send(
     new GetCommand({
       TableName: GOALS_TABLE,
@@ -76,17 +83,33 @@ export const deductMonthlyGoal = async ({
             updatedAt: now,
             active: true,
           },
-          ConditionExpression: "attribute_not_exists(pk) AND attribute_not_exists(sk)",
+          ConditionExpression:
+            "attribute_not_exists(pk) AND attribute_not_exists(sk)",
         })
       );
     } catch (e) {
-      // ignore race condition
+      // ignore race condition (another request might have created it)
     }
   }
 
   /**
-   * ✅ 2) Atomic update usedQty + remainingQty (single update)
-   * remainingQty recalculated using defaultGoal - usedQty
+   * ✅ OPTIONAL (Recommended):
+   * Prevent remainingQty from going negative by checking current remaining
+   */
+  const currentRemaining = existing.Item
+    ? Number(existing.Item.remainingQty ?? DEFAULT_GOAL)
+    : DEFAULT_GOAL;
+
+  if (qty > currentRemaining) {
+    throw new Error(`Goal exceeded. Remaining: ${currentRemaining}`);
+  }
+
+  /**
+   * ✅ 2) Atomic update usedQty + remainingQty (SINGLE UPDATE ✅)
+   * remainingQty is recalculated automatically:
+   * remainingQty = defaultGoal - (usedQty + qty)
+   *
+   * ✅ No second update required.
    */
   const updateRes = await ddb.send(
     new UpdateCommand({
@@ -96,41 +119,20 @@ export const deductMonthlyGoal = async ({
         SET 
           defaultGoal = if_not_exists(defaultGoal, :goal),
           usedQty = if_not_exists(usedQty, :zero) + :qty,
+          remainingQty = if_not_exists(defaultGoal, :goal) - (if_not_exists(usedQty, :zero) + :qty),
           updatedAt = :now
       `,
       ExpressionAttributeValues: {
         ":goal": DEFAULT_GOAL,
         ":zero": 0,
-        ":qty": Number(qty),
+        ":qty": qty,
         ":now": now,
       },
       ReturnValues: "ALL_NEW",
     })
   );
 
-  const updated = updateRes.Attributes;
-
-  // ✅ 3) remainingQty never negative
-  const remaining = Math.max(
-    0,
-    (updated.defaultGoal || DEFAULT_GOAL) - (updated.usedQty || 0)
-  );
-
-  // ✅ 4) Save remainingQty
-  const finalRes = await ddb.send(
-    new UpdateCommand({
-      TableName: GOALS_TABLE,
-      Key: { pk, sk },
-      UpdateExpression: "SET remainingQty = :remaining, updatedAt = :now",
-      ExpressionAttributeValues: {
-        ":remaining": remaining,
-        ":now": now,
-      },
-      ReturnValues: "ALL_NEW",
-    })
-  );
-
-  return finalRes.Attributes;
+  return updateRes.Attributes;
 };
 
 /**
