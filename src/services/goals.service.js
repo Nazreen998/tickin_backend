@@ -85,6 +85,7 @@ export const deductMonthlyGoal = async ({
    * ✅ NO backticks
    * ✅ NO escaping "\+\"
    */
+  console.log("✅ deductMonthlyGoal called", { distributorCode, productId, qty });
   const updateRes = await ddb.send(
     new UpdateCommand({
       TableName: GOALS_TABLE,
@@ -100,10 +101,11 @@ export const deductMonthlyGoal = async ({
         ":qty": qty,
         ":now": now,
       },
+      
       ReturnValues: "ALL_NEW",
     })
   );
-
+console.log("✅ UPDATE EXPRESSION SENT =>", updateExpression);
   return updateRes.Attributes;
 };
 
