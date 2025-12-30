@@ -14,6 +14,12 @@ import {
 
 import { pairingMap } from "../../appInit.js";
 
+/**
+ * NOTE on Excel files:
+ * - location.xlsx (pairingMap): used to resolve distributorCode -> location group
+ * - distributor_location.xlsx: only for sales officer -> distributor mapping (handled via token + middleware)
+ */
+
 const TABLE_CAPACITY = "tickin_slot_capacity";
 const TABLE_BOOKINGS = "tickin_slot_bookings";
 const TABLE_QUEUE = "tickin_slot_waiting_queue";
@@ -31,15 +37,21 @@ function pkFor(companyCode, date) {
 function skForSlot(time, vehicleType, pos) {
   return `SLOT#${time}#TYPE#${vehicleType}#POS#${pos}`;
 }
-function skForLocationSlot(time, location) {
-  return `LOC_SLOT#${time}#LOC#${location}`;
-}
 function skForBooking(time, vehicleType, pos, userId) {
   return `BOOKING#${time}#TYPE#${vehicleType}#POS#${pos}#USER#${userId}`;
 }
 
+function safeKey(s) {
+  return String(s || "").replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+function skForMergeSlot(time, mergeKey) {
+  return `MERGE_SLOT#${time}#KEY#${mergeKey}`;
+}
+
 /**
  * ✅ Find location + distributor details from pairingMap (Excel)
+ * Supports both distributorId & distributorCode keys in excel rows.
  */
 function findDistributorFromPairingMap(map, distributorCode) {
   const code = String(distributorCode || "").trim();
@@ -49,19 +61,18 @@ function findDistributorFromPairingMap(map, distributorCode) {
     if (!Array.isArray(distributors)) continue;
 
     const found = distributors.find((d) => {
-      const id = String(d?.distributorId || "").trim();       // sometimes
-      const dc = String(d?.distributorCode || "").trim();     // excel usually
-      const sk = String(d?.code || "").trim();                // optional alias
+      const id = String(d?.distributorId || "").trim();
+      const dc = String(d?.distributorCode || "").trim();
+      const sk = String(d?.code || "").trim();
       return id === code || dc === code || sk === code;
     });
 
-    if (found) {
-      return { location, distributor: found };
-    }
+    if (found) return { location, distributor: found };
   }
 
   return { location: null, distributor: null };
 }
+
 async function getRule(companyCode) {
   const pk = `COMPANY#${companyCode}`;
   const sk = "RULES";
@@ -76,7 +87,6 @@ async function getRule(companyCode) {
   return res.Item || null;
 }
 
-// ✅ Update rule table (used for last slot enable)
 async function setRule(companyCode, patch) {
   const pk = `COMPANY#${companyCode}`;
   const sk = "RULES";
@@ -98,8 +108,44 @@ async function setRule(companyCode, patch) {
   return { ok: true };
 }
 
+/** ---------- CLUSTER ASSIGNMENTS (Option B) ---------- */
+async function getClusterAssignment(companyCode, date, orderId, distributorCode) {
+  const rule = await getRule(companyCode);
+  const rawKey = `${date}_${orderId || ""}_${distributorCode || ""}`;
+  const key = safeKey(rawKey);
+  return rule?.clusterAssignments?.[key] || null;
+}
+
+async function setClusterAssignment(companyCode, date, orderId, distributorCode, clusterId) {
+  const pk = `COMPANY#${companyCode}`;
+  const sk = "RULES";
+
+  const rawKey = `${date}_${orderId || ""}_${distributorCode || ""}`;
+  const key = safeKey(rawKey);
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_RULES,
+      Key: { pk, sk },
+      UpdateExpression: "SET clusterAssignments.#k = :cid, updatedAt = :u",
+      ExpressionAttributeNames: { "#k": key },
+      ExpressionAttributeValues: {
+        ":cid": String(clusterId),
+        ":u": new Date().toISOString(),
+      },
+    })
+  );
+
+  return { ok: true, key, clusterId };
+}
+
+export async function managerAssignCluster({ companyCode, date, orderId, distributorCode, clusterId }) {
+  return setClusterAssignment(companyCode, date, orderId, distributorCode, clusterId);
+}
+
 /**
  * ✅ GET SLOT GRID
+ * Returns FULL grid (A-D) with overrides
  */
 export async function getSlotGrid({ companyCode, date }) {
   const pk = pkFor(companyCode, date);
@@ -139,8 +185,7 @@ export async function getSlotGrid({ companyCode, date }) {
 /**
  * ✅ Manager Open Last Slot
  * ✅ AFTER 5PM ONLY
- * ✅ updates tickin_slot_rules so bookSlot passes validation
- * ✅ 4×4 default (A,B,C,D)
+ * ✅ enables RULES table so bookSlot passes last-slot validation
  */
 export async function managerOpenLastSlot({
   companyCode,
@@ -155,11 +200,7 @@ export async function managerOpenLastSlot({
     throw new Error(`Last slot can be opened only after ${openAfter}`);
   }
 
-  // ✅ enable last slot in RULES table
-  await setRule(companyCode, {
-    lastSlotEnabled: true,
-    lastSlotOpenAfter: openAfter,
-  });
+  await setRule(companyCode, { lastSlotEnabled: true, lastSlotOpenAfter: openAfter });
 
   const pk = pkFor(companyCode, date);
 
@@ -201,38 +242,37 @@ export async function managerOpenLastSlot({
 
 /**
  * ✅ Manager Set Slot Max Amount
+ * Supports:
+ * - mergeKey: exact bucket (preferred)
+ * - location: backward compatibility (LOC#<location>)
  */
-export async function managerSetSlotMaxAmount({
-  companyCode,
-  date,
-  time,
-  location,
-  maxAmount,
-}) {
+export async function managerSetSlotMaxAmount({ companyCode, date, time, mergeKey, location, maxAmount }) {
   const pk = pkFor(companyCode, date);
-  const sk = skForLocationSlot(time, location);
+  const finalMergeKey = mergeKey ? String(mergeKey) : `LOC#${location}`;
+  const sk = skForMergeSlot(time, finalMergeKey);
 
   await ddb.send(
     new UpdateCommand({
       TableName: TABLE_CAPACITY,
       Key: { pk, sk },
-      UpdateExpression: "SET maxAmount = :m, #t = :t, #loc = :loc",
-      ExpressionAttributeNames: { "#t": "time", "#loc": "location" },
+      UpdateExpression: "SET maxAmount = :m, #t = :t, mergeKey = :mk",
+      ExpressionAttributeNames: { "#t": "time" },
       ExpressionAttributeValues: {
         ":m": Number(maxAmount),
         ":t": time,
-        ":loc": Number(location),
+        ":mk": finalMergeKey,
       },
     })
   );
 
-  return { ok: true, message: "MaxAmount updated ✅", maxAmount: Number(maxAmount) };
+  return { ok: true, message: "MaxAmount updated ✅", maxAmount: Number(maxAmount), mergeKey: finalMergeKey };
 }
 
 /**
  * ✅ BOOK SLOT
- * ✅ Security: non-manager can book only own distributorCode (service-level)
- * ✅ Amount decides FULL/HALF (service-level)
+ * - Amount decides FULL/HALF (>=80k FULL else HALF)
+ * - Default merge by location
+ * - Manager manual merge via CLUSTER assignment (Option B)
  */
 export async function bookSlot({
   companyCode,
@@ -245,31 +285,26 @@ export async function bookSlot({
   amount = 0,
   orderId,
 
-  // ✅ NEW fields from route
   requesterRole = "UNKNOWN",
   requesterDistributorCode = null,
 }) {
   const pk = pkFor(companyCode, date);
 
-  // ✅ SECURITY (cannot bypass routes)
+  // ✅ SERVICE-LEVEL SECURITY (non-manager can only book own distributorCode)
   const isMgr = requesterRole === "MANAGER" || requesterRole === "MASTER";
   if (!isMgr) {
-    if (!requesterDistributorCode) {
-      throw new Error("User distributorCode missing in token");
-    }
-    if (
-      String(requesterDistributorCode).trim() !== String(distributorCode).trim()
-    ) {
+    if (!requesterDistributorCode) throw new Error("User distributorCode missing in token");
+    if (String(requesterDistributorCode).trim() !== String(distributorCode).trim()) {
       throw new Error("You can book slot only for your own distributorCode");
     }
   }
 
-  // ✅ Amount based HARD RULE (>=80k FULL else HALF)
+  // ✅ Amount based HARD RULE
   const amt = Number(amount || 0);
   const computedType = amt >= DEFAULT_MAX_AMOUNT ? "FULL" : "HALF";
   vehicleType = computedType;
 
-  // ✅ last slot rule check
+  // ✅ last slot validation
   if (time === "20:30") {
     const rule = await getRule(companyCode);
 
@@ -285,7 +320,7 @@ export async function bookSlot({
     }
   }
 
-  // ✅ FULL booking (4×4)
+  /** ---------------- FULL booking ---------------- */
   if (vehicleType === "FULL") {
     const slotSk = skForSlot(time, vehicleType, pos);
     const bookingSk = skForBooking(time, vehicleType, pos, userId);
@@ -343,24 +378,17 @@ export async function bookSlot({
         orderId,
         event: "SLOT_BOOKED",
         by: userId,
-        extra: {
-          vehicleType: "FULL",
-          time,
-          pos,
-          distributorCode,
-          bookingId,
-        },
+        extra: { vehicleType: "FULL", time, pos, distributorCode, bookingId },
       });
     }
 
     return { ok: true, bookingId, type: "FULL" };
   }
 
-  // ✅ HALF Booking Logic (location merge)
-  let { location, distributor } = findDistributorFromPairingMap(
-    pairingMap,
-    distributorCode
-  );
+  /** ---------------- HALF booking (Location merge + Option B cluster merge) ---------------- */
+  // 1) Resolve location from Excel pairingMap
+  // 2) Fallback to Dynamo tickin_distributors
+  let { location, distributor } = findDistributorFromPairingMap(pairingMap, distributorCode);
 
   if (!location) {
     const distRes = await ddb.send(
@@ -378,23 +406,32 @@ export async function bookSlot({
     throw new Error(`Distributor location not found for ${distributorCode}`);
   }
 
-  const locSk = skForLocationSlot(time, location);
-  const bookingId = uuidv4();
-  const bookingSk = `BOOKING#${time}#LOC#${location}#USER#${userId}#${bookingId}`;
+  // ✅ Option B: check if manager assigned a cluster for this date+order+distributor
+  const assignedClusterId = await getClusterAssignment(companyCode, date, orderId, distributorCode);
 
+  const mergeKey = assignedClusterId ? `CLUSTER#${assignedClusterId}` : `LOC#${location}`;
+  const mergeType = assignedClusterId ? "CLUSTER" : "LOCATION";
+
+  const mergeSk = skForMergeSlot(time, mergeKey);
+
+  const bookingId = uuidv4();
+  const bookingSk = `BOOKING#${time}#KEY#${mergeKey}#USER#${userId}#${bookingId}`;
+
+  // read current bucket totals
   const current = await ddb.send(
     new GetCommand({
       TableName: TABLE_CAPACITY,
-      Key: { pk, sk: locSk },
+      Key: { pk, sk: mergeSk },
     })
   );
 
   const existing = current.Item || null;
+
   const currentTotal = Number(existing?.totalAmount || 0);
   const maxAmount = Number(existing?.maxAmount || DEFAULT_MAX_AMOUNT);
 
   if (existing?.tripStatus === "FULL") {
-    throw new Error("Trip already full for this location slot");
+    throw new Error("Trip already full for this merge bucket");
   }
 
   const newTotal = currentTotal + amt;
@@ -406,14 +443,15 @@ export async function bookSlot({
         {
           Update: {
             TableName: TABLE_CAPACITY,
-            Key: { pk, sk: locSk },
-            ConditionExpression:
-              "attribute_not_exists(tripStatus) OR tripStatus <> :full",
+            Key: { pk, sk: mergeSk },
+            ConditionExpression: "attribute_not_exists(tripStatus) OR tripStatus <> :full",
             UpdateExpression:
-              "SET #t = :t, #loc = :loc, maxAmount = if_not_exists(maxAmount, :m), totalAmount = :newTotal, tripStatus = :ts",
-            ExpressionAttributeNames: { "#t": "time", "#loc": "location" },
+              "SET #t = :t, mergeKey = :mk, mergeType = :mt, location = :loc, maxAmount = if_not_exists(maxAmount, :m), totalAmount = :newTotal, tripStatus = :ts",
+            ExpressionAttributeNames: { "#t": "time" },
             ExpressionAttributeValues: {
               ":t": time,
+              ":mk": mergeKey,
+              ":mt": mergeType,
               ":loc": Number(location),
               ":m": maxAmount,
               ":newTotal": newTotal,
@@ -431,17 +469,17 @@ export async function bookSlot({
               bookingId,
               slotTime: time,
               vehicleType: "HALF",
-              pos,
               userId,
               distributorCode,
               location: Number(location),
               amount: amt,
+              mergeKey,
+              mergeType,
               tripStatus: newTripStatus,
               status: "CONFIRMED",
               createdAt: new Date().toISOString(),
 
-              distributorName:
-                distributor?.distributorName || distributor?.name || null,
+              distributorName: distributor?.distributorName || distributor?.name || null,
               area: distributor?.area || null,
               phoneNumber: distributor?.phoneNumber || distributor?.phone || null,
             },
@@ -466,6 +504,8 @@ export async function bookSlot({
         tripStatus: newTripStatus,
         bookingId,
         distributorCode,
+        mergeKey,
+        mergeType,
       },
     });
   }
@@ -475,6 +515,8 @@ export async function bookSlot({
     bookingId,
     type: "HALF",
     location,
+    mergeKey,
+    mergeType,
     totalAmount: newTotal,
     maxAmount,
     tripStatus: newTripStatus,
@@ -483,7 +525,6 @@ export async function bookSlot({
 
 /**
  * ✅ CANCEL SLOT
- * ✅ only manager route allows; service keeps same behaviour
  */
 export async function cancelSlot({
   companyCode,

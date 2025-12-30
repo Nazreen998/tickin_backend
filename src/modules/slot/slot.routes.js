@@ -9,6 +9,7 @@ import {
   cancelSlot,
   joinWaiting,
   managerSetSlotMaxAmount,
+  managerAssignCluster,
 } from "./slot.service.js";
 
 const router = express.Router();
@@ -24,18 +25,24 @@ function isManager(req) {
 }
 
 function getUserDistributorCode(req) {
-  return (
+  const v =
     req.user?.distributorCode ||
+    req.user?.distributorId ||
     req.user?.distributor_code ||
     req.user?.distributor ||
-    null
-  );
+    null;
+
+  // if format like "DISTRIBUTOR#D031" take last part
+  if (typeof v === "string" && v.includes("#")) return v.split("#").pop();
+  return v;
 }
 
 function validateOwnDistributor(req, distributorCode) {
   if (isManager(req)) return true;
+
   const userDist = getUserDistributorCode(req);
   if (!userDist) return false;
+
   return String(userDist).trim() === String(distributorCode).trim();
 }
 
@@ -70,7 +77,7 @@ router.get(
  * ✅ Manager Open Last Slot
  * URL: /api/slots/open-last
  * ✅ Only MANAGER
- * ✅ Must be after 5PM (enforced in service)
+ * ✅ AFTER 5PM ONLY (enforced in service)
  */
 router.post(
   "/slots/open-last",
@@ -105,12 +112,13 @@ router.post(
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
-      const { companyCode, date, time, location, maxAmount } = req.body;
+      const { companyCode, date, time, mergeKey, location, maxAmount } = req.body;
 
-      if (!companyCode || !date || !time || !location || !maxAmount) {
+      // You can update by mergeKey (preferred) OR location (backward compatible)
+      if (!companyCode || !date || !time || (!mergeKey && !location) || !maxAmount) {
         return res.status(400).json({
           ok: false,
-          error: "companyCode,date,time,location,maxAmount required",
+          error: "companyCode,date,time,(mergeKey or location),maxAmount required",
         });
       }
 
@@ -118,7 +126,8 @@ router.post(
         companyCode,
         date,
         time,
-        location,
+        mergeKey: mergeKey || null,
+        location: location || null,
         maxAmount: Number(maxAmount),
       });
 
@@ -130,10 +139,47 @@ router.post(
 );
 
 /**
+ * ✅ Manager Manual Merge (Option B)
+ * URL: /api/slots/cluster/assign
+ * ✅ Only MANAGER
+ *
+ * Manager assigns a distributor/order into a clusterId.
+ * After assign, HALF bookings of those orders will merge under CLUSTER#<clusterId>.
+ */
+router.post(
+  "/slots/cluster/assign",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const { companyCode, date, orderId, distributorCode, clusterId } = req.body;
+
+      if (!companyCode || !date || !distributorCode || !clusterId) {
+        return res.status(400).json({
+          ok: false,
+          error: "companyCode,date,distributorCode,clusterId required",
+        });
+      }
+
+      const out = await managerAssignCluster({
+        companyCode,
+        date,
+        orderId: orderId || "",
+        distributorCode,
+        clusterId,
+      });
+
+      return res.json(out);
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message });
+    }
+  }
+);
+
+/**
  * ✅ Book Slot
  * URL: /api/slots/book
  *
- * ✅ MANAGER / SALES OFFICER / DISTRIBUTOR can book
  * ✅ Amount based auto:
  *    - >= 80,000 => FULL (pos required A/B/C/D)
  *    - < 80,000  => HALF (amount required)
@@ -157,7 +203,7 @@ router.post(
         });
       }
 
-      // ✅ own distributor restriction
+      // ✅ own distributor restriction (non-manager)
       if (!validateOwnDistributor(req, distributorCode)) {
         return res.status(403).json({
           ok: false,
@@ -194,18 +240,18 @@ router.post(
         });
       }
 
-      // ✅ take userId from JWT token
+      // ✅ take userId from JWT token (your token uses pk)
       const userId =
-  req.user?.pk ||        // ✅ THIS IS YOUR REAL USER ID
-  req.user?.userId ||
-  req.user?.id;
+        req.user?.pk ||
+        req.user?.userId ||
+        req.user?.id ||
+        req.user?._id ||
+        req.user?.uid;
 
-if (!userId) {
-  return res.status(401).json({
-    ok: false,
-    error: "Invalid token userId",
-  });
-}
+      if (!userId) {
+        return res.status(401).json({ ok: false, error: "Invalid token userId" });
+      }
+
       const requesterRole = req.user?.role || "UNKNOWN";
       const requesterDistributorCode = getUserDistributorCode(req);
 
@@ -220,7 +266,6 @@ if (!userId) {
         amount: amt,
         orderId,
 
-        // ✅ security inputs for service-level check
         requesterRole,
         requesterDistributorCode,
       });
@@ -253,6 +298,7 @@ router.post(
         });
       }
 
+      // ✅ FULL cancel requires pos
       if (vehicleType === "FULL" && !pos) {
         return res.status(400).json({
           ok: false,
@@ -260,7 +306,12 @@ router.post(
         });
       }
 
-      const userId = targetUserId || req.user?.userId || req.user?.id;
+      const userId =
+        targetUserId ||
+        req.user?.pk ||
+        req.user?.userId ||
+        req.user?.id;
+
       if (!userId) {
         return res.status(401).json({ ok: false, error: "Invalid token userId" });
       }
@@ -304,7 +355,7 @@ router.post(
         });
       }
 
-      // ✅ own distributor restriction
+      // ✅ own distributor restriction (non-manager)
       if (!validateOwnDistributor(req, distributorCode)) {
         return res.status(403).json({
           ok: false,
@@ -312,7 +363,11 @@ router.post(
         });
       }
 
-      const userId = req.user?.userId || req.user?.id;
+      const userId =
+        req.user?.pk ||
+        req.user?.userId ||
+        req.user?.id;
+
       if (!userId) {
         return res.status(401).json({ ok: false, error: "Invalid token userId" });
       }
