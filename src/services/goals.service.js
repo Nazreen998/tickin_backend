@@ -112,24 +112,25 @@ export const deductMonthlyGoal = async ({
    * ✅ No second update required.
    */
     const updateRes = await ddb.send(
-    new UpdateCommand({
-      TableName: GOALS_TABLE,
-      Key: { pk, sk },
-      UpdateExpression:
-        "SET defaultGoal = if_not_exists(defaultGoal, :goal), " +
-        "usedQty = if_not_exists(usedQty, :zero) + :qty, " +
-        "remainingQty = if_not_exists(defaultGoal, :goal) - (if_not_exists(usedQty, :zero) + :qty), " +
-        "updatedAt = :now",
-      ExpressionAttributeValues: {
-        ":goal": DEFAULT_GOAL,
-        ":zero": 0,
-        ":qty": Number(qty),
-        ":now": now,
-      },
-      ReturnValues: "ALL_NEW",
-    })
-  );
-  return updateRes.Attributes;
+  new UpdateCommand({
+    TableName: GOALS_TABLE,
+    Key: { pk, sk },
+    UpdateExpression:
+      "SET defaultGoal = if_not_exists(defaultGoal, :goal), " +
+      "usedQty = if_not_exists(usedQty, :zero) + :qty, " +
+      "remainingQty = if_not_exists(defaultGoal, :goal) - (if_not_exists(usedQty, :zero) + :qty), " +
+      "updatedAt = :now",
+    ExpressionAttributeValues: {
+      ":goal": DEFAULT_GOAL,
+      ":zero": 0,
+      ":qty": Number(qty),
+      ":now": now,
+    },
+    ReturnValues: "ALL_NEW",
+  })
+);
+
+return updateRes.Attributes;
 };
 /**
  * ✅ Get Monthly goals for Distributor
