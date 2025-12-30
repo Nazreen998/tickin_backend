@@ -425,8 +425,8 @@ export const confirmOrder = async (req, res) => {
   orderId,
 
   // ✅ IMPORTANT FIX: send requester role + token distributorCode
-  requesterRole: user.role,
-  requesterDistributorCode: user.distributorCode || null,
+  requesterRole: (user.role || "").toUpperCase(),
+  requesterDistributorCode: user.distributorCode || user.distributorId || null,
 });
 
       slotBooked = true;
