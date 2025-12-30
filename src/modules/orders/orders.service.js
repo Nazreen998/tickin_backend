@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from "uuid";
 import { pairingMap } from "../../appInit.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
-import { deductMonthlyGoal } from "./services/goals.service.js";
+import { deductMonthlyGoal } from "../../services/goals.service.js";
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 /* ==========================
    ✅ Confirm Draft Order
