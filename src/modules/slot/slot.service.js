@@ -48,9 +48,12 @@ function findDistributorFromPairingMap(map, distributorCode) {
   for (const [location, distributors] of Object.entries(map || {})) {
     if (!Array.isArray(distributors)) continue;
 
-    const found = distributors.find(
-      (d) => String(d?.distributorId || "").trim() === code
-    );
+    const found = distributors.find((d) => {
+      const id = String(d?.distributorId || "").trim();       // sometimes
+      const dc = String(d?.distributorCode || "").trim();     // excel usually
+      const sk = String(d?.code || "").trim();                // optional alias
+      return id === code || dc === code || sk === code;
+    });
 
     if (found) {
       return { location, distributor: found };
@@ -59,7 +62,6 @@ function findDistributorFromPairingMap(map, distributorCode) {
 
   return { location: null, distributor: null };
 }
-
 async function getRule(companyCode) {
   const pk = `COMPANY#${companyCode}`;
   const sk = "RULES";

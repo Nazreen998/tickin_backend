@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from "uuid";
 import { pairingMap } from "../../appInit.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
-import { deductMonthlyGoal } from "../../services/goals.service.js";
+import { deductMonthlyGoal } from "./services/goals.service.js";
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 /* ==========================
    ✅ Confirm Draft Order
@@ -372,7 +372,7 @@ export const confirmOrder = async (req, res) => {
         for (const item of items) {
           const productId = item.productId;
           const qty = Number(item.qty || 0);
-
+         console.log("✅ deductMonthlyGoal v2 running", { distributorCode, productId, qty });
           if (distributorCode && productId && qty > 0) {
             await deductMonthlyGoal({
               distributorCode,
