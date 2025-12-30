@@ -320,47 +320,52 @@ export const confirmOrder = async (req, res) => {
     }
 
     const order = orderRes.Item;
+    const role = (user.role || "").toUpperCase();
 
-    // ✅ Prevent double confirm
-    if (order.status === "CONFIRMED") {
-      return res.status(400).json({ message: "Order already CONFIRMED" });
+    // ✅ 1) If already CONFIRMED but goalDeducted is false → still run goal deduction
+    const alreadyConfirmed = order.status === "CONFIRMED";
+    const alreadyDeducted = order.goalDeducted === true;
+
+    // ✅ 2) If not confirmed, confirm it
+    if (!alreadyConfirmed) {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: "tickin_orders",
+          Key: { pk: `ORDER#${orderId}`, sk: "META" },
+          UpdateExpression:
+            "SET #st = :c, confirmedBy = :u, confirmedAt = :t, goalDeducted = if_not_exists(goalDeducted, :false)",
+          ExpressionAttributeNames: { "#st": "status" },
+          ExpressionAttributeValues: {
+            ":c": "CONFIRMED",
+            ":u": user.mobile,
+            ":t": new Date().toISOString(),
+            ":false": false,
+          },
+        })
+      );
+
+      await addTimelineEvent({
+        orderId,
+        event: "ORDER_CONFIRMED",
+        by: user.mobile,
+        extra: { role: user.role, note: "Order confirmed" },
+      });
     }
-
-    // ✅ Confirm status update
-    await ddb.send(
-      new UpdateCommand({
-        TableName: "tickin_orders",
-        Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression:
-          "SET #st = :c, confirmedBy = :u, confirmedAt = :t, goalDeducted = if_not_exists(goalDeducted, :false)",
-        ExpressionAttributeNames: { "#st": "status" },
-        ExpressionAttributeValues: {
-          ":c": "CONFIRMED",
-          ":u": user.mobile,
-          ":t": new Date().toISOString(),
-          ":false": false,
-        },
-      })
-    );
-
-    // ✅ Timeline: Order confirmed
-    await addTimelineEvent({
-      orderId,
-      event: "ORDER_CONFIRMED",
-      by: user.mobile,
-      extra: { role: user.role, note: "Order confirmed" },
-    });
 
     /* ========================================
        ✅ Distributor wise Goal Deduction Logic
+       - Manager / Master / Sales Officer 모두 deduct 가능
+       - CONFIRMED status இருந்தாலும் goalDeducted=false என்றால் deduct செய்யும்
     ======================================== */
-    const role = (user.role || "").toUpperCase();
 
     if (
-     (role === "SALES OFFICER" || role === "SALES_OFFICER" || role === "MANAGER" || role === "MASTER") &&
-      order.goalDeducted !== true
+      (role === "SALES OFFICER" ||
+        role === "SALES_OFFICER" ||
+        role === "MANAGER" ||
+        role === "MASTER") &&
+      !alreadyDeducted
     ) {
-      const distributorCode = order.distributorId; // ✅ D001 / D031 etc
+      const distributorCode = order.distributorId;
       const items = order.items || [];
 
       if (Array.isArray(items) && items.length > 0) {
@@ -383,9 +388,10 @@ export const confirmOrder = async (req, res) => {
         new UpdateCommand({
           TableName: "tickin_orders",
           Key: { pk: `ORDER#${orderId}`, sk: "META" },
-          UpdateExpression: "SET goalDeducted = :true",
+          UpdateExpression: "SET goalDeducted = :true, goalDeductedAt = :t",
           ExpressionAttributeValues: {
             ":true": true,
+            ":t": new Date().toISOString(),
           },
         })
       );
@@ -421,10 +427,11 @@ export const confirmOrder = async (req, res) => {
     }
 
     return res.json({
-      message: "✅ Order confirmed successfully",
+      message: alreadyConfirmed
+        ? "✅ Order already confirmed - Goal deduction processed"
+        : "✅ Order confirmed successfully",
       orderId,
       slotBooked: !!slot,
-      goalDeducted: true,
     });
   } catch (err) {
     console.error(err);
