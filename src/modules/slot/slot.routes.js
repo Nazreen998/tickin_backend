@@ -196,18 +196,14 @@ router.post(
 
       // ✅ take userId from JWT token
       const userId =
+  req.user?.pk ||        // ✅ THIS IS YOUR REAL USER ID
   req.user?.userId ||
-  req.user?.id ||
-  req.user?._id ||
-  req.user?.uid ||
-  req.user?.user_id ||
-  req.user?.sub;
+  req.user?.id;
 
 if (!userId) {
   return res.status(401).json({
     ok: false,
-    error: "Invalid token userId (token payload missing id field)",
-    user: req.user, // 👈 debug only (remove later)
+    error: "Invalid token userId",
   });
 }
       const requesterRole = req.user?.role || "UNKNOWN";
