@@ -411,19 +411,23 @@ export const confirmOrder = async (req, res) => {
 
     if (slot?.date && slot?.time && slot?.vehicleType && slot?.pos) {
       await bookSlot({
-        companyCode,
-        date: slot.date,
-        time: slot.time,
-        vehicleType: slot.vehicleType,
-        pos: slot.pos,
-        userId: user.mobile,
+  companyCode,
+  date: slot.date,
+  time: slot.time,
+  vehicleType: slot.vehicleType,
+  pos: slot.pos,
+  userId: user.mobile,
 
-        // ✅ FIXED HERE:
-        distributorCode: order.distributorId,
+  // ✅ slot booking should be for ORDER distributor
+  distributorCode: order.distributorId,
 
-        amount: order.totalAmount || order.grandTotal || 0,
-        orderId,
-      });
+  amount: order.totalAmount || order.grandTotal || 0,
+  orderId,
+
+  // ✅ IMPORTANT FIX: send requester role + token distributorCode
+  requesterRole: user.role,
+  requesterDistributorCode: user.distributorCode || null,
+});
 
       slotBooked = true;
 
