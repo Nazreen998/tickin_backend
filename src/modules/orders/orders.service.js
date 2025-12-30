@@ -308,6 +308,7 @@ export const confirmOrder = async (req, res) => {
       return res.status(400).json({ message: "companyCode required" });
     }
 
+    // ✅ 1) Get order
     const orderRes = await ddb.send(
       new GetCommand({
         TableName: "tickin_orders",
@@ -322,7 +323,6 @@ export const confirmOrder = async (req, res) => {
     const order = orderRes.Item;
     const role = (user.role || "").toUpperCase();
 
-    // ✅ 1) If already CONFIRMED but goalDeducted is false → still run goal deduction
     const alreadyConfirmed = order.status === "CONFIRMED";
     const alreadyDeducted = order.goalDeducted === true;
 
@@ -334,7 +334,9 @@ export const confirmOrder = async (req, res) => {
           Key: { pk: `ORDER#${orderId}`, sk: "META" },
           UpdateExpression:
             "SET #st = :c, confirmedBy = :u, confirmedAt = :t, goalDeducted = if_not_exists(goalDeducted, :false)",
-          ExpressionAttributeNames: { "#st": "status" },
+          ExpressionAttributeNames: {
+            "#st": "status",
+          },
           ExpressionAttributeValues: {
             ":c": "CONFIRMED",
             ":u": user.mobile,
@@ -344,6 +346,7 @@ export const confirmOrder = async (req, res) => {
         })
       );
 
+      // ✅ timeline event
       await addTimelineEvent({
         orderId,
         event: "ORDER_CONFIRMED",
@@ -352,11 +355,11 @@ export const confirmOrder = async (req, res) => {
       });
     }
 
-    /* ========================================
-       ✅ Distributor wise Goal Deduction Logic
-       - Manager / Master / Sales Officer 모두 deduct 가능
-       - CONFIRMED status இருந்தாலும் goalDeducted=false என்றால் deduct செய்யும்
-    ======================================== */
+    /* ===================================================
+       ✅ GOAL DEDUCTION
+       - Manager / Master / Sales officer allowed
+       - Already confirmed order, but goalDeducted=false -> still deduct
+    =================================================== */
 
     if (
       (role === "SALES OFFICER" ||
@@ -372,7 +375,7 @@ export const confirmOrder = async (req, res) => {
         for (const item of items) {
           const productId = item.productId;
           const qty = Number(item.qty || 0);
-         console.log("✅ deductMonthlyGoal v2 running", { distributorCode, productId, qty });
+
           if (distributorCode && productId && qty > 0) {
             await deductMonthlyGoal({
               distributorCode,
@@ -397,9 +400,15 @@ export const confirmOrder = async (req, res) => {
       );
     }
 
-    /* ========================================
-       ✅ Slot booking if slot object provided
-    ======================================== */
+    /* ===================================================
+       ✅ SLOT BOOKING (FIXED)
+       IMPORTANT FIX:
+       - use order.distributorId instead of user.distributorCode
+       - So Manager token works too ✅
+    =================================================== */
+
+    let slotBooked = false;
+
     if (slot?.date && slot?.time && slot?.vehicleType && slot?.pos) {
       await bookSlot({
         companyCode,
@@ -408,10 +417,15 @@ export const confirmOrder = async (req, res) => {
         vehicleType: slot.vehicleType,
         pos: slot.pos,
         userId: user.mobile,
+
+        // ✅ FIXED HERE:
         distributorCode: order.distributorId,
-        amount: order.totalAmount,
+
+        amount: order.totalAmount || order.grandTotal || 0,
         orderId,
       });
+
+      slotBooked = true;
 
       await addTimelineEvent({
         orderId,
@@ -431,41 +445,13 @@ export const confirmOrder = async (req, res) => {
         ? "✅ Order already confirmed - Goal deduction processed"
         : "✅ Order confirmed successfully",
       orderId,
-      slotBooked: !!slot,
+      slotBooked,
     });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: "Error", error: err.message });
   }
 };
-/* ==========================
-   ✅ View Order
-========================== */
-export const getOrderById = async (req, res) => {
-  try {
-    const { orderId } = req.params;
-
-    const result = await ddb.send(
-      new GetCommand({
-        TableName: "tickin_orders",
-        Key: { pk: `ORDER#${orderId}`, sk: "META" },
-      })
-    );
-
-    if (!result.Item) {
-      return res.status(404).json({ message: "Order not found" });
-    }
-
-    return res.json({
-      message: "Order fetched ✅",
-      order: result.Item,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Error", error: err.message });
-  }
-};
-
 /* ==========================
    ✅ UPDATE ORDER ITEMS (THIS WAS MISSING ✅)
    Salesman can edit only DRAFT
