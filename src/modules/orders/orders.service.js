@@ -357,7 +357,7 @@ export const confirmOrder = async (req, res) => {
     const role = (user.role || "").toUpperCase();
 
     if (
-      (role === "SALES OFFICER" || role === "SALES_OFFICER") &&
+     (role === "SALES OFFICER" || role === "SALES_OFFICER" || role === "MANAGER" || role === "MASTER") &&
       order.goalDeducted !== true
     ) {
       const distributorCode = order.distributorId; // ✅ D001 / D031 etc
