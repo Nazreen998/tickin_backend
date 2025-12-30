@@ -7,11 +7,11 @@ import {
 
 import { ddb } from "../../config/dynamo.js";
 import { v4 as uuidv4 } from "uuid";
-
+import { pairingMap } from "../../appInit.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
 import { deductMonthlyGoal } from "../../services/goals.service.js";
-
+const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 /* ==========================
    ✅ Confirm Draft Order
    DRAFT → PENDING (Salesman)
@@ -534,4 +534,61 @@ export const updateOrderItems = async (req, res) => {
     console.error(err);
     res.status(500).json({ message: "Error", error: err.message });
   }
+};
+/**
+ * ✅ Sales officer: fetch all orders of distributors mapped to his location
+ * Returns DRAFT + PENDING + CONFIRMED
+ */
+export const getOrdersForSalesman = async ({ location }) => {
+  const distributors = pairingMap?.[location] || [];
+  const distributorCodes = distributors.map((d) => String(d.distributorId).trim());
+
+  if (distributorCodes.length === 0) {
+    return { distributorCount: 0, distributorCodes: [], orders: [] };
+  }
+
+  // ⚠️ Scan is OK for now, later GSI optimization recommended
+  const res = await ddb.send(
+    new ScanCommand({
+      TableName: ORDERS_TABLE,
+      FilterExpression:
+        "distributorId IN (" +
+        distributorCodes.map((_, i) => `:d${i}`).join(",") +
+        ")",
+      ExpressionAttributeValues: distributorCodes.reduce((acc, code, i) => {
+        acc[`:d${i}`] = code;
+        return acc;
+      }, {}),
+    })
+  );
+
+  return {
+    distributorCount: distributorCodes.length,
+    distributorCodes,
+    orders: res.Items || [],
+  };
+};
+
+/**
+ * ✅ Manager/Master: fetch all orders (optional status filter)
+ */
+export const getAllOrders = async ({ status }) => {
+  const params = {
+    TableName: ORDERS_TABLE,
+  };
+
+  // optional filter by status
+  if (status) {
+    params.FilterExpression = "#s = :st";
+    params.ExpressionAttributeNames = { "#s": "status" };
+    params.ExpressionAttributeValues = { ":st": String(status).toUpperCase() };
+  }
+
+  const res = await ddb.send(new ScanCommand(params));
+
+  return {
+    count: res.Items?.length || 0,
+    status: status ? String(status).toUpperCase() : "ALL",
+    orders: res.Items || [],
+  };
 };

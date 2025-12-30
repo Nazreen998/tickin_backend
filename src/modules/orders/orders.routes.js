@@ -9,6 +9,8 @@ import {
   createOrder,
   updatePendingReason,
   confirmOrder,
+  getOrdersForSalesman,
+  getAllOrders,
   updateOrderItems,
   getOrderById,
   confirmDraftOrder
@@ -56,7 +58,7 @@ router.patch(
 router.post(
   "/confirm/:orderId",
   verifyToken,
-  allowRoles("MASTER", "MANAGER"),
+  allowRoles("SALES OFFICER", "MANAGER"),
   confirmOrder
 );
 
@@ -69,7 +71,7 @@ router.post(
 router.post(
   "/create",
   verifyToken,
-  allowRoles("SALES OFFICER"),
+  allowRoles("MANAGER","SALES OFFICER"),
   createOrder
 );
 
@@ -89,6 +91,52 @@ router.post(
   confirmDraftOrder
 );
 
+// ✅ Sales Officer view all assigned distributor orders (DRAFT/PENDING/CONFIRMED)
+router.get(
+  "/my",
+  verifyToken,
+  allowRoles("SALES OFFICER"),
+  async (req, res) => {
+    try {
+      const user = req.user;
+      const location = String(user.location || user.Location || "").trim();
+
+      if (!location) {
+        return res.status(400).json({
+          ok: false,
+          message: "Salesman location missing in token",
+        });
+      }
+
+      // ✅ call service
+      const data = await getOrdersForSalesman({ location });
+
+      return res.json({
+        ok: true,
+        salesmanLocation: location,
+        ...data,
+      });
+    } catch (err) {
+      return res.status(500).json({ ok: false, message: err.message });
+    }
+  }
+);
+
+// ✅ Manager / Master view all orders (all distributors, all status)
+router.get(
+  "/all",
+  verifyToken,
+  allowRoles("MASTER", "MANAGER"),
+  async (req, res) => {
+    try {
+      const status = req.query.status; // optional filter
+      const data = await getAllOrders({ status });
+      return res.json({ ok: true, ...data });
+    } catch (err) {
+      return res.status(500).json({ ok: false, message: err.message });
+    }
+  }
+);
 
 /* ===========================
    VIEW ORDER ROUTE
