@@ -79,7 +79,7 @@ router.post(
 router.patch(
   "/update/:orderId",
   verifyToken,
-  allowRoles("SALES OFFICER"),
+  allowRoles("SALES OFFICER", "MANAGER", "MASTER"),
   updateOrderItems
 );
 
