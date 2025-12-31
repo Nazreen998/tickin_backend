@@ -12,6 +12,8 @@ import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
 import { deductMonthlyGoal } from "../../services/goals.service.js";
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
+import { deductDistributorMonthlyGoal, addBackDistributorMonthlyGoal } from "../../services/goals.service.js";
+
 /* ==========================
    ✅ Confirm Draft Order
    DRAFT → PENDING (Salesman)
@@ -81,12 +83,15 @@ export const confirmDraftOrder = async (req, res) => {
 export const createOrder = async (req, res) => {
   try {
     const user = req.user;
+    const role = (user.role || "").toUpperCase();
     const { distributorId, distributorName, items } = req.body;
 
+    if (!(role === "SALES OFFICER" || role === "SALES_OFFICER" || role === "MANAGER")) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
     if (!distributorId || !distributorName) {
-      return res.status(400).json({
-        message: "DistributorId + DistributorName required",
-      });
+      return res.status(400).json({ message: "DistributorId + DistributorName required" });
     }
 
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -95,11 +100,10 @@ export const createOrder = async (req, res) => {
 
     let finalItems = [];
     let totalAmount = 0;
+    let totalQty = 0;
 
     for (const it of items) {
-      const pid = it.productId.startsWith("P#")
-        ? it.productId
-        : `P#${it.productId}`;
+      const pid = it.productId.startsWith("P#") ? it.productId : `P#${it.productId}`;
 
       const prodRes = await ddb.send(
         new GetCommand({
@@ -109,27 +113,35 @@ export const createOrder = async (req, res) => {
       );
 
       if (!prodRes.Item) {
-        return res
-          .status(400)
-          .json({ message: `Product not found: ${it.productId}` });
+        return res.status(400).json({ message: `Product not found: ${it.productId}` });
       }
 
       const prod = prodRes.Item;
-      const itemTotal = Number(it.qty) * Number(prod.price);
+      const qty = Number(it.qty || 0);
+      if (qty <= 0) return res.status(400).json({ message: "Qty must be > 0" });
+
+      const itemTotal = qty * Number(prod.price);
 
       finalItems.push({
         productId: prod.productId,
         name: prod.name,
         category: prod.category,
         price: prod.price,
-        qty: it.qty,
+        qty,
         total: itemTotal,
       });
 
       totalAmount += itemTotal;
+      totalQty += qty;
     }
 
     const orderId = "ORD" + uuidv4().slice(0, 8);
+
+    // ✅ Deduct goal immediately (order podum pothey)
+    await deductDistributorMonthlyGoal({
+      distributorCode: distributorId,
+      qty: totalQty,
+    });
 
     const orderItem = {
       pk: `ORDER#${orderId}`,
@@ -139,11 +151,18 @@ export const createOrder = async (req, res) => {
       distributorName,
       items: finalItems,
       totalAmount,
-      status: "DRAFT",
+      totalQty,
+
+      // ✅ No DRAFT, direct PENDING
+      status: "PENDING",
       pendingReason: "",
+
       createdBy: user.mobile,
       createdRole: user.role,
       createdAt: new Date().toISOString(),
+
+      goalDeducted: true,
+      goalDeductedAt: new Date().toISOString(),
     };
 
     await ddb.send(
@@ -155,30 +174,30 @@ export const createOrder = async (req, res) => {
 
     await addTimelineEvent({
       orderId,
-      event: "ORDER_DRAFT_CREATED",
+      event: "ORDER_PLACED_PENDING",
       by: user.mobile,
-      extra: { role: user.role, distributorId, distributorName, totalAmount },
+      extra: { role: user.role, distributorId, distributorName, totalAmount, totalQty },
     });
 
     return res.json({
-      message: "Order created ✅",
+      message: "✅ Order placed (PENDING) + Goal deducted",
       orderId,
-      status: "DRAFT",
+      status: "PENDING",
       distributorName,
       totalAmount,
+      totalQty,
       orderCard: {
         distributor: distributorName,
         items: finalItems,
         grandTotal: totalAmount,
-        status: "DRAFT",
+        status: "PENDING",
       },
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: "Error", error: err.message });
+    return res.status(500).json({ message: "Error", error: err.message });
   }
 };
-
 /* ==========================
    ✅ Pending Orders (Master / Manager)
 ========================== */
@@ -323,120 +342,83 @@ export const confirmOrder = async (req, res) => {
     const order = orderRes.Item;
     const role = (user.role || "").toUpperCase();
 
-    const alreadyConfirmed = order.status === "CONFIRMED";
-    const alreadyDeducted = order.goalDeducted === true;
+    // ✅ Sales Officer + Manager can confirm
+    if (
+      !(
+        role === "SALES OFFICER" ||
+        role === "SALES_OFFICER" ||
+        role === "MANAGER"
+      )
+    ) {
+      return res.status(403).json({ message: "Access denied" });
+    }
 
-    // ✅ 2) If not confirmed, confirm it
-    if (!alreadyConfirmed) {
-      await ddb.send(
-        new UpdateCommand({
-          TableName: "tickin_orders",
-          Key: { pk: `ORDER#${orderId}`, sk: "META" },
-          UpdateExpression:
-            "SET #st = :c, confirmedBy = :u, confirmedAt = :t, goalDeducted = if_not_exists(goalDeducted, :false)",
-          ExpressionAttributeNames: {
-            "#st": "status",
-          },
-          ExpressionAttributeValues: {
-            ":c": "CONFIRMED",
-            ":u": user.mobile,
-            ":t": new Date().toISOString(),
-            ":false": false,
-          },
-        })
-      );
-
-      // ✅ timeline event
-      await addTimelineEvent({
-        orderId,
-        event: "ORDER_CONFIRMED",
-        by: user.mobile,
-        extra: { role: user.role, note: "Order confirmed" },
+    // ✅ Only PENDING orders can be confirmed
+    if (order.status !== "PENDING") {
+      return res.status(403).json({
+        message: `Only PENDING orders can be confirmed. Current status: ${order.status}`,
       });
     }
 
-    /* ===================================================
-       ✅ GOAL DEDUCTION
-       - Manager / Master / Sales officer allowed
-       - Already confirmed order, but goalDeducted=false -> still deduct
-    =================================================== */
+    // ✅ 2) Confirm Order (NO GOAL DEDUCTION HERE)
+    await ddb.send(
+      new UpdateCommand({
+        TableName: "tickin_orders",
+        Key: { pk: `ORDER#${orderId}`, sk: "META" },
+        UpdateExpression: "SET #st = :c, confirmedBy = :u, confirmedAt = :t",
+        ExpressionAttributeNames: {
+          "#st": "status",
+        },
+        ExpressionAttributeValues: {
+          ":c": "CONFIRMED",
+          ":u": user.mobile,
+          ":t": new Date().toISOString(),
+        },
+      })
+    );
 
-    if (
-      (role === "SALES OFFICER" ||
-        role === "SALES_OFFICER" ||
-        role === "MANAGER" ||
-        role === "MASTER") &&
-      !alreadyDeducted
-    ) {
-      const distributorCode = order.distributorId;
-      const items = order.items || [];
-
-      if (Array.isArray(items) && items.length > 0) {
-        for (const item of items) {
-          const productId = item.productId;
-          const qty = Number(item.qty || 0);
-
-          if (distributorCode && productId && qty > 0) {
-            await deductMonthlyGoal({
-              distributorCode,
-              productId,
-              qty,
-            });
-          }
-        }
-      }
-
-      // ✅ Mark order as goalDeducted true
-      await ddb.send(
-        new UpdateCommand({
-          TableName: "tickin_orders",
-          Key: { pk: `ORDER#${orderId}`, sk: "META" },
-          UpdateExpression: "SET goalDeducted = :true, goalDeductedAt = :t",
-          ExpressionAttributeValues: {
-            ":true": true,
-            ":t": new Date().toISOString(),
-          },
-        })
-      );
-    }
+    // ✅ timeline event
+    await addTimelineEvent({
+      orderId,
+      event: "ORDER_CONFIRMED",
+      by: user.mobile,
+      extra: { role: user.role, note: "Order confirmed" },
+    });
 
     /* ===================================================
-       ✅ SLOT BOOKING (FIXED)
-       IMPORTANT FIX:
-       - use order.distributorId instead of user.distributorCode
-       - So Manager token works too ✅
+       ✅ SLOT BOOKING (Manager OR Sales can do)
+       - distributorCode should be order.distributorId ✅
     =================================================== */
 
     let slotBooked = false;
 
     if (slot?.date && slot?.time && slot?.vehicleType && slot?.pos) {
       await bookSlot({
-  companyCode,
-  date: slot.date,
-  time: slot.time,
-  vehicleType: slot.vehicleType,
-  pos: slot.pos,
-  userId: user.mobile,
+        companyCode,
+        date: slot.date,
+        time: slot.time,
+        vehicleType: slot.vehicleType,
+        pos: slot.pos,
+        userId: user.mobile,
 
-  // ✅ slot booking should be for ORDER distributor
-  distributorCode: order.distributorId,
+        // ✅ slot booking should be for ORDER distributor
+        distributorCode: order.distributorId,
 
-  amount: order.totalAmount || order.grandTotal || 0,
-  orderId,
+        amount: order.totalAmount || order.grandTotal || 0,
+        orderId,
 
-  // ✅ IMPORTANT FIX: send requester role + token distributorCode
-  requesterRole: (user.role || "").toUpperCase(),
-  requesterDistributorCode: user.distributorCode || user.distributorId || null,
-});
+        requesterRole: role,
+        requesterDistributorCode:
+          user.distributorCode || user.distributorId || null,
+      });
 
       slotBooked = true;
     }
 
     return res.json({
-      message: alreadyConfirmed
-        ? "✅ Order already confirmed - Goal deduction processed"
-        : "✅ Order confirmed successfully",
+      message: "✅ Order confirmed successfully",
       orderId,
+      status: "CONFIRMED",
       slotBooked,
     });
   } catch (err) {
@@ -444,6 +426,7 @@ export const confirmOrder = async (req, res) => {
     return res.status(500).json({ message: "Error", error: err.message });
   }
 };
+
 /* ==========================
    ✅ UPDATE ORDER ITEMS (THIS WAS MISSING ✅)
    Salesman can edit only DRAFT
@@ -465,34 +448,56 @@ export const updateOrderItems = async (req, res) => {
       })
     );
 
-    if (!existing.Item) {
-      return res.status(404).json({ message: "Order not found" });
-    }
+    if (!existing.Item) return res.status(404).json({ message: "Order not found" });
 
     const order = existing.Item;
 
+    // ✅ Only creator can edit
     if (order.createdBy !== user.mobile) {
       return res.status(403).json({ message: "Only creator can edit" });
     }
 
-    if (order.status !== "DRAFT") {
-      return res.status(403).json({ message: "Order already confirmed. Cannot edit." });
+    // ✅ Only PENDING can be edited
+    if (order.status !== "PENDING") {
+      return res.status(403).json({ message: "Only PENDING orders can be edited" });
     }
 
-    // ✅ recalc total
     let totalAmount = 0;
+    let totalQty = 0;
+
     items.forEach((i) => {
       totalAmount += Number(i.qty) * Number(i.price);
+      totalQty += Number(i.qty);
     });
+
+    const oldQty = Number(order.totalQty || 0);
+    const diff = totalQty - oldQty;
+
+    // ✅ if qty increased → deduct extra
+    if (diff > 0) {
+      await deductDistributorMonthlyGoal({
+        distributorCode: order.distributorId,
+        qty: diff,
+      });
+    }
+
+    // ✅ if qty reduced → add back
+    if (diff < 0) {
+      await addBackDistributorMonthlyGoal({
+        distributorCode: order.distributorId,
+        qty: Math.abs(diff),
+      });
+    }
 
     await ddb.send(
       new UpdateCommand({
         TableName: "tickin_orders",
         Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression: "SET items = :it, totalAmount = :ta, updatedAt = :u",
+        UpdateExpression: "SET items = :it, totalAmount = :ta, totalQty = :tq, updatedAt = :u",
         ExpressionAttributeValues: {
           ":it": items,
           ":ta": totalAmount,
+          ":tq": totalQty,
           ":u": new Date().toISOString(),
         },
       })
@@ -500,26 +505,90 @@ export const updateOrderItems = async (req, res) => {
 
     await addTimelineEvent({
       orderId,
-      event: "ORDER_UPDATED",
+      event: "ORDER_ITEMS_UPDATED",
       by: user.mobile,
-      extra: {
-        role: user.role,
-        totalAmount,
-      },
+      extra: { role: user.role, totalAmount, totalQty, diff },
     });
 
     return res.json({
-      message: "✅ Order updated successfully",
+      message: "✅ Order updated successfully (goal adjusted)",
       orderId,
-      status: "DRAFT",
+      status: "PENDING",
       totalAmount,
+      totalQty,
       items,
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: "Error", error: err.message });
+    return res.status(500).json({ message: "Error", error: err.message });
   }
 };
+/**Delete Order */
+export const deleteOrder = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const user = req.user;
+
+    const existing = await ddb.send(
+      new GetCommand({
+        TableName: "tickin_orders",
+        Key: { pk: `ORDER#${orderId}`, sk: "META" },
+      })
+    );
+
+    if (!existing.Item) return res.status(404).json({ message: "Order not found" });
+
+    const order = existing.Item;
+
+    // ✅ Only creator can delete
+    if (order.createdBy !== user.mobile) {
+      return res.status(403).json({ message: "Only creator can delete" });
+    }
+
+    // ✅ Only PENDING can be deleted
+    if (order.status !== "PENDING") {
+      return res.status(403).json({ message: "Only PENDING orders can be deleted" });
+    }
+
+    // ✅ Restore goal fully
+    await addBackDistributorMonthlyGoal({
+      distributorCode: order.distributorId,
+      qty: Number(order.totalQty || 0),
+    });
+
+    // ✅ Mark order cancelled (don’t delete DB record)
+    await ddb.send(
+      new UpdateCommand({
+        TableName: "tickin_orders",
+        Key: { pk: `ORDER#${orderId}`, sk: "META" },
+        UpdateExpression: "SET #st = :c, cancelledAt = :t, cancelledBy = :u",
+        ExpressionAttributeNames: { "#st": "status" },
+        ExpressionAttributeValues: {
+          ":c": "CANCELLED",
+          ":t": new Date().toISOString(),
+          ":u": user.mobile,
+        },
+      })
+    );
+
+    await addTimelineEvent({
+      orderId,
+      event: "ORDER_CANCELLED",
+      by: user.mobile,
+      extra: { role: user.role, note: "Order cancelled and goal restored" },
+    });
+
+    return res.json({
+      message: "✅ Order cancelled + goal restored",
+      orderId,
+      status: "CANCELLED",
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Error", error: err.message });
+  }
+};
+
 /**
  * ✅ Sales officer: fetch all orders of distributors mapped to his location
  * Returns DRAFT + PENDING + CONFIRMED

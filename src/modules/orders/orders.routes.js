@@ -15,7 +15,7 @@ import {
   getOrderById,
   confirmDraftOrder
 } from "./orders.service.js";
-
+import { deleteOrder } from "./orders.service.js";
 const router = express.Router();
 
 /* ===========================
@@ -29,6 +29,7 @@ router.get(
   allowRoles("MASTER", "MANAGER"),
   getPendingOrders
 );
+router.delete("/:orderId", verifyToken, deleteOrder);
 
 // ✅ MASTER today orders
 router.get(
