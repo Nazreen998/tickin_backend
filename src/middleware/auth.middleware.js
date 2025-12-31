@@ -4,10 +4,9 @@ import { QueryCommand } from "@aws-sdk/lib-dynamodb";
 
 async function attachAllowedDistributors(decoded) {
   try {
-    const role = decoded?.role;
-
+const role = String(decoded?.role || "").trim().toUpperCase();
     const isSales =
-      role === "SALES OFFICER" || role === "SALESMAN" || role === "DISTRIBUTOR";
+      role === "SALES OFFICER" || role === "SALESMAN" || role === "DISTRIBUTOR" || role === "SALES_OFFICER";
 
     if (!isSales) return decoded;
 
