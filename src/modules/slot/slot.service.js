@@ -13,11 +13,6 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 
 import { pairingMap } from "../../appInit.js";
-/**
- * NOTE on Excel files:
- * - location.xlsx (pairingMap): used to resolve distributorCode -> location group
- * - distributor_location.xlsx: only for sales officer -> distributor mapping (handled via token + middleware)
- */
 
 const TABLE_CAPACITY = "tickin_slot_capacity";
 const TABLE_BOOKINGS = "tickin_slot_bookings";
@@ -27,7 +22,6 @@ const TABLE_TRIPS = "tickin_trips";
 
 const DEFAULT_SLOTS = ["09:00", "12:30", "16:30", "20:30"];
 const ALL_POSITIONS = ["A", "B", "C", "D"];
-
 const DEFAULT_MAX_AMOUNT = 80000;
 
 /** Utils */
@@ -51,7 +45,6 @@ function skForMergeSlot(time, mergeKey) {
 
 /**
  * ✅ Find location + distributor details from pairingMap (Excel)
- * Supports distributorId / distributorCode / code
  */
 function findDistributorFromPairingMap(map, distributorCode) {
   const code = String(distributorCode || "").trim();
@@ -73,7 +66,7 @@ function findDistributorFromPairingMap(map, distributorCode) {
   return { location: null, distributor: null };
 }
 
-/** ---------------- TRIP HELPERS (NEW) ---------------- **/
+/** ---------------- TRIP HELPERS ---------------- **/
 
 function tripPk(companyCode, date) {
   return `COMPANY#${companyCode}#DATE#${date}`;
@@ -125,9 +118,12 @@ async function ensureTrip({
     mergeKey: vehicleType === "HALF" ? mergeKey : null,
     mergeType: vehicleType === "HALF" ? mergeType : null,
     location: vehicleType === "HALF" ? String(location || "") : null,
-    tripStatus: "OPEN",
+
+    // ✅ DEFAULT STATUS
+    tripStatus: vehicleType === "FULL" ? "FULL_CONFIRMED" : "PARTIAL",
     totalAmount: 0,
     maxAmount: Number(maxAmount || DEFAULT_MAX_AMOUNT),
+
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -215,56 +211,8 @@ async function setRule(companyCode, patch) {
   return { ok: true };
 }
 
-/** ---------- CLUSTER ASSIGNMENTS (Option B) ---------- */
-async function getClusterAssignment(companyCode, date, orderId, distributorCode) {
-  const rule = await getRule(companyCode);
-  const rawKey = `${date}_${orderId || ""}_${distributorCode || ""}`;
-  const key = safeKey(rawKey);
-  return rule?.clusterAssignments?.[key] || null;
-}
-
-async function setClusterAssignment(
-  companyCode,
-  date,
-  orderId,
-  distributorCode,
-  clusterId
-) {
-  const pk = `COMPANY#${companyCode}`;
-  const sk = "RULES";
-
-  const rawKey = `${date}_${orderId || ""}_${distributorCode || ""}`;
-  const key = safeKey(rawKey);
-
-  await ddb.send(
-    new UpdateCommand({
-      TableName: TABLE_RULES,
-      Key: { pk, sk },
-      UpdateExpression: "SET clusterAssignments.#k = :cid, updatedAt = :u",
-      ExpressionAttributeNames: { "#k": key },
-      ExpressionAttributeValues: {
-        ":cid": String(clusterId),
-        ":u": new Date().toISOString(),
-      },
-    })
-  );
-
-  return { ok: true, key, clusterId };
-}
-
-export async function managerAssignCluster({
-  companyCode,
-  date,
-  orderId,
-  distributorCode,
-  clusterId,
-}) {
-  return setClusterAssignment(companyCode, date, orderId, distributorCode, clusterId);
-}
-
 /**
  * ✅ GET SLOT GRID
- * Returns FULL grid (A-D) + HALF merge bucket rows (MERGE_SLOT#)
  */
 export async function getSlotGrid({ companyCode, date }) {
   const pk = pkFor(companyCode, date);
@@ -279,7 +227,6 @@ export async function getSlotGrid({ companyCode, date }) {
 
   const overrides = res.Items || [];
 
-  // default FULL grid
   const defaultSlots = [];
   for (const time of DEFAULT_SLOTS) {
     for (const pos of ALL_POSITIONS) {
@@ -299,7 +246,6 @@ export async function getSlotGrid({ companyCode, date }) {
     return override ? { ...slot, ...override } : slot;
   });
 
-  // include HALF merge bucket rows
   const mergeSlots = overrides.filter((o) =>
     String(o.sk || "").startsWith("MERGE_SLOT#")
   );
@@ -309,7 +255,6 @@ export async function getSlotGrid({ companyCode, date }) {
 
 /**
  * ✅ Manager Open Last Slot
- * ✅ AFTER 5PM ONLY
  */
 export async function managerOpenLastSlot({
   companyCode,
@@ -365,91 +310,39 @@ export async function managerOpenLastSlot({
 }
 
 /**
- * ✅ Manager Set Slot Max Amount
- */
-export async function managerSetSlotMaxAmount({
-  companyCode,
-  date,
-  time,
-  mergeKey,
-  location,
-  maxAmount,
-}) {
-  const pk = pkFor(companyCode, date);
-  const finalMergeKey = mergeKey ? String(mergeKey) : `LOC#${location}`;
-  const sk = skForMergeSlot(time, finalMergeKey);
-
-  await ddb.send(
-    new UpdateCommand({
-      TableName: TABLE_CAPACITY,
-      Key: { pk, sk },
-      UpdateExpression: "SET maxAmount = :m, #t = :t, mergeKey = :mk",
-      ExpressionAttributeNames: { "#t": "time" },
-      ExpressionAttributeValues: {
-        ":m": Number(maxAmount),
-        ":t": time,
-        ":mk": finalMergeKey,
-      },
-    })
-  );
-
-  return {
-    ok: true,
-    message: "MaxAmount updated ✅",
-    maxAmount: Number(maxAmount),
-    mergeKey: finalMergeKey,
-  };
-}
-
-/**
- * ✅ BOOK SLOT
- * - Amount decides FULL/HALF (>=80k FULL else HALF)
- * - Default merge by location
- * - Manager manual merge via CLUSTER assignment (Option B)
+ * ✅ BOOK SLOT (FINAL UPDATED)
  */
 export async function bookSlot({
   companyCode,
   date,
   time,
-  vehicleType = "FULL",
   pos,
   userId,
   distributorCode,
   amount = 0,
   orderId,
-
-  requesterRole = "UNKNOWN",
-  requesterDistributorCode = null,
 }) {
   const pk = pkFor(companyCode, date);
 
-  // ✅ Amount based HARD RULE
   const amt = Number(amount || 0);
-  const computedType = amt >= DEFAULT_MAX_AMOUNT ? "FULL" : "HALF";
-  vehicleType = computedType;
-
-  // ✅ last slot validation
-  if (time === "20:30") {
-    const rule = await getRule(companyCode);
-
-    // ✅ strict: only allow if enabled true
-    if (!rule || rule.lastSlotEnabled !== true) {
-      throw new Error("Last slot not enabled by manager");
-    }
-
-    const openAfter = rule?.lastSlotOpenAfter || "17:00";
-    const nowTime = dayjs().format("HH:mm");
-
-    if (nowTime < openAfter) {
-      throw new Error(`Last slot opens only after ${openAfter}`);
-    }
-  }
+  const vehicleType = amt >= DEFAULT_MAX_AMOUNT ? "FULL" : "HALF";
 
   /** ---------------- FULL booking ---------------- */
   if (vehicleType === "FULL") {
-    const slotSk = skForSlot(time, vehicleType, pos);
-    const bookingSk = skForBooking(time, vehicleType, pos, userId);
+    if (!pos) throw new Error("pos required for FULL booking");
+
+    const slotSk = skForSlot(time, "FULL", pos);
+    const bookingSk = skForBooking(time, "FULL", pos, userId);
     const bookingId = uuidv4();
+
+    await ensureTrip({
+      companyCode,
+      date,
+      time,
+      vehicleType: "FULL",
+      pos,
+      maxAmount: DEFAULT_MAX_AMOUNT,
+    });
 
     await ddb.send(
       new TransactWriteCommand({
@@ -473,7 +366,7 @@ export async function bookSlot({
                 ":booked": "BOOKED",
                 ":uid": userId,
                 ":t": time,
-                ":vt": vehicleType,
+                ":vt": "FULL",
                 ":p": pos,
               },
             },
@@ -486,10 +379,11 @@ export async function bookSlot({
                 sk: bookingSk,
                 bookingId,
                 slotTime: time,
-                vehicleType,
+                vehicleType: "FULL",
                 pos,
                 userId,
-                distributorCode: distributorCode || null,
+                distributorCode,
+                amount: amt,
                 status: "CONFIRMED",
                 createdAt: new Date().toISOString(),
               },
@@ -498,27 +392,6 @@ export async function bookSlot({
         ],
       })
     );
-
-    // ✅ NEW: trip record for FULL
-    await ensureTrip({
-      companyCode,
-      date,
-      time,
-      vehicleType: "FULL",
-      pos,
-      maxAmount: DEFAULT_MAX_AMOUNT,
-    });
-
-    await updateTripTotals({
-      companyCode,
-      date,
-      time,
-      vehicleType: "FULL",
-      pos,
-      totalAmount: DEFAULT_MAX_AMOUNT,
-      tripStatus: "FULL",
-      maxAmount: DEFAULT_MAX_AMOUNT,
-    });
 
     if (orderId) {
       await addTimelineEvent({
@@ -532,48 +405,15 @@ export async function bookSlot({
     return { ok: true, bookingId, type: "FULL" };
   }
 
-  /** ---------------- HALF booking (Location merge + Cluster merge) ---------------- */
-  let { location, distributor } = findDistributorFromPairingMap(
-    pairingMap,
-    distributorCode
-  );
+  /** ---------------- HALF booking ---------------- */
+  let { location, distributor } = findDistributorFromPairingMap(pairingMap, distributorCode);
 
-  if (!location) {
-    const distRes = await ddb.send(
-      new GetCommand({
-        TableName: "tickin_distributors",
-        Key: { pk: "DISTRIBUTOR", sk: String(distributorCode) },
-      })
-    );
+  if (!location) throw new Error(`Distributor location not found for ${distributorCode}`);
 
-    location = distRes.Item?.location;
-    distributor = distRes.Item || null;
-  }
-
-  if (!location) {
-    throw new Error(`Distributor location not found for ${distributorCode}`);
-  }
-
-  // ✅ Option B: check cluster assignment
-  const assignedClusterId = await getClusterAssignment(
-    companyCode,
-    date,
-    orderId,
-    distributorCode
-  );
-
-  const mergeKey = assignedClusterId
-    ? `CLUSTER#${assignedClusterId}`
-    : `LOC#${location}`;
-
-  const mergeType = assignedClusterId ? "CLUSTER" : "LOCATION";
-
+  const mergeKey = `LOC#${location}`;
   const mergeSk = skForMergeSlot(time, mergeKey);
 
-  const bookingId = uuidv4();
-  const bookingSk = `BOOKING#${time}#KEY#${mergeKey}#USER#${userId}#${bookingId}`;
-
-  // read current bucket totals
+  // ✅ check if bucket already exists
   const current = await ddb.send(
     new GetCommand({
       TableName: TABLE_CAPACITY,
@@ -583,50 +423,84 @@ export async function bookSlot({
 
   const existing = current.Item || null;
 
-  const currentTotal = Number(existing?.totalAmount || 0);
-  const maxAmount = Number(existing?.maxAmount || DEFAULT_MAX_AMOUNT);
+  // ✅ if already exists, push to waiting
+  if (existing && ["PARTIAL", "FULL_PENDING", "FULL_CONFIRMED"].includes(existing.tripStatus)) {
+    const waitPk = `WAIT#${companyCode}#${date}#${time}#${mergeKey}`;
+    const waitSk = `USER#${userId}#${uuidv4()}`;
 
-  if (existing?.tripStatus === "FULL") {
-    throw new Error("Trip already full for this merge bucket");
+    await ddb.send(
+      new PutCommand({
+        TableName: TABLE_QUEUE,
+        Item: {
+          pk: waitPk,
+          sk: waitSk,
+          companyCode,
+          date,
+          time,
+          mergeKey,
+          distributorCode,
+          userId,
+          amount: amt,
+          status: "WAITING",
+          createdAt: new Date().toISOString(),
+        },
+      })
+    );
+
+    if (orderId) {
+      await addTimelineEvent({
+        orderId,
+        event: "SLOT_WAITING",
+        by: userId,
+        extra: { vehicleType: "HALF", time, distributorCode, mergeKey },
+      });
+    }
+
+    return {
+      ok: true,
+      status: "WAITING",
+      message: "Half slot in progress. Added to waiting queue ✅",
+    };
   }
 
-  const newTotal = currentTotal + amt;
-  const newTripStatus = newTotal >= maxAmount ? "FULL" : "PARTIAL";
+  // ✅ new bucket create
+  const bookingId = uuidv4();
+  const bookingSk = `BOOKING#${time}#KEY#${mergeKey}#USER#${userId}#${bookingId}`;
 
-  // ✅ NEW: ensure trip exists for HALF bucket BEFORE update
+  const newTotal = amt;
+  const tripStatus = newTotal >= DEFAULT_MAX_AMOUNT ? "FULL_PENDING" : "PARTIAL";
+
   await ensureTrip({
     companyCode,
     date,
     time,
     vehicleType: "HALF",
     mergeKey,
-    mergeType,
+    mergeType: "LOCATION",
     location,
-    maxAmount,
+    maxAmount: DEFAULT_MAX_AMOUNT,
   });
 
   await ddb.send(
     new TransactWriteCommand({
       TransactItems: [
         {
-          Update: {
+          Put: {
             TableName: TABLE_CAPACITY,
-            Key: { pk, sk: mergeSk },
-            ConditionExpression:
-              "attribute_not_exists(tripStatus) OR tripStatus <> :full",
-            UpdateExpression:
-              "SET #t = :t, mergeKey = :mk, mergeType = :mt, #loc = :loc, maxAmount = if_not_exists(maxAmount, :m), totalAmount = :newTotal, tripStatus = :ts",
-            ExpressionAttributeNames: { "#t": "time", "#loc": "location" },
-            ExpressionAttributeValues: {
-              ":t": time,
-              ":mk": mergeKey,
-              ":mt": mergeType,
-              ":loc": String(location),
-              ":m": maxAmount,
-              ":newTotal": newTotal,
-              ":ts": newTripStatus,
-              ":full": "FULL",
+            Item: {
+              pk,
+              sk: mergeSk,
+              time,
+              mergeKey,
+              mergeType: "LOCATION",
+              location: String(location),
+              totalAmount: newTotal,
+              maxAmount: DEFAULT_MAX_AMOUNT,
+              tripStatus,
+              status: "MERGE",
+              createdAt: new Date().toISOString(),
             },
+            ConditionExpression: "attribute_not_exists(pk) AND attribute_not_exists(sk)",
           },
         },
         {
@@ -639,13 +513,20 @@ export async function bookSlot({
               slotTime: time,
               vehicleType: "HALF",
               userId,
-              distributorCode: distributorCode || null,
+              distributorCode,
               location: String(location),
               mergeKey,
-              mergeType,
+              mergeType: "LOCATION",
               amount: amt,
-              status: newTripStatus === "FULL" ? "CONFIRMED" : "PARTIAL",
+
+              // ✅ status based on pending
+              status: tripStatus,
               createdAt: new Date().toISOString(),
+
+              // ✅ LAT/LNG from pairingMap
+              lat: distributor?.lat || null,
+              lng: distributor?.lng || null,
+              final_url: distributor?.final_url || null,
             },
           },
         },
@@ -653,7 +534,6 @@ export async function bookSlot({
     })
   );
 
-  // ✅ NEW: update trip totals after successful transaction
   await updateTripTotals({
     companyCode,
     date,
@@ -661,8 +541,8 @@ export async function bookSlot({
     vehicleType: "HALF",
     mergeKey,
     totalAmount: newTotal,
-    tripStatus: newTripStatus,
-    maxAmount,
+    tripStatus,
+    maxAmount: DEFAULT_MAX_AMOUNT,
   });
 
   if (orderId) {
@@ -670,15 +550,7 @@ export async function bookSlot({
       orderId,
       event: "SLOT_BOOKED",
       by: userId,
-      extra: {
-        vehicleType: "HALF",
-        time,
-        mergeKey,
-        mergeType,
-        location,
-        amount: amt,
-        tripStatus: newTripStatus,
-      },
+      extra: { vehicleType: "HALF", time, mergeKey, location, amount: amt, tripStatus },
     });
   }
 
@@ -686,30 +558,63 @@ export async function bookSlot({
     ok: true,
     bookingId,
     type: "HALF",
-    tripStatus: newTripStatus,
+    tripStatus,
     totalAmount: newTotal,
-    maxAmount,
+    maxAmount: DEFAULT_MAX_AMOUNT,
     mergeKey,
-    mergeType,
     location,
     distributor,
   };
 }
 
 /**
- * ✅ CANCEL SLOT
- * - Supports FULL cancel
- * - HALF cancel not supported (manual clear)
+ * ✅ MANAGER CONFIRM HALF TRIP
+ * FULL_PENDING → FULL_CONFIRMED
  */
-export async function cancelSlot({
-  companyCode,
-  date,
-  time,
-  vehicleType = "FULL",
-  pos,
-  userId,
-  orderId,
-}) {
+export async function managerConfirmHalfTrip({ companyCode, date, time, mergeKey }) {
+  const pk = pkFor(companyCode, date);
+  const mergeSk = skForMergeSlot(time, mergeKey);
+
+  const current = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: mergeSk },
+    })
+  );
+
+  if (!current.Item) throw new Error("Merge slot not found");
+  if (current.Item.tripStatus !== "FULL_PENDING") throw new Error("Only FULL_PENDING can be confirmed");
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: mergeSk },
+      UpdateExpression: "SET tripStatus = :s, confirmedAt = :t",
+      ExpressionAttributeValues: {
+        ":s": "FULL_CONFIRMED",
+        ":t": new Date().toISOString(),
+      },
+    })
+  );
+
+  await updateTripTotals({
+    companyCode,
+    date,
+    time,
+    vehicleType: "HALF",
+    mergeKey,
+    totalAmount: current.Item.totalAmount,
+    tripStatus: "FULL_CONFIRMED",
+    maxAmount: current.Item.maxAmount,
+  });
+
+  return { ok: true, message: "✅ HALF trip confirmed by manager", mergeKey, time };
+}
+
+/**
+ * ✅ CANCEL SLOT (FULL மட்டும்)
+ */
+export async function cancelSlot({ companyCode, date, time, vehicleType = "FULL", pos, userId, orderId }) {
   const pk = pkFor(companyCode, date);
 
   if (vehicleType === "FULL") {
@@ -724,11 +629,8 @@ export async function cancelSlot({
               TableName: TABLE_CAPACITY,
               Key: { pk, sk: slotSk },
               ConditionExpression: "#s = :booked",
-              UpdateExpression:
-                "SET #s = :available REMOVE userId",
-              ExpressionAttributeNames: {
-                "#s": "status",
-              },
+              UpdateExpression: "SET #s = :available REMOVE userId",
+              ExpressionAttributeNames: { "#s": "status" },
               ExpressionAttributeValues: {
                 ":booked": "BOOKED",
                 ":available": "AVAILABLE",
@@ -757,50 +659,5 @@ export async function cancelSlot({
     return { ok: true };
   }
 
-  throw new Error("HALF cancel not supported yet (manager can clear manually)");
-}
-
-/**
- * ✅ WAITING QUEUE JOIN
- */
-export async function joinWaiting({
-  companyCode,
-  date,
-  time,
-  vehicleType = "HALF",
-  userId,
-  distributorCode,
-  orderId,
-}) {
-  const pk = `COMPANY#${companyCode}#DATE#${date}#SLOT#${time}#TYPE#${vehicleType}`;
-  const sk = `WAIT#${new Date().toISOString()}#USER#${userId}`;
-
-  await ddb.send(
-    new PutCommand({
-      TableName: TABLE_QUEUE,
-      Item: {
-        pk,
-        sk,
-        slotTime: time,
-        vehicleType,
-        userId,
-        distributorCode: distributorCode || null,
-        status: "WAITING",
-        createdAt: new Date().toISOString(),
-      },
-      ConditionExpression:
-        "attribute_not_exists(pk) AND attribute_not_exists(sk)",
-    })
-  );
-
-  if (orderId) {
-    await addTimelineEvent({
-      orderId,
-      event: "SLOT_WAITING",
-      by: userId,
-      extra: { vehicleType, time, distributorCode },
-    });
-  }
-
-  return { ok: true, message: "Added to waiting queue" };
+  throw new Error("HALF cancel not supported (manager only)");
 }
