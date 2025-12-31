@@ -311,21 +311,26 @@ export async function bookSlot({
   const pk = pkFor(companyCode, date);
 
   // ✅ SERVICE-LEVEL SECURITY: non-manager MUST book only own distributor
-  const isMgr = requesterRole === "MANAGER" || requesterRole === "MASTER";
-  if (!isMgr) {
-    if (!requesterDistributorCode) {
-      throw new Error(
-        "Your token has no distributorCode mapping. Please re-login or contact admin."
-      );
-    }
+ const isMgr = requesterRole === "MANAGER" || requesterRole === "MASTER";
 
-    if (
-      String(requesterDistributorCode).trim() !== String(distributorCode).trim()
-    ) {
+if (!isMgr) {
+  const list =
+    requesterDistributorCode?.allowedDistributorCodes ||
+    requesterDistributorCode?.distributorCodes ||
+    null;
+
+  if (Array.isArray(list)) {
+    const ok = list.map(String).map((x) => x.trim()).includes(String(distributorCode).trim());
+    if (!ok) throw new Error("You can book slot only for your own distributorCode");
+  } else {
+    if (!requesterDistributorCode) {
+      throw new Error("Your token has no distributorCode mapping. Please re-login or contact admin.");
+    }
+    if (String(requesterDistributorCode).trim() !== String(distributorCode).trim()) {
       throw new Error("You can book slot only for your own distributorCode");
     }
   }
-
+}
   // ✅ Amount based HARD RULE
   const amt = Number(amount || 0);
   const computedType = amt >= DEFAULT_MAX_AMOUNT ? "FULL" : "HALF";

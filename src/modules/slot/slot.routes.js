@@ -41,12 +41,43 @@ function getUserDistributorCode(req) {
 }
 
 // ✅ validate own distributor (for sales officer / distributor)
+function normalizeCode(x) {
+  return String(x || "")
+    .trim()
+    .toUpperCase()
+    .replace("DISTRIBUTOR#", "")
+    .replace("DIST#", "");
+}
+
 function validateOwnDistributor(req, distributorCode) {
-  const userDist = getUserDistributorCode(req);
+  const code = normalizeCode(distributorCode);
 
-  if (!userDist) return false;
+  const list =
+    req.user?.allowedDistributorCodes ||
+    req.user?.distributorCodes ||
+    req.user?.distributorCodeList ||
+    req.user?.mappedDistributorCodes ||
+    req.user?.distributors ||
+    req.user?.distributorList ||
+    null;
 
-  return String(userDist).trim() === String(distributorCode).trim();
+  if (Array.isArray(list)) {
+    const codes = list.map((d) =>
+      normalizeCode(d?.code || d?.distributorCode || d)
+    );
+    return codes.includes(code);
+  }
+
+  const single =
+    req.user?.distributorCode ||
+    req.user?.distributorId ||
+    req.user?.distributor_code ||
+    req.user?.distributor ||
+    null;
+
+  if (!single) return false;
+
+  return normalizeCode(single) === code;
 }
 
 /**
