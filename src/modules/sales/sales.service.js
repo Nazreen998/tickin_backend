@@ -1,4 +1,4 @@
-import { docClient } from "../../config/dynamo.js";
+import { ddb } from "../../config/dynamo.js";
 import { ScanCommand } from "@aws-sdk/lib-dynamodb";
 
 export const getDistributorsByCodes = async (codes = []) => {
@@ -16,6 +16,6 @@ export const getDistributorsByCodes = async (codes = []) => {
     }, {}),
   };
 
-  const result = await docClient.send(new ScanCommand(params));
+  const result = await ddb.send(new ScanCommand(params));
   return result.Items || [];
 };
