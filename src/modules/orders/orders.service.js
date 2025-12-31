@@ -430,18 +430,6 @@ export const confirmOrder = async (req, res) => {
 });
 
       slotBooked = true;
-
-      await addTimelineEvent({
-        orderId,
-        event: "SLOT_BOOKED",
-        by: user.mobile,
-        extra: {
-          role: user.role,
-          time: slot.time,
-          vehicleType: slot.vehicleType,
-          pos: slot.pos,
-        },
-      });
     }
 
     return res.json({

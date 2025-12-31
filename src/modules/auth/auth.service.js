@@ -62,7 +62,6 @@ export const login = async (req, res) => {
       mobile: user.mobile || mobile,
       companyId: user.companyId,
       companyName: companyRes.Item?.companyName || null,
-      location: user.location || null,
     };
 
     // ✅ Token payload base
@@ -71,7 +70,6 @@ export const login = async (req, res) => {
       mobile: user.mobile || mobile,
       role,
       companyId: user.companyId,
-      location: user.location || null,
     };
 
     // ✅ Manager/Master → no distributor mapping needed

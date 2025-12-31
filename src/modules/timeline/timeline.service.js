@@ -7,14 +7,14 @@ export const getOrderTimeline = async (req, res) => {
 
     // ✅ JWT values
     const role = req.user?.role;
-    const mobile = req.user?.mobile;  // login token has mobile
+    const mobile = req.user?.mobile;
     const companyId = req.user?.companyId;
 
     if (!role || !mobile) {
       return res.status(401).json({ ok: false, message: "Invalid token" });
     }
 
-    // ✅ Step 1: Read order META (for ownership check)
+    // ✅ Step 1: Read order META
     const orderRes = await ddb.send(
       new GetCommand({
         TableName: "tickin_orders",
@@ -31,9 +31,10 @@ export const getOrderTimeline = async (req, res) => {
 
     const order = orderRes.Item;
 
-    // ✅ Step 2: Ownership rules
+    // ✅ Step 2: Ownership rules (STRICT)
+
+    // ✅ SALES OFFICER: Only his created orders
     if (role === "SALES OFFICER") {
-      // Sales officer can view ONLY his created orders
       if (String(order.createdBy) !== String(mobile)) {
         return res
           .status(403)
@@ -41,15 +42,15 @@ export const getOrderTimeline = async (req, res) => {
       }
     }
 
+    // ✅ DISTRIBUTOR: Only his distributor orders
     if (role === "DISTRIBUTOR") {
-      // Distributor can view only their orders
-      // token must contain distributorId (later we add in JWT)
       const tokenDistributorId = req.user?.distributorId;
 
       if (!tokenDistributorId) {
         return res.status(403).json({
           ok: false,
-          message: "DistributorId missing in token. Add distributorId in login JWT.",
+          message:
+            "DistributorId missing in token. Add distributorId in login JWT.",
         });
       }
 
@@ -60,15 +61,32 @@ export const getOrderTimeline = async (req, res) => {
       }
     }
 
-    // ✅ Master / Manager can view all (no restriction)
+    // ✅ DRIVER: Allow ONLY if assigned to him
     if (role === "DRIVER") {
-      return res.status(403).json({
-        ok: false,
-        message: "Driver timeline not allowed now",
-      });
+      const assignedDriverId = order.driverId || order.driverMobile || null;
+
+      // order table la driverId save pannala na timeline show panna mudiyathu
+      if (!assignedDriverId) {
+        return res.status(403).json({
+          ok: false,
+          message:
+            "Driver not assigned yet. Manager must assign driver (driverId not found in order).",
+        });
+      }
+
+      // driver token la mobile irukkum. compare with order.driverId
+      if (String(assignedDriverId) !== String(mobile)) {
+        return res.status(403).json({
+          ok: false,
+          message: "This order is not assigned to you",
+        });
+      }
     }
 
-    // ✅ Step 3: Fetch timeline
+    // ✅ MASTER / MANAGER: No restriction (can view all)
+    // (You can optionally check companyId match here if needed)
+
+    // ✅ Step 3: Fetch timeline events
     const result = await ddb.send(
       new QueryCommand({
         TableName: "tickin_timeline",
@@ -76,19 +94,42 @@ export const getOrderTimeline = async (req, res) => {
         ExpressionAttributeValues: {
           ":pk": `ORDER#${orderId}`,
         },
-        ScanIndexForward: true,
+        ScanIndexForward: true, // chronological
       })
     );
+
+    const timeline = result.Items || [];
+
+    // ✅ Step 4: Attach order items (for loading items one-by-one UI)
+    // Your order items already stored in tickin_orders META
+    const orderItems = order.items || [];
 
     return res.json({
       ok: true,
       message: "Timeline fetched ✅",
       orderId,
-      count: result.Items?.length || 0,
-      timeline: result.Items || [],
+      role,
+      count: timeline.length,
+      orderMeta: {
+        orderId: order.orderId || orderId,
+        distributorId: order.distributorId,
+        distributorName: order.distributorName,
+        status: order.status,
+        vehicleNo: order.vehicleNo || null,
+        driverId: order.driverId || null,
+        totalAmount: order.totalAmount || order.amount || 0,
+        createdBy: order.createdBy,
+        createdAt: order.createdAt || order.timestamp || null,
+      },
+      orderItems, // ✅ front end can show items one-by-one
+      timeline,
     });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ ok: false, message: "Error", error: err.message });
+    console.error("getOrderTimeline error:", err);
+    return res.status(500).json({
+      ok: false,
+      message: "Error",
+      error: err.message,
+    });
   }
 };

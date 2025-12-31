@@ -137,7 +137,7 @@ router.post(
 router.post(
   "/assign-driver",
   verifyToken,
-  allowRoles("MASTER", "MANAGER"),
+  allowRoles("MANAGER"),
   async (req, res) => {
     try {
       const user = req.user;
@@ -146,6 +146,7 @@ router.post(
       if (!orderId) return res.status(400).json({ message: "orderId required" });
       if (!driverId) return res.status(400).json({ message: "driverId required" });
 
+      // 1) ✅ timeline event
       await addTimelineEvent({
         orderId,
         event: "DRIVER_ASSIGNED",
@@ -153,8 +154,24 @@ router.post(
         extra: { role: user.role, driverId, vehicleNo },
       });
 
-      // optional
-      // await updateOrderStatus(orderId, "DRIVER_ASSIGNED");
+      // 2) ✅ update order meta (THIS makes driver dashboard card appear)
+      await ddb.send(
+        new UpdateCommand({
+          TableName: "tickin_orders",
+          Key: { pk: `ORDER#${orderId}`, sk: "META" },
+          UpdateExpression:
+            "SET driverId = :d, vehicleNo = :v, #st = :s, updatedAt = :t",
+          ExpressionAttributeNames: {
+            "#st": "status",
+          },
+          ExpressionAttributeValues: {
+            ":d": String(driverId),        // driverId should match what driver API receives
+            ":v": vehicleNo || null,
+            ":s": "DRIVER_ASSIGNED",
+            ":t": new Date().toISOString(),
+          },
+        })
+      );
 
       return res.json({ message: "✅ DRIVER_ASSIGNED added", orderId, driverId });
     } catch (err) {
@@ -163,7 +180,6 @@ router.post(
     }
   }
 );
-
 /* ===========================
    ✅ 5) ARRIVED (driver reached distributor / warehouse etc)
    POST /timeline/arrived
