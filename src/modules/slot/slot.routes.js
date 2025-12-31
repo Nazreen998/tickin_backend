@@ -231,6 +231,11 @@ router.post(
   async (req, res) => {
     try {
       const { companyCode, date, time, pos, distributorCode, amount, orderId } = req.body;
+ // ✅ DEBUG LOGS (temporary)
+      console.log("ROLE =>", req.user?.role);
+      console.log("USER DIST =>", req.user?.distributorCode, req.user?.distributorId);
+      console.log("USER LIST =>", req.user?.allowedDistributorCodes, req.user?.distributorCodes);
+      console.log("REQUEST CODE =>", distributorCode);
 
       if (!companyCode || !date || !time || !distributorCode) {
         return res.status(400).json({

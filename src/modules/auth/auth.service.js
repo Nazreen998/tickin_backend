@@ -52,37 +52,69 @@ export const login = async (req, res) => {
       return res.status(403).json({ message: "App blocked by company admin" });
     }
 
-    // ✅ JWT Token (added distributorId)
+    // ✅ Role-based distributor mapping
+    const role = user.role || "UNKNOWN";
+
+    // ✅ always return these fields
+    const responseUser = {
+      name: user.name || "",
+      role,
+      mobile: user.mobile || mobile,
+      companyId: user.companyId,
+      companyName: companyRes.Item?.companyName || null,
+      location: user.location || null,
+    };
+
+    // ✅ Token payload base
+    const payload = {
+      pk: user.pk,
+      mobile: user.mobile || mobile,
+      role,
+      companyId: user.companyId,
+      location: user.location || null,
+    };
+
+    // ✅ Manager/Master → no distributor mapping needed
+    if (role === "MANAGER" || role === "MASTER") {
+      responseUser.distributorCode = null;
+    }
+
+    // ✅ Sales Officer → multi distributor list
+    else if (role === "SALES OFFICER" || role === "SALES OFFICE") {
+      const list = user.allowedDistributorCodes || [];
+      responseUser.allowedDistributorCodes = list;
+      payload.allowedDistributorCodes = list;
+    }
+
+    // ✅ Salesman/Distributor → single distributorCode
+    else if (role === "SALESMAN" || role === "DISTRIBUTOR") {
+      const dist =
+        user.distributorCode || user.distributorId || user.distributor || null;
+
+      responseUser.distributorCode = dist;
+      payload.distributorCode = dist;
+    }
+
+    // ✅ Default fallback
+    else {
+      responseUser.distributorCode =
+        user.distributorCode || user.distributorId || null;
+      payload.distributorCode =
+        user.distributorCode || user.distributorId || null;
+    }
+
     // ✅ JWT Token
-const token = jwt.sign(
-  {
-    pk: user.pk,
-    mobile: user.mobile,
-    role: user.role,
-    companyId: user.companyId,
-    distributorId: user.distributorId || null,
-    location: user.location || null,   // ✅ ADD THIS
-  },
-  process.env.JWT_SECRET,
-  { expiresIn: "7d" }
-);
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: "7d",
+    });
 
-return res.json({
-  message: "Login success",
-  token,
-  user: {
-    name: user.name,
-    role: user.role,
-    mobile: user.mobile,
-    companyId: user.companyId,
-    distributorId: user.distributorId || null,
-    location: user.location || null,   // ✅ ADD THIS
-    companyName: companyRes.Item.companyName,
-  },
-});
-
+    return res.json({
+      message: "Login success",
+      token,
+      user: responseUser,
+    });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error", error: err.message });
+    console.error("LOGIN ERROR =>", err);
+    return res.status(500).json({ message: "Server error", error: err.message });
   }
 };
