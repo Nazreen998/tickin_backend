@@ -12,8 +12,7 @@ import {
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 
-import { pairingMap } from "././appInit.js";
-
+import { pairingMap } from "../../appInit.js";
 /**
  * NOTE on Excel files:
  * - location.xlsx (pairingMap): used to resolve distributorCode -> location group
