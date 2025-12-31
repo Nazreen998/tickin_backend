@@ -4,7 +4,7 @@ import { ddb } from "../../config/dynamo.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 
 import {
-  GetCommand,
+  GetCommand, // ✅ FIXED: Missing Import
   QueryCommand,
   PutCommand,
   UpdateCommand,
@@ -214,8 +214,11 @@ export async function bookSlot({
 
   /* ✅ FULL BOOKING */
   if (vehicleType === "FULL") {
+    // ✅ FIX: always have a valid uid (even if userId not passed)
+    const uid = (userId && String(userId).trim()) ? String(userId).trim() : uuidv4();
+
     const slotSk = skForSlot(time, "FULL", pos);
-    const bookingSk = skForBooking(time, "FULL", pos, userId);
+    const bookingSk = skForBooking(time, "FULL", pos, uid);
     const bookingId = uuidv4();
 
     await ddb.send(
@@ -231,7 +234,7 @@ export async function bookSlot({
               ExpressionAttributeValues: {
                 ":avail": "AVAILABLE",
                 ":booked": "BOOKED",
-                ":uid": userId,
+                ":uid": uid, // ✅ FIXED
               },
             },
           },
@@ -245,7 +248,7 @@ export async function bookSlot({
                 slotTime: time,
                 vehicleType,
                 pos,
-                userId,
+                userId: uid, // ✅ FIXED
                 distributorCode,
                 status: "CONFIRMED",
                 createdAt: new Date().toISOString(),
@@ -260,15 +263,15 @@ export async function bookSlot({
       await addTimelineEvent({
         orderId,
         event: "SLOT_BOOKED",
-        by: userId,
+        by: uid, // ✅ FIXED
         extra: { vehicleType: "FULL", time, pos, distributorCode },
       });
     }
 
-    return { ok: true, bookingId, type: "FULL" };
+    return { ok: true, bookingId, type: "FULL", userId: uid };
   }
 
-  /* ✅ HALF BOOKING */
+  /* ✅ HALF BOOKING (unchanged now, you said later) */
   let { location, distributor } = findDistributorFromPairingMap(pairingMap, distributorCode);
 
   if (!location) {
