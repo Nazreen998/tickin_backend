@@ -37,13 +37,15 @@ function getUserDistributorCode(req) {
   return v;
 }
 function validateOwnDistributor(req, distributorCode) {
-  if (isManager(req)) return true;
+  const tokenDist =
+    req.user?.distributorCode || req.user?.distributorId || null;
 
-  // ✅ multi distributor support for salesman/sales officer
-  const allowed = req.user?.allowedDistributors || [];
-  if (Array.isArray(allowed) && allowed.length > 0) {
-    return allowed.map(String).includes(String(distributorCode).trim());
-  }
+  // if token distributor missing, reject (for sales/distributor roles)
+  if (!tokenDist) return false;
+
+  return String(tokenDist).trim() === String(distributorCode).trim();
+}
+
 
   // fallback old behavior
   const userDist = getUserDistributorCode(req);
@@ -365,12 +367,13 @@ router.post(
       }
 
       // ✅ own distributor restriction (non-manager)
+      if (role !== "MANAGER" && role !== "MASTER"){
       if (!validateOwnDistributor(req, distributorCode)) {
         return res.status(403).json({
           ok: false,
           error: "You can join waiting queue only for your own distributorCode",
         });
-      }
+      }}
 
       const userId =
         req.user?.pk ||
