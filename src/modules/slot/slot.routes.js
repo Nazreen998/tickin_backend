@@ -7,27 +7,20 @@ import {
   managerOpenLastSlot,
   bookSlot,
   cancelSlot,
-  managerSetSlotMaxAmount,
+  joinWaiting,
   managerAssignCluster,
-  managerConfirmHalfTrip,
 } from "./slot.service.js";
 
 const router = express.Router();
 
-/**
- * ✅ GET SLOT GRID
- */
+/* ✅ GET GRID */
 router.get(
-  "/slots",
+  "/",
   verifyToken,
   allowRoles("MASTER", "MANAGER", "SALES OFFICER", "DISTRIBUTOR", "SALESMAN"),
   async (req, res) => {
     try {
       const { companyCode, date } = req.query;
-      if (!companyCode || !date) {
-        return res.status(400).json({ ok: false, error: "companyCode & date required" });
-      }
-
       const data = await getSlotGrid({ companyCode, date });
       return res.json({ ok: true, slots: data });
     } catch (err) {
@@ -36,99 +29,75 @@ router.get(
   }
 );
 
-/**
- * ✅ BOOK SLOT
- */
+/* ✅ BOOK */
 router.post(
-  "/slots/book",
+  "/book",
   verifyToken,
-  allowRoles("MANAGER", "MASTER", "SALES OFFICER", "DISTRIBUTOR", "SALESMAN"),
+  allowRoles("MASTER", "MANAGER", "SALES OFFICER", "DISTRIBUTOR", "SALESMAN"),
   async (req, res) => {
     try {
-      const { companyCode, date, time, pos, distributorCode, amount, orderId } = req.body;
-
-      if (!companyCode || !date || !time || !distributorCode) {
-        return res.status(400).json({ ok: false, error: "companyCode,date,time,distributorCode required" });
-      }
-
-      const userId = req.user?.pk || req.user?.mobile || req.user?.userId || req.user?.id;
-      if (!userId) return res.status(401).json({ ok: false, error: "Invalid token userId" });
-
-      const out = await bookSlot({
-        companyCode,
-        date,
-        time,
-        pos,
-        distributorCode,
-        userId,
-        amount: Number(amount || 0),
-        orderId,
-      });
-
-      return res.json(out);
+      const data = await bookSlot(req.body);
+      return res.json(data);
     } catch (err) {
       return res.status(500).json({ ok: false, error: err.message });
     }
   }
 );
 
-/**
- * ✅ MANAGER CONFIRM HALF MERGE
- * FULL_PENDING → FULL_CONFIRMED
- */
+/* ✅ WAITING */
 router.post(
-  "/slots/half/confirm",
+  "/waiting",
   verifyToken,
-  allowRoles("MANAGER"),
+  allowRoles("MASTER", "MANAGER", "SALES OFFICER", "DISTRIBUTOR", "SALESMAN"),
   async (req, res) => {
     try {
-      const { companyCode, date, time, mergeKey } = req.body;
-
-      if (!companyCode || !date || !time || !mergeKey) {
-        return res.status(400).json({ ok: false, error: "companyCode,date,time,mergeKey required" });
-      }
-
-      const out = await managerConfirmHalfTrip({ companyCode, date, time, mergeKey });
-      return res.json(out);
+      const data = await joinWaiting(req.body);
+      return res.json(data);
     } catch (err) {
       return res.status(500).json({ ok: false, error: err.message });
     }
   }
 );
 
-/**
- * ✅ CANCEL SLOT (FULL ONLY)
- */
+/* ✅ CANCEL */
 router.post(
-  "/slots/cancel",
+  "/cancel",
   verifyToken,
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
-      const { companyCode, date, time, vehicleType, pos, targetUserId, orderId } = req.body;
+      const data = await cancelSlot(req.body);
+      return res.json(data);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
 
-      if (!companyCode || !date || !time || !vehicleType) {
-        return res.status(400).json({ ok: false, error: "companyCode,date,time,vehicleType required" });
-      }
+/* ✅ OPEN LAST SLOT */
+router.post(
+  "/open-last",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const data = await managerOpenLastSlot(req.body);
+      return res.json(data);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
 
-      if (vehicleType === "FULL" && !pos) {
-        return res.status(400).json({ ok: false, error: "pos required for FULL cancel" });
-      }
-
-      const userId = targetUserId || req.user?.pk || req.user?.mobile;
-      if (!userId) return res.status(401).json({ ok: false, error: "Invalid token userId" });
-
-      const out = await cancelSlot({
-        companyCode,
-        date,
-        time,
-        vehicleType,
-        pos,
-        userId,
-        orderId,
-      });
-
-      return res.json(out);
+/* ✅ CLUSTER ASSIGN */
+router.post(
+  "/cluster/assign",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const data = await managerAssignCluster(req.body);
+      return res.json(data);
     } catch (err) {
       return res.status(500).json({ ok: false, error: err.message });
     }
