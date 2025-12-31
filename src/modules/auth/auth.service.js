@@ -81,7 +81,7 @@ export const login = async (req, res) => {
 
     // ✅ Sales Officer → multi distributor list
     else if (role === "SALES OFFICER" || role === "SALES OFFICE") {
-      const list = user.allowedDistributorCodes || [];
+      const list = parseAllowedCodes(user.allowedDistributorCodes);
       responseUser.allowedDistributorCodes = list;
       payload.allowedDistributorCodes = list;
     }
@@ -113,8 +113,20 @@ export const login = async (req, res) => {
       token,
       user: responseUser,
     });
-  } catch (err) {
+  } 
+  catch (err) {
     console.error("LOGIN ERROR =>", err);
     return res.status(500).json({ message: "Server error", error: err.message });
   }
 };
+function parseAllowedCodes(val) {
+  if (Array.isArray(val)) return val;
+
+  if (typeof val === "string") {
+    // string like "\"D002\",\"D007\",\"D015\""
+    const cleaned = val.replace(/\\/g, "").replace(/"/g, "");
+    return cleaned.split(",").map((x) => x.trim()).filter(Boolean);
+  }
+
+  return [];
+}
