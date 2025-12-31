@@ -312,21 +312,27 @@ export async function bookSlot({
 
   // ✅ SERVICE-LEVEL SECURITY: non-manager MUST book only own distributor
  const isMgr = requesterRole === "MANAGER" || requesterRole === "MASTER";
-
 if (!isMgr) {
-  const list =
-    requesterDistributorCode?.allowedDistributorCodes ||
-    requesterDistributorCode?.distributorCodes ||
-    null;
+  // ✅ if list passed (Sales Officer)
+  if (Array.isArray(requesterDistributorCode)) {
+    const ok = requesterDistributorCode
+      .map((x) => String(x).trim().toUpperCase())
+      .includes(String(distributorCode).trim().toUpperCase());
 
-  if (Array.isArray(list)) {
-    const ok = list.map(String).map((x) => x.trim()).includes(String(distributorCode).trim());
-    if (!ok) throw new Error("You can book slot only for your own distributorCode");
-  } else {
+    if (!ok) {
+      throw new Error("You can book slot only for your own distributorCode");
+    }
+  }
+  // ✅ fallback single distributor (Salesman/Distributor)
+  else {
     if (!requesterDistributorCode) {
       throw new Error("Your token has no distributorCode mapping. Please re-login or contact admin.");
     }
-    if (String(requesterDistributorCode).trim() !== String(distributorCode).trim()) {
+
+    if (
+      String(requesterDistributorCode).trim().toUpperCase() !==
+      String(distributorCode).trim().toUpperCase()
+    ) {
       throw new Error("You can book slot only for your own distributorCode");
     }
   }

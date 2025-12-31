@@ -296,7 +296,13 @@ router.post(
       }
 
       const requesterRole = req.user?.role || "UNKNOWN";
-      const requesterDistributorCode = getUserDistributorCode(req);
+
+// ✅ If Sales Officer, pass full allowed list
+const requesterDistributorCode =
+  Array.isArray(req.user?.allowedDistributorCodes) && req.user.allowedDistributorCodes.length > 0
+    ? req.user.allowedDistributorCodes
+    : getUserDistributorCode(req);
+
 
       const data = await bookSlot({
         companyCode,
