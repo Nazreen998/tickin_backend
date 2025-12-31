@@ -92,7 +92,7 @@ app.use("/goals", goalsRoutes);
 /**
  * ✅ Slot Routes
  */
-app.use("/api", slotRoutes);
+app.use("/api/slots", slotRoutes);
 
 /**
  * ✅ 404 Handler
