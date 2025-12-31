@@ -210,13 +210,16 @@ router.post(
       }
 
       // ✅ own distributor restriction (non-manager)
-      if (!validateOwnDistributor(req, distributorCode)) {
-        return res.status(403).json({
-          ok: false,
-          error: "You can book slot only for your own distributorCode",
-        });
-      }
+      const role = req.user?.role;
 
+if (role !== "MANAGER" && role !== "MASTER") {
+  if (!validateOwnDistributor(req, distributorCode)) {
+    return res.status(403).json({
+      ok: false,
+      error: "You can book slot only for your own distributorCode",
+    });
+  }
+}
       // ✅ auto decide FULL/HALF by amount
       const amt = Number(amount || 0);
       const vehicleType = amt >= 80000 ? "FULL" : "HALF";
