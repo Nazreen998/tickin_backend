@@ -72,13 +72,8 @@ export const login = async (req, res) => {
       companyId: user.companyId,
     };
 
-    // ✅ Manager/Master → no distributor mapping needed
-    if (role === "MANAGER" || role === "MASTER") {
-      responseUser.distributorCode = null;
-    }
-
     // ✅ Sales Officer → multi distributor list
-    else if (role === "SALES OFFICER" || role === "SALES OFFICE") {
+     if (role === "SALES OFFICER" || role === "SALES OFFICE") {
       const list = parseAllowedCodes(user.allowedDistributorCodes);
       responseUser.allowedDistributorCodes = list;
       payload.allowedDistributorCodes = list;
