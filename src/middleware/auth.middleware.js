@@ -6,7 +6,7 @@ async function attachAllowedDistributors(decoded) {
   try {
 const role = String(decoded?.role || "").trim().toUpperCase();
     const isSales =
-      role === "SALES OFFICER" || role === "SALESMAN" || role === "DISTRIBUTOR" || role === "SALES_OFFICER";
+      role === "SALES OFFICER" || role === "SALESMAN" || role === "DISTRIBUTOR" || role === "SALES_OFFICER"|| role === "SALES_OFFICE";
 
     if (!isSales) return decoded;
 

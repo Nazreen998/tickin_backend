@@ -60,7 +60,7 @@ function validateOwnDistributor(req, distributorCode) {
 router.get(
   "/slots",
   verifyToken,
-  allowRoles("MASTER", "MANAGER", "SALES OFFICER", "DISTRIBUTOR","SALESMAN"),
+  allowRoles("MASTER", "MANAGER", "SALES OFFICER", "DISTRIBUTOR","SALESMAN", "SALES OFFICE"),
   async (req, res) => {
     try {
       const { companyCode, date } = req.query;
@@ -196,7 +196,7 @@ router.post(
 router.post(
   "/slots/book",
   verifyToken,
-  allowRoles("MANAGER", "SALES OFFICER", "DISTRIBUTOR","SALESMAN"),
+  allowRoles("MANAGER", "SALES OFFICER","SALES OFFICE", "DISTRIBUTOR","SALESMAN"),
   async (req, res) => {
     try {
       const { companyCode, date, time, pos, distributorCode, amount, orderId } =
@@ -348,7 +348,7 @@ router.post(
 router.post(
   "/slots/waiting",
   verifyToken,
-  allowRoles("MANAGER", "SALES OFFICER", "DISTRIBUTOR"),
+  allowRoles("MANAGER", "SALES OFFICER", "DISTRIBUTOR","SALES OFFICE"),
   async (req, res) => {
     try {
       const { companyCode, date, time, distributorCode, vehicleType, orderId } =
