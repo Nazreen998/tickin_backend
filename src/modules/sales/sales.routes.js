@@ -3,9 +3,17 @@ const router = express.Router();
 
 import { verifyToken } from "../../middleware/auth.middleware.js";
 import { allowRoles } from "../../middleware/role.middleware.js";
-
+import { getDistributorsByCodes } from "./sales.service.js";
 import { pairingMap, productsList } from "../../appInit.js";
 
+const distributors = await getDistributorsByCodes(allowedCodes);
+
+const distributorDropdown = distributors.map((d) => ({
+  code: d.distributorCode,
+  name: d.distributorName,
+  area: d.area,
+  phoneNumber: d.phoneNumber,
+}));
 // ✅ Sales Officer home API
 router.get(
   "/home",
@@ -13,42 +21,37 @@ router.get(
   allowRoles("SALES OFFICER"),
   async (req, res) => {
     try {
-      // ✅ IMPORTANT: token must contain location (1/2/3/4/5)
-      const location = String(req.user.location || req.user.Location || "").trim();
+      // ✅ 1) SALES OFFICER mapping based (NO LOCATION)
+      const allowedCodes = req.user.allowedDistributorCodes || [];
 
-      if (!location) {
-        return res.status(400).json({
-          ok: false,
-          message: "Salesman location missing in token. Add location in login JWT.",
+      // ✅ If mapping exists → use it
+      if (allowedCodes.length > 0) {
+        // ✅ fetch full distributors from pairingMap OR DB
+        // since you already have pairingMap from excel:
+        // pairingMap is location wise, so not helpful.
+        // so easiest now: return only codes for dropdown
+        // but better: fetch from tickin_distributors table (recommended)
+
+        return res.json({
+          ok: true,
+          distributorCount: allowedCodes.length,
+          allowedDistributorCodes: allowedCodes,
+
+          distributorDropdown: allowedCodes.map((c) => ({
+            code: c,
+            name: c, // frontend later will show name once we fetch full distributor details
+          })),
+
+          productCount: productsList.length,
+          products: productsList,
         });
       }
 
-      // ✅ This returns full distributor objects from excel (location wise)
-      const distributors = pairingMap?.[location] || [];
-
-      // ✅ Dropdown-ready list (value + label) WITHOUT deleting old response
-      const distributorDropdown = distributors.map((d) => ({
-        code: String(d?.distributorId || "").trim(),          // ✅ This is your distributor code (D001...)
-        name: String(d?.distributorName || "").trim(),
-        area: String(d?.area || "").trim(),
-        phoneNumber: String(d?.phoneNumber || "").trim(),
-        location: String(d?.location || location).trim(),
-      }));
-
-      return res.json({
-        ok: true,
-        salesmanLocation: location,
-
-        distributorCount: distributors.length,
-
-        // ✅ keep your old full list (NO DELETE)
-        distributors,
-
-        // ✅ new: frontend dropdown use pannika (value=code, label=name)
-        distributorDropdown,
-
-        productCount: productsList.length,
-        products: productsList,
+      // ✅ 2) FALLBACK: If no mapping found
+      return res.status(400).json({
+        ok: false,
+        message:
+          "No allowed distributors mapped for this Sales Officer. Please map in tickin_salesman_distributor_map.",
       });
     } catch (err) {
       return res.status(500).json({ ok: false, message: err.message });
