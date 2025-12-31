@@ -15,6 +15,8 @@ import {
 const router = express.Router();
 
 /** ----------------- HELPERS ----------------- */
+
+// ✅ Manager check (supports both role and roles[])
 function isManager(req) {
   return (
     req.user?.role === "MANAGER" ||
@@ -24,6 +26,7 @@ function isManager(req) {
   );
 }
 
+// ✅ Extract distributorCode safely from token (handles all formats)
 function getUserDistributorCode(req) {
   const v =
     req.user?.distributorCode ||
@@ -36,19 +39,11 @@ function getUserDistributorCode(req) {
   if (typeof v === "string" && v.includes("#")) return v.split("#").pop();
   return v;
 }
+
+// ✅ validate own distributor (for sales officer / distributor)
 function validateOwnDistributor(req, distributorCode) {
-  const tokenDist =
-    req.user?.distributorCode || req.user?.distributorId || null;
-
-  // if token distributor missing, reject (for sales/distributor roles)
-  if (!tokenDist) return false;
-
-  return String(tokenDist).trim() === String(distributorCode).trim();
-}
-
-
-  // fallback old behavior
   const userDist = getUserDistributorCode(req);
+
   if (!userDist) return false;
 
   return String(userDist).trim() === String(distributorCode).trim();
@@ -62,7 +57,14 @@ function validateOwnDistributor(req, distributorCode) {
 router.get(
   "/slots",
   verifyToken,
-  allowRoles("MASTER", "MANAGER", "SALES OFFICER", "DISTRIBUTOR","SALESMAN", "SALES OFFICE"),
+  allowRoles(
+    "MASTER",
+    "MANAGER",
+    "SALES OFFICER",
+    "DISTRIBUTOR",
+    "SALESMAN",
+    "SALES OFFICE"
+  ),
   async (req, res) => {
     try {
       const { companyCode, date } = req.query;
@@ -122,7 +124,6 @@ router.post(
     try {
       const { companyCode, date, time, mergeKey, location, maxAmount } = req.body;
 
-      // You can update by mergeKey (preferred) OR location (backward compatible)
       if (!companyCode || !date || !time || (!mergeKey && !location) || !maxAmount) {
         return res.status(400).json({
           ok: false,
@@ -150,9 +151,6 @@ router.post(
  * ✅ Manager Manual Merge (Option B)
  * URL: /api/slots/cluster/assign
  * ✅ Only MANAGER
- *
- * Manager assigns a distributor/order into a clusterId.
- * After assign, HALF bookings of those orders will merge under CLUSTER#<clusterId>.
  */
 router.post(
   "/slots/cluster/assign",
@@ -198,11 +196,10 @@ router.post(
 router.post(
   "/slots/book",
   verifyToken,
-  allowRoles("MANAGER", "SALES OFFICER","SALES OFFICE", "DISTRIBUTOR","SALESMAN"),
+  allowRoles("MANAGER", "MASTER", "SALES OFFICER", "SALES OFFICE", "DISTRIBUTOR", "SALESMAN"),
   async (req, res) => {
     try {
-      const { companyCode, date, time, pos, distributorCode, amount, orderId } =
-        req.body;
+      const { companyCode, date, time, pos, distributorCode, amount, orderId } = req.body;
 
       if (!companyCode || !date || !time || !distributorCode) {
         return res.status(400).json({
@@ -211,17 +208,16 @@ router.post(
         });
       }
 
-      // ✅ own distributor restriction (non-manager)
-      const role = req.user?.role;
+      // ✅ own distributor restriction only for non-manager
+      if (!isManager(req)) {
+        if (!validateOwnDistributor(req, distributorCode)) {
+          return res.status(403).json({
+            ok: false,
+            error: "You can book slot only for your own distributorCode",
+          });
+        }
+      }
 
-if (role !== "MANAGER" && role !== "MASTER") {
-  if (!validateOwnDistributor(req, distributorCode)) {
-    return res.status(403).json({
-      ok: false,
-      error: "You can book slot only for your own distributorCode",
-    });
-  }
-}
       // ✅ auto decide FULL/HALF by amount
       const amt = Number(amount || 0);
       const vehicleType = amt >= 80000 ? "FULL" : "HALF";
@@ -299,8 +295,7 @@ router.post(
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
-      const { companyCode, date, time, vehicleType, pos, targetUserId, orderId } =
-        req.body;
+      const { companyCode, date, time, vehicleType, pos, targetUserId, orderId } = req.body;
 
       if (!companyCode || !date || !time || !vehicleType) {
         return res.status(400).json({
@@ -317,11 +312,7 @@ router.post(
         });
       }
 
-      const userId =
-        targetUserId ||
-        req.user?.pk ||
-        req.user?.userId ||
-        req.user?.id;
+      const userId = targetUserId || req.user?.pk || req.user?.userId || req.user?.id;
 
       if (!userId) {
         return res.status(401).json({ ok: false, error: "Invalid token userId" });
@@ -347,17 +338,15 @@ router.post(
 /**
  * ✅ Join Waiting Queue
  * URL: /api/slots/waiting
- * ✅ MANAGER + SALES OFFICER + DISTRIBUTOR
  * ✅ restriction: only own distributorCode except manager
  */
 router.post(
   "/slots/waiting",
   verifyToken,
-  allowRoles("MANAGER", "SALES OFFICER", "DISTRIBUTOR","SALES OFFICE"),
+  allowRoles("MANAGER", "MASTER", "SALES OFFICER", "SALES OFFICE", "DISTRIBUTOR"),
   async (req, res) => {
     try {
-      const { companyCode, date, time, distributorCode, vehicleType, orderId } =
-        req.body;
+      const { companyCode, date, time, distributorCode, vehicleType, orderId } = req.body;
 
       if (!companyCode || !date || !time || !distributorCode) {
         return res.status(400).json({
@@ -366,19 +355,17 @@ router.post(
         });
       }
 
-      // ✅ own distributor restriction (non-manager)
-      if (role !== "MANAGER" && role !== "MASTER"){
-      if (!validateOwnDistributor(req, distributorCode)) {
-        return res.status(403).json({
-          ok: false,
-          error: "You can join waiting queue only for your own distributorCode",
-        });
-      }}
+      // ✅ own distributor restriction only for non-manager
+      if (!isManager(req)) {
+        if (!validateOwnDistributor(req, distributorCode)) {
+          return res.status(403).json({
+            ok: false,
+            error: "You can join waiting queue only for your own distributorCode",
+          });
+        }
+      }
 
-      const userId =
-        req.user?.pk ||
-        req.user?.userId ||
-        req.user?.id;
+      const userId = req.user?.pk || req.user?.userId || req.user?.id;
 
       if (!userId) {
         return res.status(401).json({ ok: false, error: "Invalid token userId" });

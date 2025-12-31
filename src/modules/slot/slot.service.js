@@ -51,7 +51,7 @@ function skForMergeSlot(time, mergeKey) {
 
 /**
  * ✅ Find location + distributor details from pairingMap (Excel)
- * Supports both distributorId & distributorCode keys in excel rows.
+ * Supports distributorId / distributorCode / code
  */
 function findDistributorFromPairingMap(map, distributorCode) {
   const code = String(distributorCode || "").trim();
@@ -116,7 +116,13 @@ async function getClusterAssignment(companyCode, date, orderId, distributorCode)
   return rule?.clusterAssignments?.[key] || null;
 }
 
-async function setClusterAssignment(companyCode, date, orderId, distributorCode, clusterId) {
+async function setClusterAssignment(
+  companyCode,
+  date,
+  orderId,
+  distributorCode,
+  clusterId
+) {
   const pk = `COMPANY#${companyCode}`;
   const sk = "RULES";
 
@@ -139,7 +145,13 @@ async function setClusterAssignment(companyCode, date, orderId, distributorCode,
   return { ok: true, key, clusterId };
 }
 
-export async function managerAssignCluster({ companyCode, date, orderId, distributorCode, clusterId }) {
+export async function managerAssignCluster({
+  companyCode,
+  date,
+  orderId,
+  distributorCode,
+  clusterId,
+}) {
   return setClusterAssignment(companyCode, date, orderId, distributorCode, clusterId);
 }
 
@@ -185,7 +197,6 @@ export async function getSlotGrid({ companyCode, date }) {
 /**
  * ✅ Manager Open Last Slot
  * ✅ AFTER 5PM ONLY
- * ✅ enables RULES table so bookSlot passes last-slot validation
  */
 export async function managerOpenLastSlot({
   companyCode,
@@ -242,11 +253,15 @@ export async function managerOpenLastSlot({
 
 /**
  * ✅ Manager Set Slot Max Amount
- * Supports:
- * - mergeKey: exact bucket (preferred)
- * - location: backward compatibility (LOC#<location>)
  */
-export async function managerSetSlotMaxAmount({ companyCode, date, time, mergeKey, location, maxAmount }) {
+export async function managerSetSlotMaxAmount({
+  companyCode,
+  date,
+  time,
+  mergeKey,
+  location,
+  maxAmount,
+}) {
   const pk = pkFor(companyCode, date);
   const finalMergeKey = mergeKey ? String(mergeKey) : `LOC#${location}`;
   const sk = skForMergeSlot(time, finalMergeKey);
@@ -265,7 +280,12 @@ export async function managerSetSlotMaxAmount({ companyCode, date, time, mergeKe
     })
   );
 
-  return { ok: true, message: "MaxAmount updated ✅", maxAmount: Number(maxAmount), mergeKey: finalMergeKey };
+  return {
+    ok: true,
+    message: "MaxAmount updated ✅",
+    maxAmount: Number(maxAmount),
+    mergeKey: finalMergeKey,
+  };
 }
 
 /**
@@ -290,18 +310,22 @@ export async function bookSlot({
 }) {
   const pk = pkFor(companyCode, date);
 
-  // ✅ SERVICE-LEVEL SECURITY (non-manager can only book own distributorCode)
+  // ✅ SERVICE-LEVEL SECURITY: non-manager MUST book only own distributor
   const isMgr = requesterRole === "MANAGER" || requesterRole === "MASTER";
   if (!isMgr) {
-  // ✅ if token doesn't have distributorCode, allow but log warning
-  if (!requesterDistributorCode) {
-    console.log("⚠️ distributorCode missing in token, allowing booking for:", distributorCode);
-  } else {
-    if (String(requesterDistributorCode).trim() !== String(distributorCode).trim()) {
+    if (!requesterDistributorCode) {
+      throw new Error(
+        "Your token has no distributorCode mapping. Please re-login or contact admin."
+      );
+    }
+
+    if (
+      String(requesterDistributorCode).trim() !== String(distributorCode).trim()
+    ) {
       throw new Error("You can book slot only for your own distributorCode");
     }
   }
-}
+
   // ✅ Amount based HARD RULE
   const amt = Number(amount || 0);
   const computedType = amt >= DEFAULT_MAX_AMOUNT ? "FULL" : "HALF";
@@ -311,7 +335,8 @@ export async function bookSlot({
   if (time === "20:30") {
     const rule = await getRule(companyCode);
 
-    if (rule && rule.lastSlotEnabled === false) {
+    // ✅ strict: only allow if enabled true
+    if (!rule || rule.lastSlotEnabled !== true) {
       throw new Error("Last slot not enabled by manager");
     }
 
@@ -336,7 +361,8 @@ export async function bookSlot({
             Update: {
               TableName: TABLE_CAPACITY,
               Key: { pk, sk: slotSk },
-              ConditionExpression: "attribute_not_exists(#s) OR #s = :available",
+              ConditionExpression:
+                "attribute_not_exists(#s) OR #s = :available",
               UpdateExpression:
                 "SET #s = :booked, userId = :uid, #t = :t, #vt = :vt, #p = :p",
               ExpressionAttributeNames: {
@@ -388,10 +414,11 @@ export async function bookSlot({
     return { ok: true, bookingId, type: "FULL" };
   }
 
-  /** ---------------- HALF booking (Location merge + Option B cluster merge) ---------------- */
-  // 1) Resolve location from Excel pairingMap
-  // 2) Fallback to Dynamo tickin_distributors
-  let { location, distributor } = findDistributorFromPairingMap(pairingMap, distributorCode);
+  /** ---------------- HALF booking (Location merge + Cluster merge) ---------------- */
+  let { location, distributor } = findDistributorFromPairingMap(
+    pairingMap,
+    distributorCode
+  );
 
   if (!location) {
     const distRes = await ddb.send(
@@ -409,10 +436,18 @@ export async function bookSlot({
     throw new Error(`Distributor location not found for ${distributorCode}`);
   }
 
-  // ✅ Option B: check if manager assigned a cluster for this date+order+distributor
-  const assignedClusterId = await getClusterAssignment(companyCode, date, orderId, distributorCode);
+  // ✅ Option B: check cluster assignment
+  const assignedClusterId = await getClusterAssignment(
+    companyCode,
+    date,
+    orderId,
+    distributorCode
+  );
 
-  const mergeKey = assignedClusterId ? `CLUSTER#${assignedClusterId}` : `LOC#${location}`;
+  const mergeKey = assignedClusterId
+    ? `CLUSTER#${assignedClusterId}`
+    : `LOC#${location}`;
+
   const mergeType = assignedClusterId ? "CLUSTER" : "LOCATION";
 
   const mergeSk = skForMergeSlot(time, mergeKey);
@@ -447,15 +482,16 @@ export async function bookSlot({
           Update: {
             TableName: TABLE_CAPACITY,
             Key: { pk, sk: mergeSk },
-            ConditionExpression: "attribute_not_exists(tripStatus) OR tripStatus <> :full",
+            ConditionExpression:
+              "attribute_not_exists(tripStatus) OR tripStatus <> :full",
             UpdateExpression:
-  "SET #t = :t, mergeKey = :mk, mergeType = :mt, #loc = :loc, maxAmount = if_not_exists(maxAmount, :m), totalAmount = :newTotal, tripStatus = :ts",
-ExpressionAttributeNames: { "#t": "time", "#loc": "location" },
+              "SET #t = :t, mergeKey = :mk, mergeType = :mt, #loc = :loc, maxAmount = if_not_exists(maxAmount, :m), totalAmount = :newTotal, tripStatus = :ts",
+            ExpressionAttributeNames: { "#t": "time", "#loc": "location" },
             ExpressionAttributeValues: {
               ":t": time,
               ":mk": mergeKey,
               ":mt": mergeType,
-              ":loc": Number(location),
+              ":loc": String(location), // ✅ FIXED
               ":m": maxAmount,
               ":newTotal": newTotal,
               ":ts": newTripStatus,
@@ -474,7 +510,7 @@ ExpressionAttributeNames: { "#t": "time", "#loc": "location" },
               vehicleType: "HALF",
               userId,
               distributorCode,
-              location: Number(location),
+              location: String(location), // ✅ FIXED
               amount: amt,
               mergeKey,
               mergeType,
@@ -482,9 +518,11 @@ ExpressionAttributeNames: { "#t": "time", "#loc": "location" },
               status: "CONFIRMED",
               createdAt: new Date().toISOString(),
 
-              distributorName: distributor?.distributorName || distributor?.name || null,
+              distributorName:
+                distributor?.distributorName || distributor?.name || null,
               area: distributor?.area || null,
-              phoneNumber: distributor?.phoneNumber || distributor?.phone || null,
+              phoneNumber:
+                distributor?.phoneNumber || distributor?.phone || null,
             },
           },
         },
@@ -614,7 +652,8 @@ export async function joinWaiting({
         status: "WAITING",
         createdAt: new Date().toISOString(),
       },
-      ConditionExpression: "attribute_not_exists(pk) AND attribute_not_exists(sk)",
+      ConditionExpression:
+        "attribute_not_exists(pk) AND attribute_not_exists(sk)",
     })
   );
 
