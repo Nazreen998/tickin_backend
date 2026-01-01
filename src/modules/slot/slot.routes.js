@@ -167,7 +167,6 @@ router.post(
     }
   }
 );
-import { managerSetSlotMax } from "./slot.service.js";
 
 router.post(
   "/set-max",
