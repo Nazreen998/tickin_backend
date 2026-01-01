@@ -42,26 +42,33 @@ function skForMergeSlot(time, mergeKey) {
 }
 
 /** pairing map resolve */
-function findDistributorFromPairingMap(map, distributorCode) {
-  const code = String(distributorCode || "").trim();
-  if (!code) return { location: null, distributor: null };
+function findDistributorFromPairingMap(map, distributorCode) 
+{
+  const code = String(distributorCode || "").trim().toUpperCase();
+  if (!code) return { location: "UNKNOWN", distributor: null };
 
-  for (const [location, distributors] of Object.entries(map || {})) {
+  for (const [locationBucket, distributors] of Object.entries(map || {})) {
     if (!Array.isArray(distributors)) continue;
 
     const found = distributors.find((d) => {
-      const id = String(d?.distributorId || "").trim();
-      const dc = String(d?.distributorCode || "").trim();
-      const sk = String(d?.code || "").trim();
-      return id === code || dc === code || sk === code;
+      const dc = String(d?.distributorCode || d?.code || "").trim().toUpperCase();
+      return dc === code;
     });
+console.log("🔍 Looking for distributor:", code);
 
-    if (found) return { location, distributor: found };
+    if (found) {
+      return {
+        location: locationBucket,      // ✅ GEO bucket
+        distributor: found,            // ✅ contains finalUrl, lat, lng
+      };
+    }
+    console.log("✅ Found distributor in bucket:", locationBucket, found);
+
   }
 
-  return { location: null, distributor: null };
+  // ✅ not found
+  return { location: "UNKNOWN", distributor: null };
 }
-
 /* ---------------- RULES HELPERS ---------------- */
 
 async function setRule(companyCode, patch) {
@@ -346,19 +353,28 @@ ExpressionAttributeValues: {
       extra: { mergeKey, location, totalAmount: finalTotal, time, distributorCode },
     });
   }
+const distData = distributor || {
+  distributorCode,
+  distributorName: null,
+  finalUrl: null,
+  lat: null,
+  lng: null,
+  locationBucket: "UNKNOWN",
+};
 
-  return {
-    ok: true,
-    bookingId,
-    type: "HALF",
-    tripStatus,
-    totalAmount: finalTotal,
-    mergeKey,
-    location,
-    distributor,
-    status: "PENDING_MANAGER_CONFIRM",
-    userId: uid,
-  };
+return {
+  ok: true,
+  bookingId,
+  type: "HALF",
+  tripStatus,
+  totalAmount: finalTotal,
+  mergeKey,
+  location,
+  distributor: distData,
+  status: "PENDING_MANAGER_CONFIRM",
+  userId: uid,
+};
+
 }
 
 /* ---------------- MANAGER CONFIRM MERGE ---------------- */
