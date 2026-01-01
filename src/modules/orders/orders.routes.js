@@ -150,5 +150,57 @@ router.get(
   allowRoles("SALES OFFICER", "DISTRIBUTOR", "MANAGER", "MASTER"),
   getOrderById
 );
+import {
+  vehicleSelected,
+  loadingStart,
+  loadingItem,
+  loadingEnd,
+  assignDriverToOrder,
+} from "./orders.flow.service.js";
+
+/* ==========================
+   ✅ ORDER FLOW (AFTER SLOT)
+========================== */
+
+// ✅ Vehicle selected
+router.post(
+  "/vehicle-selected/:orderId",
+  verifyToken,
+  allowRoles("MANAGER", "MASTER"),
+  vehicleSelected
+);
+
+// ✅ Loading start
+router.post(
+  "/loading-start",
+  verifyToken,
+  allowRoles("MANAGER", "MASTER"),
+  loadingStart
+);
+
+// ✅ Loading add item (each by each)
+router.post(
+  "/loading-item",
+  verifyToken,
+  allowRoles("MANAGER", "MASTER"),
+  loadingItem
+);
+
+// ✅ Loading end
+router.post(
+  "/loading-end",
+  verifyToken,
+  allowRoles("MANAGER", "MASTER"),
+  loadingEnd
+);
+
+// ✅ Assign Driver
+router.post(
+  "/assign-driver",
+  verifyToken,
+  allowRoles("MANAGER", "MASTER"),
+  assignDriverToOrder
+);
+
 
 export default router;
