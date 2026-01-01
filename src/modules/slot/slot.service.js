@@ -189,6 +189,176 @@ export async function getSlotGrid({ companyCode, date }) {
     },
   };
 }
+export async function managerCancelBooking({
+  companyCode,
+  date,
+  time,
+  pos,
+  userId,
+  bookingSk,      // optional
+  mergeKey,       // optional for HALF
+  managerId,
+}) {
+  const pk = pkFor(companyCode, date);
+
+  // ✅ FULL cancel (pos + userId)
+  if (pos && userId) {
+    const slotSk = skForSlot(time, "FULL", pos);
+    const bookingSK = skForBooking(time, "FULL", pos, userId);
+
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Update: {
+              TableName: TABLE_CAPACITY,
+              Key: { pk, sk: slotSk },
+              UpdateExpression: "SET #s = :avail REMOVE userId",
+              ExpressionAttributeNames: { "#s": "status" },
+              ExpressionAttributeValues: { ":avail": "AVAILABLE" },
+            },
+          },
+          {
+            Delete: {
+              TableName: TABLE_BOOKINGS,
+              Key: { pk, sk: bookingSK },
+            },
+          },
+        ],
+      })
+    );
+
+    return { ok: true, type: "FULL", cancelledBy: managerId || "MANAGER" };
+  }
+
+  // ✅ HALF cancel (bookingSk + mergeKey)
+  if (bookingSk && mergeKey) {
+    const mergeSk = skForMergeSlot(time, mergeKey);
+
+    // get booking
+    const bookingRes = await ddb.send(
+      new GetCommand({
+        TableName: TABLE_BOOKINGS,
+        Key: { pk, sk: bookingSk },
+      })
+    );
+
+    if (!bookingRes.Item) throw new Error("Booking not found");
+
+    const amt = Number(bookingRes.Item.amount || 0);
+
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Update: {
+              TableName: TABLE_CAPACITY,
+              Key: { pk, sk: mergeSk },
+              UpdateExpression: "SET totalAmount = totalAmount - :a, updatedAt = :u",
+              ConditionExpression: "totalAmount >= :a",
+              ExpressionAttributeValues: {
+                ":a": amt,
+                ":u": new Date().toISOString(),
+              },
+            },
+          },
+          {
+            Delete: {
+              TableName: TABLE_BOOKINGS,
+              Key: { pk, sk: bookingSk },
+            },
+          },
+        ],
+      })
+    );
+
+    return { ok: true, type: "HALF", amountDeducted: amt, cancelledBy: managerId || "MANAGER" };
+  }
+
+  throw new Error("Invalid cancel payload");
+}
+/* ---------------- MANAGER DISABLE SLOT ---------------- */
+
+export async function managerDisableSlot({
+  companyCode,
+  date,
+  time,
+  pos,
+  vehicleType = "FULL",
+  mergeKey,
+  reason = "DISABLED_BY_MANAGER",
+  managerId,
+}) {
+  if (!companyCode || !date || !time) {
+    throw new Error("companyCode, date, time required");
+  }
+
+  const pk = pkFor(companyCode, date);
+
+  // ✅ FULL slot disable
+  if (vehicleType === "FULL") {
+    if (!pos) throw new Error("pos required for FULL disable");
+
+    const slotSk = skForSlot(time, "FULL", pos);
+
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: slotSk },
+        UpdateExpression:
+          "SET #s = :disabled, disabledReason = :r, disabledBy = :m, disabledAt = :t",
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: {
+          ":disabled": "DISABLED",
+          ":r": String(reason),
+          ":m": String(managerId || "MANAGER"),
+          ":t": new Date().toISOString(),
+        },
+      })
+    );
+
+    return {
+      ok: true,
+      message: "✅ FULL slot disabled",
+      time,
+      pos,
+      vehicleType: "FULL",
+    };
+  }
+
+  // ✅ HALF merge slot disable
+  if (vehicleType === "HALF") {
+    if (!mergeKey) throw new Error("mergeKey required for HALF disable");
+
+    const mergeSk = skForMergeSlot(time, mergeKey);
+
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: mergeSk },
+        UpdateExpression:
+          "SET tripStatus = :disabled, disabledReason = :r, disabledBy = :m, disabledAt = :t",
+        ExpressionAttributeValues: {
+          ":disabled": "DISABLED",
+          ":r": String(reason),
+          ":m": String(managerId || "MANAGER"),
+          ":t": new Date().toISOString(),
+        },
+      })
+    );
+
+    return {
+      ok: true,
+      message: "✅ MERGE slot disabled",
+      time,
+      mergeKey,
+      vehicleType: "HALF",
+    };
+  }
+
+  throw new Error("Invalid vehicleType (must be FULL or HALF)");
+}
+
 /* ---------------- MANAGER OPEN LAST SLOT ---------------- */
 
 export async function managerOpenLastSlot({
