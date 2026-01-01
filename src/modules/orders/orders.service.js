@@ -170,6 +170,19 @@ export const createOrder = async (req, res) => {
         Item: orderItem,
       })
     );
+    // ✅ NEW TIMELINE EVENT (ORDER_CREATED)
+await addTimelineEvent({
+  orderId,
+  event: "ORDER_CREATED",
+  by: user.mobile,
+  extra: {
+    role: user.role,
+    distributorId,
+    distributorName,
+    totalAmount,
+    totalQty,
+  },
+});
 
     await addTimelineEvent({
       orderId,

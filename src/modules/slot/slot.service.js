@@ -280,15 +280,18 @@ export async function bookSlot({
             TableName: TABLE_CAPACITY,
             Key: { pk, sk: mergeSk },
             UpdateExpression:
-              "SET totalAmount = if_not_exists(totalAmount, :z) + :a, " +
-              "mergeKey = :mk, location = :loc, updatedAt = :u",
-            ExpressionAttributeValues: {
-              ":z": 0,
-              ":a": amt,
-              ":mk": mergeKey,
-              ":loc": String(location),
-              ":u": new Date().toISOString(),
-            },
+  "SET totalAmount = if_not_exists(totalAmount, :z) + :a, " +
+  "mergeKey = :mk, #loc = :loc, updatedAt = :u",
+ExpressionAttributeNames: {
+  "#loc": "location",
+},
+ExpressionAttributeValues: {
+  ":z": 0,
+  ":a": amt,
+  ":mk": mergeKey,
+  ":loc": String(location),
+  ":u": new Date().toISOString(),
+},
           },
         },
         {

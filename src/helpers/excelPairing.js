@@ -11,14 +11,26 @@ function pick(row, keys) {
   return "";
 }
 
+function extractCoords(url) {
+  if (!url || typeof url !== "string") return null;
+
+  // @lat,lng
+  const m1 = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if (m1) return { lat: Number(m1[1]), lng: Number(m1[2]) };
+
+  // place/lat,lng
+  const m2 = url.match(/place\/(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if (m2) return { lat: Number(m2[1]), lng: Number(m2[2]) };
+
+  return null;
+}
+
 export function loadDistributorPairingMap(filePath) {
   const finalPath = path.isAbsolute(filePath)
     ? filePath
     : path.resolve(process.cwd(), filePath);
 
-  if (!fs.existsSync(finalPath)) {
-    throw new Error(`Pairing excel not found: ${finalPath}`);
-  }
+  if (!fs.existsSync(finalPath)) throw new Error(`Pairing excel not found: ${finalPath}`);
 
   const workbook = xlsx.readFile(finalPath);
   const sheetName = workbook.SheetNames[0];
@@ -27,37 +39,48 @@ export function loadDistributorPairingMap(filePath) {
 
   console.log("📌 pairingMap sheet:", sheetName);
   console.log("📌 pairingMap rows:", rows.length);
-
-  if (rows.length > 0) {
-    console.log("📌 pairingMap first row keys:", Object.keys(rows[0]));
-  }
+  if (rows.length > 0) console.log("📌 pairingMap first row keys:", Object.keys(rows[0]));
 
   const pairingMap = {};
 
   for (const row of rows) {
-    const location = pick(row, ["location", "LOCATION", "Location", "LOC"]);
     const distributorCode = pick(row, [
-      "distributorCode",
+      "Distributor Code",
+      "Distributor_Code",
       "DISTRIBUTOR_CODE",
-      "DistributorCode",
+      "distributorCode",
       "code",
       "CODE",
-      "distributor",
-      "DISTRIBUTOR",
     ]);
 
-    const distributorId = pick(row, ["distributorId", "DISTRIBUTOR_ID", "id", "ID"]);
-    const distributorName = pick(row, ["distributorName", "DISTRIBUTOR_NAME", "name", "NAME"]);
+    const distributorName = pick(row, [
+      "DISTRIBUTOR NAME",
+      "DISTRIBUTOR_NAME",
+      "Distributor Name",
+      "Distributor_Name",
+    ]);
 
-    if (!location || !distributorCode) continue;
+    const finalUrl = pick(row, ["final_url", "FINAL_URL"]);
+    const coords = extractCoords(finalUrl);
 
-    if (!pairingMap[location]) pairingMap[location] = [];
+    // ✅ Use GEO bucket if coords exist
+    let locationBucket = "UNKNOWN";
+    if (coords?.lat && coords?.lng) {
+      locationBucket = `GEO#${coords.lat.toFixed(2)}_${coords.lng.toFixed(2)}`;
+    }
 
-    pairingMap[location].push({
-      distributorCode,
-      distributorId: distributorId || null,
+    if (!distributorCode) continue;
+
+    if (!pairingMap[locationBucket]) pairingMap[locationBucket] = [];
+
+    pairingMap[locationBucket].push({
+      distributorCode: distributorCode.trim(),
       distributorName: distributorName || null,
-      code: distributorCode,
+      code: distributorCode.trim(),
+      finalUrl: finalUrl || null,
+      lat: coords?.lat || null,
+      lng: coords?.lng || null,
+      locationBucket, // ✅ important for merge
     });
   }
 

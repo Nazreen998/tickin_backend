@@ -1,6 +1,10 @@
+import dayjs from "dayjs";
 import { QueryCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "../../config/dynamo.js";
 
+/**
+ * ✅ Timeline UI Steps (Amazon style)
+ */
 const TIMELINE_STEPS = [
   "ORDER_CREATED",
   "SLOT_BOOKED",
@@ -15,15 +19,37 @@ const TIMELINE_STEPS = [
   "WAREHOUSE_REACHED",
 ];
 
-function buildProgress(timelineItems = []) {
-  // Map event => first time occurred
+/**
+ * ✅ Alias mapping (important)
+ * Because your DB has ORDER_PLACED_PENDING, ORDER_CONFIRMED etc
+ */
+const EVENT_ALIASES = {
+  ORDER_PLACED_PENDING: "ORDER_CREATED",
+  ORDER_CONFIRMED: "ORDER_CREATED", // optional: treat confirm as created/started
+};
+
+/**
+ * ✅ Build progress (Amazon UI)
+ */
+function buildProgress({ timelineItems = [], orderCreatedAt = null }) {
   const firstTimeByEvent = {};
+
+  // 1️⃣ Map raw events into standard steps
   for (const it of timelineItems) {
-    const ev = String(it.event || "").toUpperCase();
-    if (!firstTimeByEvent[ev]) firstTimeByEvent[ev] = it.timestamp || null;
+    const rawEv = String(it.event || "").toUpperCase();
+    const mappedEv = EVENT_ALIASES[rawEv] || rawEv;
+
+    if (!firstTimeByEvent[mappedEv]) {
+      firstTimeByEvent[mappedEv] = it.timestamp || null;
+    }
   }
 
-  // Find last completed step
+  // 2️⃣ Ensure ORDER_CREATED always true if orderCreatedAt exists
+  if (!firstTimeByEvent["ORDER_CREATED"] && orderCreatedAt) {
+    firstTimeByEvent["ORDER_CREATED"] = orderCreatedAt;
+  }
+
+  // 3️⃣ Find currentStatus (latest completed step)
   let currentStatus = null;
   for (let i = TIMELINE_STEPS.length - 1; i >= 0; i--) {
     const step = TIMELINE_STEPS[i];
@@ -33,16 +59,24 @@ function buildProgress(timelineItems = []) {
     }
   }
 
-  const progress = TIMELINE_STEPS.map((step) => ({
-    step,
-    label: step.replaceAll("_", " "),
-    time: firstTimeByEvent[step] || null,
-    done: Boolean(firstTimeByEvent[step]),
-  }));
+  // 4️⃣ Build final progress list
+  const progress = TIMELINE_STEPS.map((step) => {
+    const ts = firstTimeByEvent[step] || null;
+    return {
+      step,
+      label: step.replaceAll("_", " "),
+      timestamp: ts,
+      displayTime: ts ? dayjs(ts).format("DD MMM YYYY, hh:mm A") : null,
+      done: Boolean(ts),
+    };
+  });
 
   return { currentStatus, progress };
 }
 
+/**
+ * ✅ Get Order Timeline API
+ */
 export const getOrderTimeline = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -54,7 +88,7 @@ export const getOrderTimeline = async (req, res) => {
       return res.status(401).json({ ok: false, message: "Invalid token" });
     }
 
-    // ✅ 1) Read order META
+    // ✅ 1) Read Order META
     const orderRes = await ddb.send(
       new GetCommand({
         TableName: "tickin_orders",
@@ -68,7 +102,7 @@ export const getOrderTimeline = async (req, res) => {
 
     const order = orderRes.Item;
 
-    // ✅ 2) Ownership rules (as you wrote) — keep same
+    // ✅ 2) Ownership restrictions
     if (role === "SALES OFFICER") {
       if (String(order.createdBy) !== String(mobile)) {
         return res
@@ -121,7 +155,10 @@ export const getOrderTimeline = async (req, res) => {
     const timeline = result.Items || [];
 
     // ✅ 4) Build Amazon style progress
-    const { currentStatus, progress } = buildProgress(timeline);
+    const { currentStatus, progress } = buildProgress({
+      timelineItems: timeline,
+      orderCreatedAt: order.createdAt || order.timestamp || null,
+    });
 
     const orderItems = order.items || [];
 
@@ -130,8 +167,8 @@ export const getOrderTimeline = async (req, res) => {
       message: "Timeline fetched ✅",
       orderId,
       role,
-      currentStatus,            // ✅ current step
-      progress,                 // ✅ horizontal line UI use this
+      currentStatus,
+      progress,
       count: timeline.length,
       orderMeta: {
         orderId: order.orderId || orderId,
@@ -145,7 +182,7 @@ export const getOrderTimeline = async (req, res) => {
         createdAt: order.createdAt || null,
       },
       orderItems,
-      timeline, // raw events (optional UI debug)
+      timeline,
     });
   } catch (err) {
     console.error("getOrderTimeline error:", err);
