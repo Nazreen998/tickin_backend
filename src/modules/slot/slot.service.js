@@ -42,33 +42,32 @@ function skForMergeSlot(time, mergeKey) {
 }
 
 /** pairing map resolve */
-function findDistributorFromPairingMap(map, distributorCode) 
-{
+function findDistributorFromPairingMap(map, distributorCode) {
   const code = String(distributorCode || "").trim().toUpperCase();
-  if (!code) return { location: "UNKNOWN", distributor: null };
+  if (!code) return { locationBucket: "UNKNOWN", distributor: null };
 
-  for (const [locationBucket, distributors] of Object.entries(map || {})) {
+  console.log("🔍 Looking for distributor:", code);
+
+  for (const [bucketKey, distributors] of Object.entries(map || {})) {
     if (!Array.isArray(distributors)) continue;
 
     const found = distributors.find((d) => {
       const dc = String(d?.distributorCode || d?.code || "").trim().toUpperCase();
       return dc === code;
     });
-console.log("🔍 Looking for distributor:", code);
 
     if (found) {
+      console.log("✅ Found distributor in bucket:", bucketKey);
       return {
-        location: locationBucket,      // ✅ GEO bucket
-        distributor: found,            // ✅ contains finalUrl, lat, lng
+        locationBucket: bucketKey, // ✅ GEO#lat_lng
+        distributor: found,        // ✅ contains lat,lng,finalUrl
       };
     }
-    console.log("✅ Found distributor in bucket:", locationBucket, found);
-
   }
 
-  // ✅ not found
-  return { location: "UNKNOWN", distributor: null };
+  return { locationBucket: "UNKNOWN", distributor: null };
 }
+
 /* ---------------- RULES HELPERS ---------------- */
 
 async function setRule(companyCode, patch) {
@@ -268,17 +267,19 @@ export async function bookSlot({
     return { ok: true, bookingId, type: "FULL", userId: uid };
   }
 
-  /* ✅ HALF BOOKING (Manager confirmation flow) */
-  let { location, distributor } = findDistributorFromPairingMap(pairingMap, distributorCode);
-  if (!location) location = "UNKNOWN";
+  /* ✅ HALF BOOKING */
+  let { locationBucket, distributor } = findDistributorFromPairingMap(pairingMap, distributorCode);
 
-  const mergeKey = `LOC#${location}`;
+  const mergeKey = locationBucket || "UNKNOWN"; // ✅ FIXED
   const mergeSk = skForMergeSlot(time, mergeKey);
 
   const bookingId = uuidv4();
   const bookingSk = `BOOKING#${time}#KEY#${mergeKey}#USER#${uid}#${bookingId}`;
 
-  // ✅ Safe transact update
+  const lat = distributor?.lat || null;
+  const lng = distributor?.lng || null;
+  const distributorName = distributor?.distributorName || null;
+
   await ddb.send(
     new TransactWriteCommand({
       TransactItems: [
@@ -287,18 +288,20 @@ export async function bookSlot({
             TableName: TABLE_CAPACITY,
             Key: { pk, sk: mergeSk },
             UpdateExpression:
-  "SET totalAmount = if_not_exists(totalAmount, :z) + :a, " +
-  "mergeKey = :mk, #loc = :loc, updatedAt = :u",
-ExpressionAttributeNames: {
-  "#loc": "location",
-},
-ExpressionAttributeValues: {
-  ":z": 0,
-  ":a": amt,
-  ":mk": mergeKey,
-  ":loc": String(location),
-  ":u": new Date().toISOString(),
-},
+              "SET totalAmount = if_not_exists(totalAmount, :z) + :a, " +
+              "mergeKey = :mk, #loc = :loc, lat = :lat, lng = :lng, updatedAt = :u",
+            ExpressionAttributeNames: {
+              "#loc": "location",
+            },
+            ExpressionAttributeValues: {
+              ":z": 0,
+              ":a": amt,
+              ":mk": mergeKey,
+              ":loc": mergeKey,
+              ":lat": lat,
+              ":lng": lng,
+              ":u": new Date().toISOString(),
+            },
           },
         },
         {
@@ -312,9 +315,12 @@ ExpressionAttributeValues: {
               vehicleType: "HALF",
               userId: uid,
               distributorCode,
-              location: String(location),
+              distributorName,
+              locationBucket: mergeKey,
               mergeKey,
               amount: amt,
+              lat,
+              lng,
               orderId,
               status: "PENDING_MANAGER_CONFIRM",
               createdAt: new Date().toISOString(),
@@ -325,7 +331,6 @@ ExpressionAttributeValues: {
     })
   );
 
-  // ✅ Read back total
   const updated = await ddb.send(
     new GetCommand({
       TableName: TABLE_CAPACITY,
@@ -345,36 +350,51 @@ ExpressionAttributeValues: {
     })
   );
 
+  // ✅ Always log SLOT_BOOKED
+  if (orderId) {
+    await addTimelineEvent({
+      orderId,
+      event: "SLOT_BOOKED",
+      by: uid,
+      extra: {
+        vehicleType: "HALF",
+        time,
+        mergeKey,
+        locationBucket: mergeKey,
+        distributorCode,
+        distributorName,
+        lat,
+        lng,
+        tripStatus,
+        totalAmount: finalTotal,
+      },
+    });
+  }
+
   if (tripStatus === "READY_FOR_CONFIRM") {
     await addTimelineEvent({
       orderId: orderId || bookingId,
       event: "MERGE_READY_MANAGER_CONFIRM",
       by: uid,
-      extra: { mergeKey, location, totalAmount: finalTotal, time, distributorCode },
+      extra: { mergeKey, totalAmount: finalTotal, time, distributorCode, lat, lng },
     });
   }
-const distData = distributor || {
-  distributorCode,
-  distributorName: null,
-  finalUrl: null,
-  lat: null,
-  lng: null,
-  locationBucket: "UNKNOWN",
-};
 
-return {
-  ok: true,
-  bookingId,
-  type: "HALF",
-  tripStatus,
-  totalAmount: finalTotal,
-  mergeKey,
-  location,
-  distributor: distData,
-  status: "PENDING_MANAGER_CONFIRM",
-  userId: uid,
-};
-
+  return {
+    ok: true,
+    bookingId,
+    type: "HALF",
+    tripStatus,
+    totalAmount: finalTotal,
+    mergeKey,
+    locationBucket: mergeKey,
+    distributor: distributor || null,
+    status: "PENDING_MANAGER_CONFIRM",
+    userId: uid,
+    lat,
+    lng,
+    distributorName,
+  };
 }
 
 /* ---------------- MANAGER CONFIRM MERGE ---------------- */
@@ -522,10 +542,11 @@ export async function joinWaiting({
   time,
   userId,
   distributorCode,
+  mergeKey,
 }) {
   const uid = (userId && String(userId).trim()) ? String(userId).trim() : uuidv4();
 
-  const pk = `COMPANY#${companyCode}#DATE#${date}#SLOT#${time}`;
+  const pk = `COMPANY#${companyCode}#DATE#${date}#TIME#${time}#BUCKET#${mergeKey || "UNKNOWN"}`;
   const sk = `WAIT#${new Date().toISOString()}#USER#${uid}`;
 
   await ddb.send(
@@ -537,6 +558,7 @@ export async function joinWaiting({
         slotTime: time,
         userId: uid,
         distributorCode,
+        mergeKey: mergeKey || "UNKNOWN",
         status: "WAITING",
         createdAt: new Date().toISOString(),
       },
