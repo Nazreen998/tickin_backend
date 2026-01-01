@@ -134,5 +134,36 @@ router.post(
     }
   }
 );
+import { managerSetSlotMax } from "./slot.service.js";
+
+router.post(
+  "/set-max",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const data = await managerSetSlotMax(req.body);
+      return res.json(data);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
+import { managerEditSlotTime } from "./slot.service.js";
+
+router.post(
+  "/edit-time",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const data = await managerEditSlotTime(req.body);
+      return res.json(data);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
+
 
 export default router;

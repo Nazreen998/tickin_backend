@@ -602,3 +602,72 @@ export async function cancelSlot({ companyCode, date, time, pos, userId }) {
 
   return { ok: true };
 }
+export async function managerSetSlotMax({
+  companyCode,
+  date,
+  time,
+  mergeKey,
+  maxAmount,
+}) {
+  const pk = pkFor(companyCode, date);
+  const mergeSk = skForMergeSlot(time, mergeKey);
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: mergeSk },
+      UpdateExpression: "SET maxAmount = :m, updatedAt = :u",
+      ExpressionAttributeValues: {
+        ":m": Number(maxAmount),
+        ":u": new Date().toISOString(),
+      },
+    })
+  );
+
+  return { ok: true, message: "✅ Max updated", maxAmount };
+}
+export async function managerEditSlotTime({
+  companyCode,
+  date,
+  oldTime,
+  newTime,
+  mergeKey,
+}) {
+  const pk = pkFor(companyCode, date);
+
+  const oldSk = skForMergeSlot(oldTime, mergeKey);
+  const newSk = skForMergeSlot(newTime, mergeKey);
+
+  const oldRes = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: oldSk },
+    })
+  );
+
+  if (!oldRes.Item) throw new Error("Old merge slot not found");
+
+  const item = oldRes.Item;
+
+  // delete old
+  await ddb.send(
+    new DeleteCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: oldSk },
+    })
+  );
+
+  // put new with same data
+  await ddb.send(
+    new PutCommand({
+      TableName: TABLE_CAPACITY,
+      Item: {
+        ...item,
+        sk: newSk,
+        updatedAt: new Date().toISOString(),
+      },
+    })
+  );
+
+  return { ok: true, message: "✅ Slot time updated", oldTime, newTime };
+}
