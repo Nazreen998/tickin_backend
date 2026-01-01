@@ -2,7 +2,7 @@ import { ddb } from "../config/dynamo.js";
 import { GetCommand, UpdateCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { validateTransition } from "../utils/driverTransitions.js";
 
-const ORDERS_TABLE = process.env.ORDERS_TABLE;
+const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const DRIVER_GSI = process.env.DRIVER_GSI || "driverId-index";
 
 // ✅ Get order by orderId
