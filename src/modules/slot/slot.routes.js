@@ -9,6 +9,8 @@ import {
   cancelSlot,
   joinWaiting,
   managerAssignCluster,
+   managerConfirmMerge,          // ✅ ADD
+  managerMoveBookingToMerge,
 } from "./slot.service.js";
 
 const router = express.Router();
@@ -97,6 +99,35 @@ router.post(
   async (req, res) => {
     try {
       const data = await managerAssignCluster(req.body);
+      return res.json(data);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
+/* ✅ MANAGER CONFIRM MERGE */
+router.post(
+  "/merge/confirm",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const data = await managerConfirmMerge(req.body);
+      return res.json(data);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
+
+/* ✅ MANAGER MOVE BOOKING */
+router.post(
+  "/merge/move",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const data = await managerMoveBookingToMerge(req.body);
       return res.json(data);
     } catch (err) {
       return res.status(500).json({ ok: false, error: err.message });
