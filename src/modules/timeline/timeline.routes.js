@@ -67,6 +67,7 @@ router.post(
    Roles: MASTER / MANAGER
    Body: { orderId, productId, qty }
 =========================== */
+event: "VEHICLE_SELECTED",
 router.post(
   "/loading-item",
   verifyToken,
@@ -81,7 +82,7 @@ router.post(
 
       await addTimelineEvent({
         orderId,
-        event: "VEHICLE_SELECTED", // ✅ you said flow has VEHICLE_SELECTED; if you want "LOADING_ITEM" tell me
+        event: "LOADING ITEM", // ✅ you said flow has VEHICLE_SELECTED; if you want "LOADING_ITEM" tell me
         by: user.mobile,
         extra: { role: user.role, productId, qty: Number(qty || 0) },
       });
@@ -89,6 +90,35 @@ router.post(
       return res.json({ message: "✅ LOADING_ITEM added", orderId, productId });
     } catch (err) {
       console.error("loading-item error:", err);
+      return res.status(500).json({ message: err.message });
+    }
+  }
+);
+/* ===========================
+   ✅ DRIVER STARTED
+   POST /timeline/driver-started
+   Roles: DRIVER
+   Body: { orderId }
+=========================== */
+router.post(
+  "/driver-started",
+  verifyToken,
+  allowRoles("DRIVER"),
+  async (req, res) => {
+    try {
+      const user = req.user;
+      const { orderId } = req.body;
+      if (!orderId) return res.status(400).json({ message: "orderId required" });
+
+      await addTimelineEvent({
+        orderId,
+        event: "DRIVER_STARTED",
+        by: user.mobile,
+        extra: { role: user.role },
+      });
+
+      return res.json({ message: "✅ DRIVER_STARTED added", orderId });
+    } catch (err) {
       return res.status(500).json({ message: err.message });
     }
   }

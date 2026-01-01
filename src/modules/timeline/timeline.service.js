@@ -1,27 +1,64 @@
 import { QueryCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "../../config/dynamo.js";
 
+const TIMELINE_STEPS = [
+  "ORDER_CREATED",
+  "SLOT_BOOKED",
+  "LOAD_START",
+  "VEHICLE_SELECTED",
+  "LOAD_END",
+  "DRIVER_ASSIGNED",
+  "DRIVER_STARTED",
+  "DRIVER_REACHED_DISTRIBUTOR",
+  "UNLOAD_START",
+  "UNLOAD_END",
+  "WAREHOUSE_REACHED",
+];
+
+function buildProgress(timelineItems = []) {
+  // Map event => first time occurred
+  const firstTimeByEvent = {};
+  for (const it of timelineItems) {
+    const ev = String(it.event || "").toUpperCase();
+    if (!firstTimeByEvent[ev]) firstTimeByEvent[ev] = it.timestamp || null;
+  }
+
+  // Find last completed step
+  let currentStatus = null;
+  for (let i = TIMELINE_STEPS.length - 1; i >= 0; i--) {
+    const step = TIMELINE_STEPS[i];
+    if (firstTimeByEvent[step]) {
+      currentStatus = step;
+      break;
+    }
+  }
+
+  const progress = TIMELINE_STEPS.map((step) => ({
+    step,
+    label: step.replaceAll("_", " "),
+    time: firstTimeByEvent[step] || null,
+    done: Boolean(firstTimeByEvent[step]),
+  }));
+
+  return { currentStatus, progress };
+}
+
 export const getOrderTimeline = async (req, res) => {
   try {
     const { orderId } = req.params;
 
-    // ✅ JWT values
     const role = req.user?.role;
     const mobile = req.user?.mobile;
-    const companyId = req.user?.companyId;
 
     if (!role || !mobile) {
       return res.status(401).json({ ok: false, message: "Invalid token" });
     }
 
-    // ✅ Step 1: Read order META
+    // ✅ 1) Read order META
     const orderRes = await ddb.send(
       new GetCommand({
         TableName: "tickin_orders",
-        Key: {
-          pk: `ORDER#${orderId}`,
-          sk: "META",
-        },
+        Key: { pk: `ORDER#${orderId}`, sk: "META" },
       })
     );
 
@@ -31,9 +68,7 @@ export const getOrderTimeline = async (req, res) => {
 
     const order = orderRes.Item;
 
-    // ✅ Step 2: Ownership rules (STRICT)
-
-    // ✅ SALES OFFICER: Only his created orders
+    // ✅ 2) Ownership rules (as you wrote) — keep same
     if (role === "SALES OFFICER") {
       if (String(order.createdBy) !== String(mobile)) {
         return res
@@ -42,18 +77,14 @@ export const getOrderTimeline = async (req, res) => {
       }
     }
 
-    // ✅ DISTRIBUTOR: Only his distributor orders
     if (role === "DISTRIBUTOR") {
       const tokenDistributorId = req.user?.distributorId;
-
       if (!tokenDistributorId) {
         return res.status(403).json({
           ok: false,
-          message:
-            "DistributorId missing in token. Add distributorId in login JWT.",
+          message: "DistributorId missing in token.",
         });
       }
-
       if (String(order.distributorId) !== String(tokenDistributorId)) {
         return res
           .status(403)
@@ -61,20 +92,14 @@ export const getOrderTimeline = async (req, res) => {
       }
     }
 
-    // ✅ DRIVER: Allow ONLY if assigned to him
     if (role === "DRIVER") {
       const assignedDriverId = order.driverId || order.driverMobile || null;
-
-      // order table la driverId save pannala na timeline show panna mudiyathu
       if (!assignedDriverId) {
         return res.status(403).json({
           ok: false,
-          message:
-            "Driver not assigned yet. Manager must assign driver (driverId not found in order).",
+          message: "Driver not assigned yet.",
         });
       }
-
-      // driver token la mobile irukkum. compare with order.driverId
       if (String(assignedDriverId) !== String(mobile)) {
         return res.status(403).json({
           ok: false,
@@ -83,25 +108,21 @@ export const getOrderTimeline = async (req, res) => {
       }
     }
 
-    // ✅ MASTER / MANAGER: No restriction (can view all)
-    // (You can optionally check companyId match here if needed)
-
-    // ✅ Step 3: Fetch timeline events
+    // ✅ 3) Fetch timeline events
     const result = await ddb.send(
       new QueryCommand({
         TableName: "tickin_timeline",
         KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: {
-          ":pk": `ORDER#${orderId}`,
-        },
-        ScanIndexForward: true, // chronological
+        ExpressionAttributeValues: { ":pk": `ORDER#${orderId}` },
+        ScanIndexForward: true,
       })
     );
 
     const timeline = result.Items || [];
 
-    // ✅ Step 4: Attach order items (for loading items one-by-one UI)
-    // Your order items already stored in tickin_orders META
+    // ✅ 4) Build Amazon style progress
+    const { currentStatus, progress } = buildProgress(timeline);
+
     const orderItems = order.items || [];
 
     return res.json({
@@ -109,6 +130,8 @@ export const getOrderTimeline = async (req, res) => {
       message: "Timeline fetched ✅",
       orderId,
       role,
+      currentStatus,            // ✅ current step
+      progress,                 // ✅ horizontal line UI use this
       count: timeline.length,
       orderMeta: {
         orderId: order.orderId || orderId,
@@ -119,10 +142,10 @@ export const getOrderTimeline = async (req, res) => {
         driverId: order.driverId || null,
         totalAmount: order.totalAmount || order.amount || 0,
         createdBy: order.createdBy,
-        createdAt: order.createdAt || order.timestamp || null,
+        createdAt: order.createdAt || null,
       },
-      orderItems, // ✅ front end can show items one-by-one
-      timeline,
+      orderItems,
+      timeline, // raw events (optional UI debug)
     });
   } catch (err) {
     console.error("getOrderTimeline error:", err);
