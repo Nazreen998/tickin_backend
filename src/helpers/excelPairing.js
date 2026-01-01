@@ -14,13 +14,17 @@ function pick(row, keys) {
 function extractCoords(url) {
   if (!url || typeof url !== "string") return null;
 
-  // @lat,lng
+  // ✅ @lat,lng format
   const m1 = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
   if (m1) return { lat: Number(m1[1]), lng: Number(m1[2]) };
 
-  // place/lat,lng
+  // ✅ place/lat,lng format
   const m2 = url.match(/place\/(-?\d+\.\d+),(-?\d+\.\d+)/);
   if (m2) return { lat: Number(m2[1]), lng: Number(m2[2]) };
+
+  // ✅ NEW ✅ !3dLAT!4dLNG format (your link format)
+  const m3 = url.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+  if (m3) return { lat: Number(m3[1]), lng: Number(m3[2]) };
 
   return null;
 }
