@@ -181,8 +181,6 @@ router.post(
     }
   }
 );
-import { managerEditSlotTime } from "./slot.service.js";
-
 router.post(
   "/edit-time",
   verifyToken,
