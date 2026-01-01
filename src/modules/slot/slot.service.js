@@ -127,10 +127,10 @@ export async function managerAssignCluster({
 }
 
 /* ---------------- SLOT GRID ---------------- */
-
 export async function getSlotGrid({ companyCode, date }) {
   const pk = pkFor(companyCode, date);
 
+  // ✅ 1) Get slots overrides
   const res = await ddb.send(
     new QueryCommand({
       TableName: TABLE_CAPACITY,
@@ -141,6 +141,20 @@ export async function getSlotGrid({ companyCode, date }) {
 
   const overrides = res.Items || [];
 
+  // ✅ 2) Fetch RULES (global maxAmount, lastSlotEnabled etc.)
+  const rulesRes = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_RULES,
+      Key: { pk: `COMPANY#${companyCode}`, sk: "RULES" },
+    })
+  );
+
+  const rules = rulesRes.Item || {};
+
+  const maxAmount =
+    Number(rules.maxAmount || rules.fullTruckMaxAmount || DEFAULT_MAX_AMOUNT);
+
+  // ✅ 3) Default full slots
   const defaultSlots = [];
   for (const time of DEFAULT_SLOTS) {
     for (const pos of ALL_POSITIONS) {
@@ -155,18 +169,26 @@ export async function getSlotGrid({ companyCode, date }) {
     }
   }
 
+  // ✅ 4) Merge override slots + default FULL slots
   const finalSlots = defaultSlots.map((slot) => {
     const override = overrides.find((o) => o.sk === slot.sk);
     return override ? { ...slot, ...override } : slot;
   });
 
+  // ✅ 5) Merge slots
   const mergeSlots = overrides.filter((o) =>
     String(o.sk || "").startsWith("MERGE_SLOT#")
   );
 
-  return [...finalSlots, ...mergeSlots];
+  return {
+    slots: [...finalSlots, ...mergeSlots],
+    rules: {
+      maxAmount,
+      lastSlotEnabled: Boolean(rules.lastSlotEnabled),
+      lastSlotOpenAfter: rules.lastSlotOpenAfter || "17:00",
+    },
+  };
 }
-
 /* ---------------- MANAGER OPEN LAST SLOT ---------------- */
 
 export async function managerOpenLastSlot({
@@ -257,11 +279,13 @@ export async function bookSlot({
 
     if (orderId) {
       await addTimelineEvent({
-        orderId,
-        event: "SLOT_BOOKED",
-        by: uid,
-        extra: { vehicleType: "FULL", time, pos, distributorCode },
-      });
+  orderId,
+  event: "SLOT_BOOKED_FULL",
+  by: uid,
+  role: "BOOKING",
+  data: { vehicleType: "FULL", time, pos, distributorCode }
+});
+
     }
 
     return { ok: true, bookingId, type: "FULL", userId: uid };
@@ -353,31 +377,43 @@ export async function bookSlot({
   // ✅ Always log SLOT_BOOKED
   if (orderId) {
     await addTimelineEvent({
-      orderId,
-      event: "SLOT_BOOKED",
-      by: uid,
-      extra: {
-        vehicleType: "HALF",
-        time,
-        mergeKey,
-        locationBucket: mergeKey,
-        distributorCode,
-        distributorName,
-        lat,
-        lng,
-        tripStatus,
-        totalAmount: finalTotal,
-      },
-    });
+  orderId,
+  event: "SLOT_BOOKED_PARTIAL",
+  by: uid,
+  role: "BOOKING",
+  data: {
+    vehicleType: "HALF",
+    time,
+    mergeKey,
+    location: locationBucket || null,
+    distributorCode,
+    distributorName,
+    lat,
+    lng,
+    tripStatus,
+    amount: amt,
+    totalAmount: finalTotal
+  }
+});
+
   }
 
   if (tripStatus === "READY_FOR_CONFIRM") {
     await addTimelineEvent({
-      orderId: orderId || bookingId,
-      event: "MERGE_READY_MANAGER_CONFIRM",
-      by: uid,
-      extra: { mergeKey, totalAmount: finalTotal, time, distributorCode, lat, lng },
-    });
+  orderId, // ✅ ALWAYS orderId
+  event: "MERGE_READY_MANAGER_CONFIRM",
+  by: uid,
+  role: "BOOKING",
+  data: {
+    mergeKey,
+    totalAmount: finalTotal,
+    time,
+    distributorCode,
+    distributorName,
+    lat,
+    lng
+  }
+});
   }
 
   return {

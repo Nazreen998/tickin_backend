@@ -25,8 +25,14 @@ const TIMELINE_STEPS = [
  */
 const EVENT_ALIASES = {
   ORDER_PLACED_PENDING: "ORDER_CREATED",
-  ORDER_CONFIRMED: "ORDER_CREATED", // optional: treat confirm as created/started
+  ORDER_CONFIRMED: "ORDER_CREATED",
+
+  // ✅ new neat event types
+  SLOT_BOOKED_PARTIAL: "SLOT_BOOKED",
+  SLOT_BOOKED_FULL: "SLOT_BOOKED",
+  SLOT_BOOKED_CONFIRMED: "SLOT_BOOKED",
 };
+
 
 /**
  * ✅ Build progress (Amazon UI)

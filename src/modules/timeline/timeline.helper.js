@@ -1,42 +1,59 @@
+import dayjs from "dayjs";
 import { PutCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "../../config/dynamo.js";
 
 /**
- * ✅ Adds one timeline event per row
- * - sk includes timestamp + event for clarity
- * - optional eventId to prevent duplicates (same event pressed twice)
+ * ✅ NEAT Timeline Event Writer (Mongo Style)
+ * - No spread extra
+ * - Everything goes inside data{}
+ * - Standard keys always same
  */
 export const addTimelineEvent = async ({
   orderId,
   event,
   by,
-  extra = {},
-  eventId = null, // pass something unique if needed (ex: "LOAD_START" or "SLOT_BOOKED#2026-01-01#D002")
-}) => {
-  const timestamp = new Date().toISOString();
-  const evt = String(event || "").trim().toUpperCase();
+  byUserName = null,
+  role = null,
+  data = {},
 
+  // Optional: stop duplicate insert (ex: "SLOT_BOOKED#ORD#DATE")
+  eventId = null,
+  eventAt = null,
+}) => {
+  const timestamp = eventAt || new Date().toISOString();
+  const evt = String(event || "").trim().toUpperCase();
   if (!orderId) throw new Error("orderId required");
   if (!evt) throw new Error("event required");
 
-  // ✅ Better sort key
-  const sk = `TIME#${timestamp}#EVT#${evt}`;
+  const sk = `TS#${timestamp}#EVT#${evt}`;
+
+  const item = {
+    pk: `ORDER#${orderId}`,
+    sk,
+    orderId,
+
+    event: evt,
+    step: evt, // ✅ later mapping can override
+    status: "DONE",
+
+    timestamp,
+    displayTime: dayjs(timestamp).format("DD MMM YYYY, hh:mm A"),
+
+    by: String(by || ""),
+    byUserName: byUserName ? String(byUserName) : null,
+    role: role ? String(role) : null,
+
+    eventId: eventId ? String(eventId) : null,
+
+    // ✅ all extra goes only here
+    data: data || {},
+    createdAt: timestamp,
+  };
 
   await ddb.send(
     new PutCommand({
       TableName: "tickin_timeline",
-      Item: {
-        pk: `ORDER#${orderId}`,
-        sk,
-        orderId,
-        event: evt,
-        by: String(by || ""),
-        timestamp,
-        eventId: eventId ? String(eventId) : null,
-        ...extra,
-      },
-      // ✅ Optional duplicate protection (only if you pass eventId)
-      // If you don’t pass eventId, this still works normally.
+      Item: item,
       ConditionExpression: eventId
         ? "attribute_not_exists(eventId)"
         : undefined,

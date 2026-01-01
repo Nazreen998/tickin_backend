@@ -11,9 +11,42 @@ import {
   managerAssignCluster,
    managerConfirmMerge,          // ✅ ADD
   managerMoveBookingToMerge,
+
+  managerCancelBooking,
+  managerDisableSlot,
+  managerEditSlotTime,
+  managerSetSlotMax,
 } from "./slot.service.js";
 
 const router = express.Router();
+/**Manager cancel slot */
+router.post(
+  "/manager/cancel-booking",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const data = await managerCancelBooking(req.body);
+      return res.json(data);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
+/*Manager disable slot*/
+router.post(
+  "/disable-slot",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const data = await managerDisableSlot(req.body);
+      return res.json(data);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
 
 /* ✅ GET GRID */
 router.get(
