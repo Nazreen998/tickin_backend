@@ -1,138 +1,262 @@
-import { ddb } from "../config/dynamo.js";
+import dayjs from "dayjs";
 import {
+  ScanCommand,
   GetCommand,
   PutCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
+import { ddb } from "../config/dynamo.js";
 
 const GOALS_TABLE = process.env.GOALS_TABLE || "tickin_goals";
+const PRODUCTS_TABLE = process.env.PRODUCTS_TABLE || "tickin_products";
+
+// ✅ monthKey = YYYY-MM
+const monthKey = (month) => (month ? String(month) : dayjs().format("YYYY-MM"));
+
+// ✅ PK/SK (Distributor + Product wise)
+const goalPk = (distributorCode, month) =>
+  `GOAL#${String(distributorCode).trim()}#${monthKey(month)}`;
+const goalSk = (productId) => `PRODUCT#${String(productId).trim()}`;
+
+// ✅ default goal per product per month
 const DEFAULT_GOAL = 500;
 
-const getMonthKey = (month) => {
-  if (month) return month;
-  const now = new Date();
-  const year = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  return `${year}-${m}`;
-};
-
-const buildKeys = ({ distributorCode, monthKey }) => ({
-  pk: `GOAL#${distributorCode}#${monthKey}`,
-  sk: "META",
-});
-
-// ✅ Ensure distributor record exists for current month
-const ensureGoalRecord = async ({ distributorCode, monthKey }) => {
-  const { pk, sk } = buildKeys({ distributorCode, monthKey });
-  const now = new Date().toISOString();
-
-  await ddb.send(
-    new PutCommand({
-      TableName: GOALS_TABLE,
-      Item: {
-        pk,
-        sk,
-        distributorCode,
-        month: monthKey,
-        defaultGoal: DEFAULT_GOAL,
-        usedQty: 0,
-        remainingQty: DEFAULT_GOAL,
-        createdAt: now,
-        updatedAt: now,
-        active: true,
-      },
-      ConditionExpression: "attribute_not_exists(pk) AND attribute_not_exists(sk)",
-    })
-  ).catch(() => {});
-};
-
-// ✅ Deduct goal when order is created (PENDING stage)
-export const deductDistributorMonthlyGoal = async ({ distributorCode, qty, month }) => {
-  if (!distributorCode) throw new Error("distributorCode required");
-  if (!qty || qty <= 0) throw new Error("qty must be > 0");
-
-  const monthKey = getMonthKey(month);
-  const { pk, sk } = buildKeys({ distributorCode, monthKey });
-  const now = new Date().toISOString();
-  const amount = Number(qty);
-
-  await ensureGoalRecord({ distributorCode, monthKey });
-
+// ✅ read all products from products table
+async function getAllProducts() {
   const res = await ddb.send(
-    new UpdateCommand({
+    new ScanCommand({
+      TableName: PRODUCTS_TABLE,
+      // your products.service.js uses active=true, அதையே follow பண்ணுறோம்
+      FilterExpression: "active = :a",
+      ExpressionAttributeValues: { ":a": true },
+    })
+  );
+
+  return (res.Items || [])
+    .map((p) => ({
+      productId: String(p.productId || p.sk || "")
+        .replace(/^P#/, "")
+        .replace(/^PRODUCT#/, "")
+        .trim(),
+      name: String(p.name || "").trim(),
+    }))
+    .filter((p) => p.productId);
+}
+
+/**
+ * ✅ Ensure monthly goals exist for ALL products for a distributor+month
+ * If missing, create defaultGoal=500, used=0, remaining=500
+ */
+async function ensureMonthlyGoalsForDistributor({ distributorCode, month }) {
+  const pk = goalPk(distributorCode, month);
+
+  // existing goals for this distributor/month
+  const existing = await ddb.send(
+    new ScanCommand({
       TableName: GOALS_TABLE,
-      Key: { pk, sk },
-      ConditionExpression: "remainingQty >= :qty",
-      UpdateExpression:
-        "SET usedQty = if_not_exists(usedQty,:zero) + :qty, " +
-        "remainingQty = if_not_exists(remainingQty,:goal) - :qty, " +
-        "updatedAt = :now",
+      FilterExpression: "pk = :pk AND begins_with(sk, :sk)",
       ExpressionAttributeValues: {
-        ":goal": DEFAULT_GOAL,
-        ":zero": 0,
-        ":qty": amount,
-        ":now": now,
+        ":pk": pk,
+        ":sk": "PRODUCT#",
       },
-      ReturnValues: "ALL_NEW",
     })
   );
 
-  return res.Attributes;
-};
+  const existingSet = new Set(
+    (existing.Items || []).map((x) =>
+      String(x.productId || "").replace(/^P#/, "").trim()
+    )
+  );
 
-// ✅ Add back goal if order edited reduced qty / deleted
-export const addBackDistributorMonthlyGoal = async ({ distributorCode, qty, month }) => {
-  if (!distributorCode) throw new Error("distributorCode required");
-  if (!qty || qty <= 0) throw new Error("qty must be > 0");
-
-  const monthKey = getMonthKey(month);
-  const { pk, sk } = buildKeys({ distributorCode, monthKey });
+  const products = await getAllProducts();
   const now = new Date().toISOString();
-  const amount = Number(qty);
 
-  await ensureGoalRecord({ distributorCode, monthKey });
+  for (const p of products) {
+    if (existingSet.has(p.productId)) continue;
 
-  // ✅ Prevent usedQty from going negative
+    const item = {
+      pk,
+      sk: goalSk(p.productId),
+      distributorCode: String(distributorCode).trim(),
+      month: monthKey(month),
+
+      productId: p.productId,
+      productName: p.name, // ✅ UI-la name kaata helpful
+
+      defaultGoal: DEFAULT_GOAL,
+      usedQty: 0,
+      remainingQty: DEFAULT_GOAL,
+
+      createdAt: now,
+      updatedAt: now,
+      active: true,
+    };
+
+    await ddb.send(
+      new PutCommand({
+        TableName: GOALS_TABLE,
+        Item: item,
+      })
+    );
+  }
+}
+
+/**
+ * ✅ GET monthly goals for distributor (product-wise list)
+ */
+export async function getMonthlyGoalsForDistributor({ distributorCode, month }) {
+  const pk = goalPk(distributorCode, month);
+
+  await ensureMonthlyGoalsForDistributor({ distributorCode, month });
+
   const res = await ddb.send(
-    new UpdateCommand({
+    new ScanCommand({
       TableName: GOALS_TABLE,
-      Key: { pk, sk },
-      UpdateExpression:
-        "SET usedQty = if_not_exists(usedQty,:zero) - :qty, " +
-        "remainingQty = if_not_exists(remainingQty,:goal) + :qty, " +
-        "updatedAt = :now",
+      FilterExpression: "pk = :pk AND begins_with(sk, :sk)",
       ExpressionAttributeValues: {
-        ":goal": DEFAULT_GOAL,
-        ":zero": 0,
-        ":qty": amount,
-        ":now": now,
+        ":pk": pk,
+        ":sk": "PRODUCT#",
       },
-      ReturnValues: "ALL_NEW",
     })
   );
 
-  return res.Attributes;
-};
-
-// ✅ GET monthly goals (returns META record)
-export const getMonthlyGoalsForDistributor = async ({ distributorCode, month }) => {
-  if (!distributorCode) throw new Error("distributorCode required");
-
-  const monthKey = getMonthKey(month);
-  const { pk, sk } = buildKeys({ distributorCode, monthKey });
-
-  await ensureGoalRecord({ distributorCode, monthKey });
-
-  const res = await ddb.send(
-    new GetCommand({
-      TableName: GOALS_TABLE,
-      Key: { pk, sk },
-    })
+  const goals = (res.Items || []).sort((a, b) =>
+    String(a.productId || "").localeCompare(String(b.productId || ""))
   );
 
-  return {
+  return { goals };
+}
+
+/**
+ * ✅ Deduct goals product-wise (order create / qty increase)
+ * items: [{ productId, qty }]
+ */
+export async function deductDistributorMonthlyGoalProductWise({
+  distributorCode,
+  month,
+  items,
+}) {
+  if (!items || !Array.isArray(items) || items.length === 0) return;
+
+  const pk = goalPk(distributorCode, month);
+  await ensureMonthlyGoalsForDistributor({ distributorCode, month });
+
+  for (const it of items) {
+    const productId = String(it.productId || "")
+      .replace(/^P#/, "")
+      .trim();
+    const qty = Number(it.qty || 0);
+
+    if (!productId || qty <= 0) continue;
+
+    const sk = goalSk(productId);
+
+    const existing = await ddb.send(
+      new GetCommand({
+        TableName: GOALS_TABLE,
+        Key: { pk, sk },
+      })
+    );
+
+    const rem = Number(existing.Item?.remainingQty ?? DEFAULT_GOAL);
+
+    // ✅ goal must not go below 0
+    if (rem - qty < 0) {
+      throw new Error(
+        `Goal exceeded for product ${productId}. Remaining=${rem}, trying=${qty}`
+      );
+    }
+
+    await ddb.send(
+      new UpdateCommand({
+        TableName: GOALS_TABLE,
+        Key: { pk, sk },
+        UpdateExpression:
+          "SET usedQty = if_not_exists(usedQty,:z) + :q, " +
+          "remainingQty = if_not_exists(remainingQty,:d) - :q, " +
+          "updatedAt = :u",
+        ExpressionAttributeValues: {
+          ":q": qty,
+          ":u": new Date().toISOString(),
+          ":z": 0,
+          ":d": DEFAULT_GOAL,
+        },
+      })
+    );
+  }
+}
+
+/**
+ * ✅ Add back goals product-wise (order update decrease / cancel)
+ * items: [{ productId, qty }]
+ */
+export async function addBackDistributorMonthlyGoalProductWise({
+  distributorCode,
+  month,
+  items,
+}) {
+  if (!items || !Array.isArray(items) || items.length === 0) return;
+
+  const pk = goalPk(distributorCode, month);
+  await ensureMonthlyGoalsForDistributor({ distributorCode, month });
+
+  for (const it of items) {
+    const productId = String(it.productId || "")
+      .replace(/^P#/, "")
+      .trim();
+    const qty = Number(it.qty || 0);
+
+    if (!productId || qty <= 0) continue;
+
+    const sk = goalSk(productId);
+
+    const existing = await ddb.send(
+      new GetCommand({
+        TableName: GOALS_TABLE,
+        Key: { pk, sk },
+      })
+    );
+
+    if (!existing.Item) continue;
+
+    const used = Number(existing.Item.usedQty || 0);
+    const rem = Number(existing.Item.remainingQty || 0);
+
+    const newUsed = Math.max(used - qty, 0);
+    const newRem = rem + qty;
+
+    await ddb.send(
+      new UpdateCommand({
+        TableName: GOALS_TABLE,
+        Key: { pk, sk },
+        UpdateExpression:
+          "SET usedQty = :u1, remainingQty = :r1, updatedAt = :u",
+        ExpressionAttributeValues: {
+          ":u1": newUsed,
+          ":r1": newRem,
+          ":u": new Date().toISOString(),
+        },
+      })
+    );
+  }
+}
+
+/**
+ * ✅ BACKWARD COMPAT (old calls) - optional
+ * But best: orders.service.js-la product-wise functions-a use pannunga.
+ */
+export async function deductDistributorMonthlyGoal({ distributorCode, qty, month }) {
+  await deductDistributorMonthlyGoalProductWise({
     distributorCode,
-    month: monthKey,
-    goals: res.Item ? [res.Item] : [],
-  };
-};
+    month,
+    items: [{ productId: "UNKNOWN", qty }],
+  });
+}
+
+export async function addBackDistributorMonthlyGoal({ distributorCode, qty, month }) {
+  await addBackDistributorMonthlyGoalProductWise({
+    distributorCode,
+    month,
+    items: [{ productId: "UNKNOWN", qty }],
+  });
+}

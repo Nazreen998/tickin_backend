@@ -11,7 +11,12 @@ import { pairingMap } from "../../appInit.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
-import { deductDistributorMonthlyGoal, addBackDistributorMonthlyGoal } from "../../services/goals.service.js";
+
+// ✅ NEW IMPORTS (product-wise)
+import {
+  deductDistributorMonthlyGoalProductWise,
+  addBackDistributorMonthlyGoalProductWise,
+} from "../../services/goals.service.js";
 
 /* ==========================
    ✅ Confirm Draft Order
@@ -77,7 +82,7 @@ export const confirmDraftOrder = async (req, res) => {
 };
 
 /* ==========================
-   ✅ Create Order (DRAFT)
+   ✅ Create Order (Direct PENDING)
 ========================== */
 export const createOrder = async (req, res) => {
   try {
@@ -85,12 +90,20 @@ export const createOrder = async (req, res) => {
     const role = (user.role || "").toUpperCase();
     const { distributorId, distributorName, items } = req.body;
 
-    if (!(role === "SALES OFFICER" || role === "SALES_OFFICER" || role === "MANAGER")) {
+    if (
+      !(
+        role === "SALES OFFICER" ||
+        role === "SALES_OFFICER" ||
+        role === "MANAGER"
+      )
+    ) {
       return res.status(403).json({ message: "Access denied" });
     }
 
     if (!distributorId || !distributorName) {
-      return res.status(400).json({ message: "DistributorId + DistributorName required" });
+      return res
+        .status(400)
+        .json({ message: "DistributorId + DistributorName required" });
     }
 
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -102,27 +115,33 @@ export const createOrder = async (req, res) => {
     let totalQty = 0;
 
     for (const it of items) {
-      const pid = it.productId.startsWith("P#") ? it.productId : `P#${it.productId}`;
+      const pid = String(it.productId || "");
+      const productSk = pid.startsWith("P#") ? pid : `P#${pid}`;
 
       const prodRes = await ddb.send(
         new GetCommand({
           TableName: "tickin_products",
-          Key: { pk: "PRODUCT", sk: pid },
+          Key: { pk: "PRODUCT", sk: productSk },
         })
       );
 
       if (!prodRes.Item) {
-        return res.status(400).json({ message: `Product not found: ${it.productId}` });
+        return res
+          .status(400)
+          .json({ message: `Product not found: ${it.productId}` });
       }
 
       const prod = prodRes.Item;
       const qty = Number(it.qty || 0);
-      if (qty <= 0) return res.status(400).json({ message: "Qty must be > 0" });
+      if (qty <= 0) {
+        return res.status(400).json({ message: "Qty must be > 0" });
+      }
 
-      const itemTotal = qty * Number(prod.price);
+      const price = Number(prod.price || 0);
+      const itemTotal = qty * price;
 
       finalItems.push({
-        productId: prod.productId,
+        productId: prod.productId, // might be "P#1002"
         name: prod.name,
         category: prod.category,
         price: prod.price,
@@ -136,10 +155,13 @@ export const createOrder = async (req, res) => {
 
     const orderId = "ORD" + uuidv4().slice(0, 8);
 
-    // ✅ Deduct goal immediately (order podum pothey)
-    await deductDistributorMonthlyGoal({
+    // ✅ GOAL DEDUCT (PRODUCT-WISE)
+    await deductDistributorMonthlyGoalProductWise({
       distributorCode: distributorId,
-      qty: totalQty,
+      items: finalItems.map((x) => ({
+        productId: String(x.productId || "").replace(/^P#/, ""),
+        qty: Number(x.qty || 0),
+      })),
     });
 
     const orderItem = {
@@ -152,7 +174,6 @@ export const createOrder = async (req, res) => {
       totalAmount,
       totalQty,
 
-      // ✅ No DRAFT, direct PENDING
       status: "PENDING",
       pendingReason: "",
 
@@ -170,29 +191,36 @@ export const createOrder = async (req, res) => {
         Item: orderItem,
       })
     );
+
     // ✅ NEW TIMELINE EVENT (ORDER_CREATED)
-await addTimelineEvent({
-  orderId,
-  event: "ORDER_CREATED",
-  by: user.mobile,
-  extra: {
-    role: user.role,
-    distributorId,
-    distributorName,
-    totalAmount,
-    totalQty,
-  },
-});
+    await addTimelineEvent({
+      orderId,
+      event: "ORDER_CREATED",
+      by: user.mobile,
+      extra: {
+        role: user.role,
+        distributorId,
+        distributorName,
+        totalAmount,
+        totalQty,
+      },
+    });
 
     await addTimelineEvent({
       orderId,
       event: "ORDER_PLACED_PENDING",
       by: user.mobile,
-      extra: { role: user.role, distributorId, distributorName, totalAmount, totalQty },
+      extra: {
+        role: user.role,
+        distributorId,
+        distributorName,
+        totalAmount,
+        totalQty,
+      },
     });
 
     return res.json({
-      message: "✅ Order placed (PENDING) + Goal deducted",
+      message: "✅ Order placed (PENDING) + Goal deducted (Product-wise)",
       orderId,
       status: "PENDING",
       distributorName,
@@ -210,6 +238,7 @@ await addTimelineEvent({
     return res.status(500).json({ message: "Error", error: err.message });
   }
 };
+
 /* ==========================
    ✅ Pending Orders (Master / Manager)
 ========================== */
@@ -326,6 +355,7 @@ export const updatePendingReason = async (req, res) => {
     res.status(500).json({ message: "Error", error: err.message });
   }
 };
+
 /* ==========================
    ✅ Confirm Order + Slot Booking
 ========================== */
@@ -397,11 +427,6 @@ export const confirmOrder = async (req, res) => {
       extra: { role: user.role, note: "Order confirmed" },
     });
 
-    /* ===================================================
-       ✅ SLOT BOOKING (Manager OR Sales can do)
-       - distributorCode should be order.distributorId ✅
-    =================================================== */
-
     let slotBooked = false;
 
     if (slot?.date && slot?.time && slot?.vehicleType && slot?.pos) {
@@ -413,15 +438,13 @@ export const confirmOrder = async (req, res) => {
         pos: slot.pos,
         userId: user.mobile,
 
-        // ✅ slot booking should be for ORDER distributor
         distributorCode: order.distributorId,
 
         amount: order.totalAmount || order.grandTotal || 0,
         orderId,
 
         requesterRole: role,
-        requesterDistributorCode:
-          user.distributorCode || user.distributorId || null,
+        requesterDistributorCode: user.distributorCode || user.distributorId || null,
       });
 
       slotBooked = true;
@@ -440,8 +463,8 @@ export const confirmOrder = async (req, res) => {
 };
 
 /* ==========================
-   ✅ UPDATE ORDER ITEMS (THIS WAS MISSING ✅)
-   Salesman can edit only DRAFT
+   ✅ UPDATE ORDER ITEMS (PENDING)
+   - product-wise goal adjust ✅
 ========================== */
 export const updateOrderItems = async (req, res) => {
   try {
@@ -460,18 +483,19 @@ export const updateOrderItems = async (req, res) => {
       })
     );
 
-    if (!existing.Item) return res.status(404).json({ message: "Order not found" });
+    if (!existing.Item)
+      return res.status(404).json({ message: "Order not found" });
 
     const order = existing.Item;
 
-    // ✅ Only creator can edit
     if (order.createdBy !== user.mobile) {
       return res.status(403).json({ message: "Only creator can edit" });
     }
 
-    // ✅ Only PENDING can be edited
     if (order.status !== "PENDING") {
-      return res.status(403).json({ message: "Only PENDING orders can be edited" });
+      return res
+        .status(403)
+        .json({ message: "Only PENDING orders can be edited" });
     }
 
     let totalAmount = 0;
@@ -482,22 +506,48 @@ export const updateOrderItems = async (req, res) => {
       totalQty += Number(i.qty);
     });
 
-    const oldQty = Number(order.totalQty || 0);
-    const diff = totalQty - oldQty;
+    // ✅ PRODUCT-WISE DIFF (old vs new)
+    const oldItems = Array.isArray(order.items) ? order.items : [];
+    const newItems = items;
 
-    // ✅ if qty increased → deduct extra
-    if (diff > 0) {
-      await deductDistributorMonthlyGoal({
+    const oldMap = {};
+    for (const it of oldItems) {
+      const pid = String(it.productId || "").replace(/^P#/, "");
+      oldMap[pid] = (oldMap[pid] || 0) + Number(it.qty || 0);
+    }
+
+    const newMap = {};
+    for (const it of newItems) {
+      const pid = String(it.productId || "").replace(/^P#/, "");
+      newMap[pid] = (newMap[pid] || 0) + Number(it.qty || 0);
+    }
+
+    const toDeduct = [];
+    const toAddBack = [];
+
+    const allPids = new Set([...Object.keys(oldMap), ...Object.keys(newMap)]);
+    for (const pid of allPids) {
+      const oldQ = Number(oldMap[pid] || 0);
+      const newQ = Number(newMap[pid] || 0);
+      const diff = newQ - oldQ;
+
+      if (diff > 0) toDeduct.push({ productId: pid, qty: diff });
+      if (diff < 0) toAddBack.push({ productId: pid, qty: Math.abs(diff) });
+    }
+
+    // ✅ Deduct increases
+    if (toDeduct.length > 0) {
+      await deductDistributorMonthlyGoalProductWise({
         distributorCode: order.distributorId,
-        qty: diff,
+        items: toDeduct,
       });
     }
 
-    // ✅ if qty reduced → add back
-    if (diff < 0) {
-      await addBackDistributorMonthlyGoal({
+    // ✅ Addback decreases
+    if (toAddBack.length > 0) {
+      await addBackDistributorMonthlyGoalProductWise({
         distributorCode: order.distributorId,
-        qty: Math.abs(diff),
+        items: toAddBack,
       });
     }
 
@@ -505,7 +555,8 @@ export const updateOrderItems = async (req, res) => {
       new UpdateCommand({
         TableName: "tickin_orders",
         Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression: "SET items = :it, totalAmount = :ta, totalQty = :tq, updatedAt = :u",
+        UpdateExpression:
+          "SET items = :it, totalAmount = :ta, totalQty = :tq, updatedAt = :u",
         ExpressionAttributeValues: {
           ":it": items,
           ":ta": totalAmount,
@@ -519,23 +570,33 @@ export const updateOrderItems = async (req, res) => {
       orderId,
       event: "ORDER_ITEMS_UPDATED",
       by: user.mobile,
-      extra: { role: user.role, totalAmount, totalQty, diff },
+      extra: {
+        role: user.role,
+        totalAmount,
+        totalQty,
+        toDeduct,
+        toAddBack,
+      },
     });
 
     return res.json({
-      message: "✅ Order updated successfully (goal adjusted)",
+      message: "✅ Order updated successfully (goal adjusted product-wise)",
       orderId,
       status: "PENDING",
       totalAmount,
       totalQty,
       items,
+      goalAdjust: { toDeduct, toAddBack },
     });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: "Error", error: err.message });
   }
 };
-/**Delete Order */
+
+/* ==========================
+   ✅ Delete Order (Cancel) + product-wise goal restore
+========================== */
 export const deleteOrder = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -548,27 +609,33 @@ export const deleteOrder = async (req, res) => {
       })
     );
 
-    if (!existing.Item) return res.status(404).json({ message: "Order not found" });
+    if (!existing.Item)
+      return res.status(404).json({ message: "Order not found" });
 
     const order = existing.Item;
 
-    // ✅ Only creator can delete
     if (order.createdBy !== user.mobile) {
       return res.status(403).json({ message: "Only creator can delete" });
     }
 
-    // ✅ Only PENDING can be deleted
     if (order.status !== "PENDING") {
-      return res.status(403).json({ message: "Only PENDING orders can be deleted" });
+      return res
+        .status(403)
+        .json({ message: "Only PENDING orders can be deleted" });
     }
 
-    // ✅ Restore goal fully
-    await addBackDistributorMonthlyGoal({
+    // ✅ Restore goal fully (product-wise)
+    const backItems = (order.items || []).map((x) => ({
+      productId: String(x.productId || "").replace(/^P#/, ""),
+      qty: Number(x.qty || 0),
+    }));
+
+    await addBackDistributorMonthlyGoalProductWise({
       distributorCode: order.distributorId,
-      qty: Number(order.totalQty || 0),
+      items: backItems,
     });
 
-    // ✅ Mark order cancelled (don’t delete DB record)
+    // ✅ Mark cancelled
     await ddb.send(
       new UpdateCommand({
         TableName: "tickin_orders",
@@ -587,11 +654,11 @@ export const deleteOrder = async (req, res) => {
       orderId,
       event: "ORDER_CANCELLED",
       by: user.mobile,
-      extra: { role: user.role, note: "Order cancelled and goal restored" },
+      extra: { role: user.role, note: "Order cancelled and goal restored product-wise" },
     });
 
     return res.json({
-      message: "✅ Order cancelled + goal restored",
+      message: "✅ Order cancelled + goal restored (product-wise)",
       orderId,
       status: "CANCELLED",
     });
@@ -613,7 +680,6 @@ export const getOrdersForSalesman = async ({ location }) => {
     return { distributorCount: 0, distributorCodes: [], orders: [] };
   }
 
-  // ⚠️ Scan is OK for now, later GSI optimization recommended
   const res = await ddb.send(
     new ScanCommand({
       TableName: ORDERS_TABLE,
@@ -643,7 +709,6 @@ export const getAllOrders = async ({ status }) => {
     TableName: ORDERS_TABLE,
   };
 
-  // optional filter by status
   if (status) {
     params.FilterExpression = "#s = :st";
     params.ExpressionAttributeNames = { "#s": "status" };
@@ -658,6 +723,7 @@ export const getAllOrders = async ({ status }) => {
     orders: res.Items || [],
   };
 };
+
 export const getOrderById = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -666,7 +732,6 @@ export const getOrderById = async (req, res) => {
       return res.status(400).json({ message: "orderId required" });
     }
 
-    // ✅ Support both "ORDxxxx" and "ORDER#ORDxxxx"
     const cleanId = String(orderId).startsWith("ORDER#")
       ? String(orderId).replace("ORDER#", "")
       : String(orderId);
