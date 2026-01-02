@@ -49,10 +49,7 @@ class _MyOrdersScreenState extends State<MyOrdersScreen> {
 
   String _extractRole(String userJson) {
     final m = jsonDecode(userJson);
-    return (m["role"] ?? "")
-        .toString()
-        .toUpperCase()
-        .replaceAll("_", " ");
+    return (m["role"] ?? "").toString().toUpperCase().replaceAll("_", " ");
   }
 
   @override
@@ -62,6 +59,19 @@ class _MyOrdersScreenState extends State<MyOrdersScreen> {
         title: const Text("My Orders"),
         actions: [
           IconButton(onPressed: _reload, icon: const Icon(Icons.refresh)),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () async {
+              final navigator = Navigator.of(context);
+              final tokenStore = TickinAppScope.of(context).tokenStore;
+
+              await tokenStore.clear();
+
+              if (!mounted) return;
+
+              navigator.pushNamedAndRemoveUntil('/login', (route) => false);
+            },
+          ),
         ],
       ),
       body: FutureBuilder<List<Map<String, dynamic>>>(
@@ -78,7 +88,10 @@ class _MyOrdersScreenState extends State<MyOrdersScreen> {
                 children: [
                   Text(snap.error.toString()),
                   const SizedBox(height: 8),
-                  ElevatedButton(onPressed: _reload, child: const Text("Retry")),
+                  ElevatedButton(
+                    onPressed: _reload,
+                    child: const Text("Retry"),
+                  ),
                 ],
               ),
             );
@@ -98,13 +111,13 @@ class _MyOrdersScreenState extends State<MyOrdersScreen> {
               return ListTile(
                 title: Text(o["distributorName"] ?? o["distributorId"]),
                 subtitle: Text(
-                    "Order: ${o["orderId"]} | ${o["status"]} | ₹${o["totalAmount"]}"),
+                  "Order: ${o["orderId"]} | ${o["status"]} | ₹${o["totalAmount"]}",
+                ),
                 onTap: () {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) =>
-                          OrderDetailsScreen(orderId: o["orderId"]),
+                      builder: (_) => OrderDetailsScreen(orderId: o["orderId"]),
                     ),
                   );
                 },

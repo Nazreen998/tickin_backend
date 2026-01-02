@@ -1,3 +1,5 @@
+import 'package:book_yours/screens/create_order_screen.dart';
+import 'package:book_yours/screens/home_screen.dart';
 import 'package:flutter/material.dart';
 
 import 'storage/token_store.dart';
@@ -88,7 +90,14 @@ class TickinApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         title: 'Tickin',
         theme: ThemeData(useMaterial3: true),
-        home: LoginScreen(authApi: authApi, tokenStore: tokenStore),
+        //use named routes to for navigation
+        initialRoute: '/login',
+        routes: {
+          '/login': (context) =>
+              LoginScreen(authApi: authApi, tokenStore: tokenStore),
+          '/home': (context) => HomeScreen(),
+          '/createOrder': (context) => CreateOrderScreen(),
+        },
       ),
     );
   }

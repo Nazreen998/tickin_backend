@@ -351,9 +351,23 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
       appBar: AppBar(
         title: const Text("Create Order"),
         actions: [
-          IconButton(onPressed: _loadHome, icon: const Icon(Icons.refresh)),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadHome),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () async {
+              final navigator = Navigator.of(context);
+              final tokenStore = TickinAppScope.of(context).tokenStore;
+
+              await tokenStore.clear();
+
+              if (!mounted) return;
+
+              navigator.pushNamedAndRemoveUntil('/login', (route) => false);
+            },
+          ),
         ],
       ),
+
       body: loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
