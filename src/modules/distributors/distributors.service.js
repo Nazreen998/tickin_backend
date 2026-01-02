@@ -1,7 +1,7 @@
 import { ddb } from "../../config/dynamo.js";
 import { GetCommand } from "@aws-sdk/lib-dynamodb";
 
-const TABLE = "tickin_distributor";
+const TABLE = "tickin_distributors";
 
 export async function getDistributorByCode(code) {
   if (!code) throw new Error("distributor code required");
