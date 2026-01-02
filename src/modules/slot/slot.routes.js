@@ -14,7 +14,7 @@ import {
   managerSetSlotMax,
   managerToggleLastSlot,
   managerSetGlobalMax,
-} from "./slot.service.js";
+} from "../slot/slot.service.js";
 
 const router = express.Router();
 
