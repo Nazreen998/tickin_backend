@@ -4,49 +4,19 @@ import { allowRoles } from "../../middleware/role.middleware.js";
 
 import {
   getSlotGrid,
-  managerOpenLastSlot,
   bookSlot,
-  cancelSlot,
   joinWaiting,
-  managerAssignCluster,
-   managerConfirmMerge,          // ✅ ADD
-  managerMoveBookingToMerge,
 
   managerCancelBooking,
   managerDisableSlot,
+  managerConfirmMerge,
+  managerMoveBookingToMerge,
   managerEditSlotTime,
   managerSetSlotMax,
+  managerToggleLastSlot,
 } from "./slot.service.js";
 
 const router = express.Router();
-/**Manager cancel slot */
-router.post(
-  "/manager/cancel-booking",
-  verifyToken,
-  allowRoles("MANAGER"),
-  async (req, res) => {
-    try {
-      const data = await managerCancelBooking(req.body);
-      return res.json(data);
-    } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
-    }
-  }
-);
-/*Manager disable slot*/
-router.post(
-  "/disable-slot",
-  verifyToken,
-  allowRoles("MANAGER"),
-  async (req, res) => {
-    try {
-      const data = await managerDisableSlot(req.body);
-      return res.json(data);
-    } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
-    }
-  }
-);
 
 /* ✅ GET GRID */
 router.get(
@@ -94,14 +64,14 @@ router.post(
   }
 );
 
-/* ✅ CANCEL */
+/* ✅ MANAGER CANCEL */
 router.post(
-  "/cancel",
+  "/manager/cancel-booking",
   verifyToken,
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
-      const data = await cancelSlot(req.body);
+      const data = await managerCancelBooking(req.body);
       return res.json(data);
     } catch (err) {
       return res.status(500).json({ ok: false, error: err.message });
@@ -109,14 +79,14 @@ router.post(
   }
 );
 
-/* ✅ OPEN LAST SLOT */
+/* ✅ MANAGER DISABLE */
 router.post(
-  "/open-last",
+  "/disable-slot",
   verifyToken,
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
-      const data = await managerOpenLastSlot(req.body);
+      const data = await managerDisableSlot(req.body);
       return res.json(data);
     } catch (err) {
       return res.status(500).json({ ok: false, error: err.message });
@@ -124,20 +94,6 @@ router.post(
   }
 );
 
-/* ✅ CLUSTER ASSIGN */
-router.post(
-  "/cluster/assign",
-  verifyToken,
-  allowRoles("MANAGER"),
-  async (req, res) => {
-    try {
-      const data = await managerAssignCluster(req.body);
-      return res.json(data);
-    } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
-    }
-  }
-);
 /* ✅ MANAGER CONFIRM MERGE */
 router.post(
   "/merge/confirm",
@@ -153,7 +109,7 @@ router.post(
   }
 );
 
-/* ✅ MANAGER MOVE BOOKING */
+/* ✅ MANAGER MOVE MERGE */
 router.post(
   "/merge/move",
   verifyToken,
@@ -168,6 +124,7 @@ router.post(
   }
 );
 
+/* ✅ GLOBAL MAX AMOUNT SET */
 router.post(
   "/set-max",
   verifyToken,
@@ -181,6 +138,8 @@ router.post(
     }
   }
 );
+
+/* ✅ EDIT TIME */
 router.post(
   "/edit-time",
   verifyToken,
@@ -195,5 +154,19 @@ router.post(
   }
 );
 
+/* ✅ LAST SLOT OPEN/CLOSE */
+router.post(
+  "/last-slot/toggle",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const data = await managerToggleLastSlot(req.body);
+      return res.json(data);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
 
 export default router;

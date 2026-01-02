@@ -622,7 +622,46 @@ const lng = Number(distributor?.lng) || null;
     distributorName,
   };
 }
+export async function managerToggleLastSlot({
+  companyCode,
+  enabled,
+  openAfter = "17:00",
+}) {
+  if (!companyCode) throw new Error("companyCode required");
 
+  // ✅ if enable = true -> check time
+  if (enabled) {
+    const nowTime = dayjs().format("HH:mm");
+    if (nowTime < openAfter) {
+      throw new Error(`Last slot can be opened only after ${openAfter}`);
+    }
+  }
+
+  // ✅ update rules table
+  const pk = `COMPANY#${companyCode}`;
+  const sk = "RULES";
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_RULES,
+      Key: { pk, sk },
+      UpdateExpression:
+        "SET lastSlotEnabled = :e, lastSlotOpenAfter = :oa, updatedAt = :u",
+      ExpressionAttributeValues: {
+        ":e": Boolean(enabled),
+        ":oa": openAfter,
+        ":u": new Date().toISOString(),
+      },
+    })
+  );
+
+  return {
+    ok: true,
+    message: `✅ Last Slot ${enabled ? "OPENED" : "CLOSED"}`,
+    enabled,
+    openAfter,
+  };
+}
 /* ---------------- MANAGER CONFIRM MERGE ---------------- */
 
 export async function managerConfirmMerge({
