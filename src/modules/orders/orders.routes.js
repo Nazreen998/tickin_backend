@@ -96,33 +96,42 @@ router.post(
 router.get(
   "/my",
   verifyToken,
-  allowRoles("SALES OFFICER"),
+  allowRoles("SALES OFFICER", "SALESMAN", "DISTRIBUTOR"),
   async (req, res) => {
     try {
       const user = req.user;
-      const location = String(user.location || user.Location || "").trim();
 
-      if (!location) {
-        return res.status(400).json({
-          ok: false,
-          message: "Salesman location missing in token",
+      const allowed = Array.isArray(user.allowedDistributors)
+        ? user.allowedDistributors
+        : [];
+
+      const one = String(user.distributorCode || user.distributorId || "").trim();
+      const distributorCodes = allowed.length > 0 ? allowed : (one ? [one] : []);
+
+      if (distributorCodes.length === 0) {
+        return res.json({
+          ok: true,
+          count: 0,
+          distributorCodes: [],
+          orders: [],
         });
       }
 
-      // ✅ call service
-      const data = await getOrdersForSalesman({ location });
+      const data = await getOrdersForSalesman({
+        distributorCodes,
+        status: "CONFIRMED",
+      });
 
       return res.json({
         ok: true,
-        salesmanLocation: location,
-        ...data,
+        distributorCodes,
+        ...data, // ✅ THIS spreads count/orders properly
       });
     } catch (err) {
       return res.status(500).json({ ok: false, message: err.message });
     }
   }
 );
-
 // ✅ Manager / Master view all orders (all distributors, all status)
 router.get(
   "/all",

@@ -613,17 +613,19 @@ export const deleteOrder = async (req, res) => {
       return res.status(404).json({ message: "Order not found" });
 
     const order = existing.Item;
+    const role = String(user.role || "").toUpperCase();
 
-    if (order.createdBy !== user.mobile) {
-      return res.status(403).json({ message: "Only creator can delete" });
-    }
+// ✅ Manager/Master can delete any order
+const isAdmin = role === "MANAGER" || role === "MASTER";
 
-    if (order.status !== "PENDING") {
-      return res
-        .status(403)
-        .json({ message: "Only PENDING orders can be deleted" });
-    }
+if (!isAdmin && order.createdBy !== user.mobile) {
+  return res.status(403).json({ message: "Only creator or Manager can delete" });
+}
 
+// ✅ Creator can delete only pending
+if (!isAdmin && order.status !== "PENDING") {
+  return res.status(403).json({ message: "Only PENDING orders can be deleted by creator" });
+}
     // ✅ Restore goal fully (product-wise)
     const backItems = (order.items || []).map((x) => ({
       productId: String(x.productId || "").replace(/^P#/, ""),
@@ -672,35 +674,40 @@ export const deleteOrder = async (req, res) => {
  * ✅ Sales officer: fetch all orders of distributors mapped to his location
  * Returns DRAFT + PENDING + CONFIRMED
  */
-export const getOrdersForSalesman = async ({ location }) => {
-  const distributors = pairingMap?.[location] || [];
-  const distributorCodes = distributors.map((d) => String(d.distributorId).trim());
+export const getOrdersForSalesman = async ({ distributorCodes, status }) => {
+  if (!Array.isArray(distributorCodes) || distributorCodes.length === 0) {
+    return { count: 0, distributorCodes: [], orders: [] };
+  }
 
-  if (distributorCodes.length === 0) {
-    return { distributorCount: 0, distributorCodes: [], orders: [] };
+  const expVals = {};
+  const inKeys = distributorCodes.map((_, i) => `:d${i}`);
+  distributorCodes.forEach((code, i) => {
+    expVals[`:d${i}`] = String(code).trim();
+  });
+
+  let filter = `distributorId IN (${inKeys.join(",")})`;
+
+  // ✅ only confirmed orders
+  if (status) {
+    filter += " AND #s = :st";
+    expVals[":st"] = String(status).toUpperCase();
   }
 
   const res = await ddb.send(
     new ScanCommand({
       TableName: ORDERS_TABLE,
-      FilterExpression:
-        "distributorId IN (" +
-        distributorCodes.map((_, i) => `:d${i}`).join(",") +
-        ")",
-      ExpressionAttributeValues: distributorCodes.reduce((acc, code, i) => {
-        acc[`:d${i}`] = code;
-        return acc;
-      }, {}),
+      FilterExpression: filter,
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: expVals,
     })
   );
 
   return {
-    distributorCount: distributorCodes.length,
+    count: res.Items?.length || 0,
     distributorCodes,
     orders: res.Items || [],
   };
 };
-
 /**
  * ✅ Manager/Master: fetch all orders (optional status filter)
  */
