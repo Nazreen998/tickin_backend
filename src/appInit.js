@@ -16,17 +16,11 @@ try {
     pairingMap = {};
   } else {
     console.log("✅ pairingMap excel found:", resolvedPairingPath);
-
     pairingMap = loadDistributorPairingMap(resolvedPairingPath);
 
     const keys = Object.keys(pairingMap || {});
     console.log("✅ pairingMap loaded locations:", keys.length);
-
-    if (keys.length > 0) {
-      console.log("📌 Sample locations:", keys.slice(0, 5));
-    } else {
-      console.log("⚠️ pairingMap is EMPTY. Check excel columns/sheet format.");
-    }
+    if (keys.length > 0) console.log("📌 Sample locations:", keys.slice(0, 5));
   }
 } catch (err) {
   console.error("❌ pairingMap load failed:", err.message);
@@ -43,13 +37,10 @@ try {
     productsList = [];
   } else {
     console.log("✅ products excel found:", resolvedProductsPath);
-
     productsList = loadProductsFromExcel(resolvedProductsPath);
 
     console.log("✅ products loaded:", productsList.length);
-    if (productsList.length > 0) {
-      console.log("📌 Sample product:", productsList[0]);
-    }
+    if (productsList.length > 0) console.log("📌 Sample product:", productsList[0]);
   }
 } catch (err) {
   console.error("❌ products load failed:", err.message);

@@ -480,14 +480,18 @@ export async function bookSlot({
   /* ✅ HALF BOOKING */
   let { locationBucket, distributor } = findDistributorFromPairingMap(pairingMap, distributorCode);
 
-  const mergeKey = locationBucket || "UNKNOWN"; // ✅ FIXED
+  const mergeKey =
+  distributor?.locationBucket ||
+  locationBucket ||
+  "UNKNOWN";
+// ✅ FIXED
   const mergeSk = skForMergeSlot(time, mergeKey);
 
   const bookingId = uuidv4();
   const bookingSk = `BOOKING#${time}#KEY#${mergeKey}#USER#${uid}#${bookingId}`;
 
-  const lat = distributor?.lat || null;
-  const lng = distributor?.lng || null;
+  const lat = Number(distributor?.lat) || null;
+const lng = Number(distributor?.lng) || null;
   const distributorName = distributor?.distributorName || null;
 
   await ddb.send(
