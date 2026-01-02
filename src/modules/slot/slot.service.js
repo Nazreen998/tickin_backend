@@ -19,7 +19,7 @@ const TABLE_BOOKINGS = "tickin_slot_bookings";
 const TABLE_QUEUE = "tickin_slot_waiting_queue";
 const TABLE_RULES = "tickin_slot_rules";
 
-const DEFAULT_SLOTS = ["09:00", "12:30", "16:30", "20:30"];
+const DEFAULT_SLOTS = ["09:00", "12:30", "16:00", "20:00"];
 const ALL_POSITIONS = ["A", "B", "C", "D"];
 
 const DEFAULT_MAX_AMOUNT = 80000;
@@ -938,4 +938,23 @@ export async function managerEditSlotTime({
   );
 
   return { ok: true, message: "✅ Slot time updated", oldTime, newTime };
+}
+export async function managerSetGlobalMax({ companyCode, maxAmount }) {
+  if (!companyCode) throw new Error("companyCode required");
+  const pk = `COMPANY#${companyCode}`;
+  const sk = "RULES";
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_RULES,
+      Key: { pk, sk },
+      UpdateExpression: "SET maxAmount = :m, updatedAt = :u",
+      ExpressionAttributeValues: {
+        ":m": Number(maxAmount || 80000),
+        ":u": new Date().toISOString(),
+      },
+    })
+  );
+
+  return { ok: true, message: "✅ Global Max Updated", maxAmount: Number(maxAmount) };
 }

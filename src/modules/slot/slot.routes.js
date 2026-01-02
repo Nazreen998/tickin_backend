@@ -168,5 +168,31 @@ router.post(
     }
   }
 );
+router.post(
+  "/toggle-last",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const data = await managerToggleLastSlot(req.body);
+      return res.json(data);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
+router.post(
+  "/set-global-max",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const data = await managerSetGlobalMax(req.body);
+      return res.json(data);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
 
 export default router;
