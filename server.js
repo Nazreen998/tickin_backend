@@ -23,6 +23,7 @@ import salesRoutes from "./src/modules/sales/sales.routes.js";
 import tripsRoutes from "./src/modules/trips/trips.routes.js";
 import driverRoutes from "./src/routes/driver.routes.js";
 import goalsRoutes from "./src/routes/goals.routes.js";
+import distributorRoutes from "./src/modules/distributors/distributors.routes.js";
 
 const app = express();
 
@@ -90,7 +91,7 @@ app.use("/api/driver", driverRoutes);
 
 app.use("/trips", tripsRoutes);
 app.use("/goals", goalsRoutes);
-
+app.use("/api/distributors", distributorRoutes);
 /**
  * ✅ Slot Routes
  */
