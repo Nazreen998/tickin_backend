@@ -23,7 +23,20 @@ const DEFAULT_SLOTS = ["09:00", "12:30", "16:30", "20:30"];
 const ALL_POSITIONS = ["A", "B", "C", "D"];
 
 const DEFAULT_MAX_AMOUNT = 80000;
+/* ---------------- DATE VALIDATION ---------------- */
+/* Slot booking allowed ONLY for TODAY & TOMORROW */
 
+function validateSlotDate(date) {
+  if (!date) throw new Error("date required");
+
+  const today = dayjs().startOf("day");
+  const tomorrow = today.add(1, "day");
+  const req = dayjs(date, "YYYY-MM-DD").startOf("day");
+
+  if (!req.isSame(today) && !req.isSame(tomorrow)) {
+    throw new Error("Slot booking allowed only for today and tomorrow");
+  }
+}
 /** Utils */
 function pkFor(companyCode, date) {
   return `COMPANY#${companyCode}#DATE#${date}`;
@@ -128,6 +141,7 @@ export async function managerAssignCluster({
 
 /* ---------------- SLOT GRID ---------------- */
 export async function getSlotGrid({ companyCode, date }) {
+  validateSlotDate(date);
   const pk = pkFor(companyCode, date);
 
   // ✅ 1) Get slots overrides
@@ -367,6 +381,7 @@ export async function managerOpenLastSlot({
   time = "20:30",
   openAfter = "17:00",
 }) {
+  validateSlotDate(date);
   const nowTime = dayjs().format("HH:mm");
   if (nowTime < openAfter) {
     throw new Error(`Last slot can be opened only after ${openAfter}`);
@@ -389,6 +404,7 @@ export async function bookSlot({
   amount = 0,
   orderId,
 }) {
+  validateSlotDate(date);
   if (!companyCode || !date || !time || !distributorCode) {
     throw new Error("companyCode, date, time, distributorCode required");
   }
@@ -612,6 +628,7 @@ export async function managerConfirmMerge({
   mergeKey,
   managerId,
 }) {
+   validateSlotDate(date);   
   if (!companyCode || !date || !time || !mergeKey) {
     throw new Error("companyCode, date, time, mergeKey required");
   }
@@ -666,6 +683,7 @@ export async function managerMoveBookingToMerge({
   toMergeKey,
   managerId,
 }) {
+   validateSlotDate(date);
   if (!companyCode || !date || !time || !bookingSk || !fromMergeKey || !toMergeKey) {
     throw new Error("Missing required fields");
   }
@@ -750,6 +768,7 @@ export async function joinWaiting({
   distributorCode,
   mergeKey,
 }) {
+  validateSlotDate(date);
   const uid = (userId && String(userId).trim()) ? String(userId).trim() : uuidv4();
 
   const pk = `COMPANY#${companyCode}#DATE#${date}#TIME#${time}#BUCKET#${mergeKey || "UNKNOWN"}`;
