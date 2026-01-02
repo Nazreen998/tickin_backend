@@ -13,9 +13,18 @@ import {
   getAllOrders,
   updateOrderItems,
   getOrderById,
-  confirmDraftOrder
+  confirmDraftOrder,
+  deleteOrder,
 } from "./orders.service.js";
-import { deleteOrder } from "./orders.service.js";
+
+import {
+  vehicleSelected,
+  loadingStart,
+  loadingItem,
+  loadingEnd,
+  assignDriverToOrder,
+} from "./orders.flow.service.js";
+
 const router = express.Router();
 
 /* ===========================
@@ -29,6 +38,8 @@ router.get(
   allowRoles("MASTER", "MANAGER"),
   getPendingOrders
 );
+
+// ✅ delete order
 router.delete("/:orderId", verifyToken, deleteOrder);
 
 // ✅ MASTER today orders
@@ -55,14 +66,13 @@ router.patch(
   updatePendingReason
 );
 
-// ✅ Confirm order + slot booking (Manager / Master only)
+// ✅ Confirm order + slot booking (Manager / Sales Officer only)
 router.post(
   "/confirm/:orderId",
   verifyToken,
   allowRoles("SALES OFFICER", "MANAGER"),
   confirmOrder
 );
-
 
 /* ===========================
    SALESMAN ROUTES
@@ -72,7 +82,7 @@ router.post(
 router.post(
   "/create",
   verifyToken,
-  allowRoles("MANAGER","SALES OFFICER"),
+  allowRoles("MANAGER", "SALES OFFICER"),
   createOrder
 );
 
@@ -92,7 +102,7 @@ router.post(
   confirmDraftOrder
 );
 
-// ✅ Sales Officer view all assigned distributor orders (DRAFT/PENDING/CONFIRMED)
+// ✅ Sales Officer view all assigned distributor orders (CONFIRMED)
 router.get(
   "/my",
   verifyToken,
@@ -125,21 +135,22 @@ router.get(
       return res.json({
         ok: true,
         distributorCodes,
-        ...data, // ✅ THIS spreads count/orders properly
+        ...data,
       });
     } catch (err) {
       return res.status(500).json({ ok: false, message: err.message });
     }
   }
 );
-// ✅ Manager / Master view all orders (all distributors, all status)
+
+// ✅ Manager / Master view all orders
 router.get(
   "/all",
   verifyToken,
   allowRoles("MASTER", "MANAGER"),
   async (req, res) => {
     try {
-      const status = req.query.status; // optional filter
+      const status = req.query.status;
       const data = await getAllOrders({ status });
       return res.json({ ok: true, ...data });
     } catch (err) {
@@ -152,20 +163,12 @@ router.get(
    VIEW ORDER ROUTE
 =========================== */
 
-// ✅ Get order details (Salesman, Distributor, Manager, Master)
 router.get(
   "/:orderId",
   verifyToken,
   allowRoles("SALES OFFICER", "DISTRIBUTOR", "MANAGER", "MASTER"),
   getOrderById
 );
-import {
-  vehicleSelected,
-  loadingStart,
-  loadingItem,
-  loadingEnd,
-  assignDriverToOrder,
-} from "./orders.flow.service.js";
 
 /* ==========================
    ✅ ORDER FLOW (AFTER SLOT)
@@ -187,7 +190,7 @@ router.post(
   loadingStart
 );
 
-// ✅ Loading add item (each by each)
+// ✅ Loading add item
 router.post(
   "/loading-item",
   verifyToken,
@@ -210,6 +213,5 @@ router.post(
   allowRoles("MANAGER", "MASTER"),
   assignDriverToOrder
 );
-
 
 export default router;

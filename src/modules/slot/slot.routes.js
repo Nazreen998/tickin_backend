@@ -6,7 +6,6 @@ import {
   getSlotGrid,
   bookSlot,
   joinWaiting,
-
   managerCancelBooking,
   managerDisableSlot,
   managerConfirmMerge,
@@ -14,6 +13,7 @@ import {
   managerEditSlotTime,
   managerSetSlotMax,
   managerToggleLastSlot,
+  managerSetGlobalMax,
 } from "./slot.service.js";
 
 const router = express.Router();
@@ -79,7 +79,7 @@ router.post(
   }
 );
 
-/* ✅ MANAGER DISABLE */
+/* ✅ MANAGER DISABLE SLOT */
 router.post(
   "/disable-slot",
   verifyToken,
@@ -124,22 +124,7 @@ router.post(
   }
 );
 
-/* ✅ GLOBAL MAX AMOUNT SET */
-router.post(
-  "/set-max",
-  verifyToken,
-  allowRoles("MANAGER"),
-  async (req, res) => {
-    try {
-      const data = await managerSetSlotMax(req.body);
-      return res.json(data);
-    } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
-    }
-  }
-);
-
-/* ✅ EDIT TIME */
+/* ✅ EDIT MERGE SLOT TIME */
 router.post(
   "/edit-time",
   verifyToken,
@@ -154,33 +139,22 @@ router.post(
   }
 );
 
-/* ✅ LAST SLOT OPEN/CLOSE */
+/* ✅ SET MERGE SLOT MAX (per merge slot) */
 router.post(
-  "/last-slot/toggle",
+  "/set-max",
   verifyToken,
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
-      const data = await managerToggleLastSlot(req.body);
+      const data = await managerSetSlotMax(req.body);
       return res.json(data);
     } catch (err) {
       return res.status(500).json({ ok: false, error: err.message });
     }
   }
 );
-router.post(
-  "/toggle-last",
-  verifyToken,
-  allowRoles("MANAGER"),
-  async (req, res) => {
-    try {
-      const data = await managerToggleLastSlot(req.body);
-      return res.json(data);
-    } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
-    }
-  }
-);
+
+/* ✅ SET GLOBAL THRESHOLD */
 router.post(
   "/set-global-max",
   verifyToken,
@@ -188,6 +162,21 @@ router.post(
   async (req, res) => {
     try {
       const data = await managerSetGlobalMax(req.body);
+      return res.json(data);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
+
+/* ✅ LAST SLOT TOGGLE */
+router.post(
+  "/last-slot/toggle",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const data = await managerToggleLastSlot(req.body);
       return res.json(data);
     } catch (err) {
       return res.status(500).json({ ok: false, error: err.message });
