@@ -3,7 +3,6 @@
 export function haversineKm(lat1, lng1, lat2, lng2) {
   const toRad = (v) => (v * Math.PI) / 180;
   const R = 6371;
-
   const dLat = toRad(lat2 - lat1);
   const dLng = toRad(lng2 - lng1);
 
@@ -17,11 +16,19 @@ export function haversineKm(lat1, lng1, lat2, lng2) {
   return R * c;
 }
 
+function validNum(n) {
+  return Number.isFinite(n) && n !== 0;
+}
 export function resolveMergeKeyByRadius(existingMergeSlots, newLat, newLng, radiusKm = 25) {
   const latN = Number(newLat);
   const lngN = Number(newLng);
 
-  if (!Number.isFinite(latN) || !Number.isFinite(lngN) || latN === 0 || lngN === 0) {
+  if (!Number.isFinite(latN) || !Number.isFinite(lngN)) {
+    return { mergeKey: "UNKNOWN", blink: false };
+  }
+
+  // ✅ ignore (0,0)
+  if (Math.abs(latN) < 0.0001 && Math.abs(lngN) < 0.0001) {
     return { mergeKey: "UNKNOWN", blink: false };
   }
 
@@ -32,11 +39,10 @@ export function resolveMergeKeyByRadius(existingMergeSlots, newLat, newLng, radi
     const lat = Number(m.lat);
     const lng = Number(m.lng);
 
-    // ✅ ignore invalid or GEO_0 buckets
-    if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat === 0 || lng === 0) continue;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    if (Math.abs(lat) < 0.0001 && Math.abs(lng) < 0.0001) continue;
 
     const d = haversineKm(latN, lngN, lat, lng);
-
     if (d <= radiusKm && d < bestDist) {
       best = m;
       bestDist = d;
@@ -47,7 +53,6 @@ export function resolveMergeKeyByRadius(existingMergeSlots, newLat, newLng, radi
     return {
       mergeKey: `GEO_${latN.toFixed(4)}_${lngN.toFixed(4)}`,
       blink: false,
-      distanceKm: null,
     };
   }
 

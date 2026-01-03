@@ -17,6 +17,14 @@ import {
 } from "../slot/slot.service.js";
 
 const router = express.Router();
+router.post("/enable-slot", verifyToken, allowRoles("MANAGER"), async (req,res)=>{
+  try {
+    const data = await managerEnableSlot(req.body);
+    res.json(data);
+  } catch(err) {
+    res.status(500).json({ok:false,error:err.message});
+  }
+})
 
 /* ✅ GET GRID */
 router.get(

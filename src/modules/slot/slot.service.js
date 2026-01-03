@@ -161,12 +161,11 @@ export async function managerSetGlobalMax({ companyCode, maxAmount }) {
 
   return { ok: true, message: "✅ Threshold Updated", threshold: val };
 }
-
 export async function managerToggleLastSlot({ companyCode, enabled, openAfter = "17:00" }) {
   if (!companyCode) throw new Error("companyCode required");
 
   if (enabled) {
-    const nowTime = dayjs().add(5, "hour").add(30, "minute").format("HH:mm"); // ✅ IST time
+    const nowTime = dayjs().tz(TZ).format("HH:mm");  // ✅ IST based
     if (nowTime < openAfter) {
       throw new Error(`Last slot can be opened only after ${openAfter}`);
     }
@@ -183,6 +182,45 @@ export async function managerToggleLastSlot({ companyCode, enabled, openAfter = 
     enabled,
     openAfter,
   };
+}
+export async function managerEnableSlot({ companyCode, date, time, pos, vehicleType = "FULL", mergeKey }) {
+  if (!companyCode || !date || !time) throw new Error("companyCode, date, time required");
+  const pk = pkFor(companyCode, date);
+
+  if (vehicleType === "FULL") {
+    if (!pos) throw new Error("pos required");
+    const slotSk = skForSlot(time, "FULL", pos);
+
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: slotSk },
+        UpdateExpression: "SET #s = :avail REMOVE disabledAt",
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: { ":avail": "AVAILABLE" },
+      })
+    );
+
+    return { ok: true, message: "FULL enabled" };
+  }
+
+  if (vehicleType === "HALF") {
+    if (!mergeKey) throw new Error("mergeKey required");
+    const mergeSk2 = skForMergeSlot(time, mergeKey);
+
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: mergeSk2 },
+        UpdateExpression: "SET tripStatus = :s REMOVE disabledAt",
+        ExpressionAttributeValues: { ":s": "PARTIAL" },
+      })
+    );
+
+    return { ok: true, message: "MERGE enabled" };
+  }
+
+  throw new Error("Invalid vehicleType");
 }
 /* ---------------- SLOT GRID ---------------- */
 export async function getSlotGrid({ companyCode, date }) {
@@ -255,6 +293,23 @@ async function checkOrderAlreadyBooked(pk, orderId) {
       ExpressionAttributeValues: { ":pk": pk },
     })
   );
+function sanitizeLatLng(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+
+  // ✅ treat (0,0) as invalid
+  if (Math.abs(n) < 0.0001) return null;
+
+  return n;
+}
+
+// ...
+
+const safeLat = sanitizeLatLng(resolvedLat);
+const safeLng = sanitizeLatLng(resolvedLng);
+
+return { resolvedName, safeLat, safeLng };
 
   const items = res.Items || [];
   return items.some((x) => String(x.orderId || "") === String(orderId));
@@ -428,7 +483,7 @@ export async function bookSlot({
   );
 
   const existingMergeSlots = (capRes.Items || []).filter((x) =>
-    String(x.sk || "").startsWith("MERGE_SLOT#")
+    String(x.sk || "").startsWith(`MERGE_SLOT#${time}#`)
   );
 
   const geo = resolveMergeKeyByRadius(existingMergeSlots, safeLat, safeLng, MERGE_RADIUS_KM);
