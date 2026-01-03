@@ -19,7 +19,7 @@ export function haversineKm(lat1, lng1, lat2, lng2) {
 }
 
 export function resolveMergeKeyByRadius(existingMergeSlots, newLat, newLng, radiusKm = 25) {
-  if (!newLat || !newLng) {
+  if (newLat == null || newLng == null) {
     return { mergeKey: "UNKNOWN", blink: false };
   }
 

@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { ddb } from "../../config/dynamo.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { resolveMergeKeyByRadius } from "./geoMerge.helper.js";
-
+import { pairingMap } from "../../appInit.js";
 import {
   GetCommand,
   QueryCommand,
@@ -180,18 +180,24 @@ export async function getSlotGrid({ companyCode, date }) {
     return override ? { ...slot, ...override } : slot;
   });
 
-  const mergeSlots = overrides.filter((o) =>
-    String(o.sk || "").startsWith("MERGE_SLOT#")
-  );
+  const mergeSlots = overrides
+  .filter((o) => String(o.sk || "").startsWith("MERGE_SLOT#"))
+  .map((m) => ({
+    ...m,
+    blink: m.blink === true,
+    tripStatus: m.tripStatus || "PARTIAL",
+    vehicleType: "HALF",
+  }));
 
-  return {
-    slots: [...finalSlots, ...mergeSlots],
-    rules: {
-      maxAmount: rules.threshold,
-      lastSlotEnabled: rules.lastSlotEnabled,
-      lastSlotOpenAfter: rules.lastSlotOpenAfter,
-    },
-  };
+return {
+  slots: [...finalSlots, ...mergeSlots],
+  rules: {
+    maxAmount: rules.threshold,
+    lastSlotEnabled: rules.lastSlotEnabled,
+    lastSlotOpenAfter: rules.lastSlotOpenAfter,
+  },
+};
+
 }
 
 /* ---------------- ORDERID DUPLICATE CHECK ---------------- */
@@ -285,7 +291,9 @@ export async function bookSlot({
                 pos,
                 userId: uid,
                 distributorCode,
-                distributorName: distributorName || null,
+                distributorName: resolvedName,
+                lat: safeLat,
+                lng: safeLng,
                 amount: amt,
                 orderId,
                 status: "CONFIRMED",
@@ -311,8 +319,39 @@ export async function bookSlot({
   }
 
   /* ✅ HALF (GEO MERGE) */
-  const newLat = Number(lat);
-  const newLng = Number(lng);
+/* ✅ HALF (GEO MERGE) */
+
+// ✅ Find distributor from pairingMap using distributorCode
+let distributor = null;
+
+for (const bucket of Object.keys(pairingMap || {})) {
+  const list = pairingMap[bucket] || [];
+  const found = list.find(
+    (d) =>
+      String(d.distributorCode || "")
+        .trim()
+        .toUpperCase() === String(distributorCode).trim().toUpperCase()
+  );
+  if (found) {
+    distributor = found;
+    break;
+  }
+}
+
+// ✅ lat/lng from excel
+const newLat = Number(distributor?.lat);
+const newLng = Number(distributor?.lng);
+
+// ✅ name from excel
+const resolvedName =
+  distributor?.agencyName ||
+  distributor?.["Agency Name"] ||
+  distributorName ||
+  null;
+
+// ✅ if lat/lng missing => no geo merge (UNKNOWN)
+const safeLat = Number.isFinite(newLat) ? newLat : null;
+const safeLng = Number.isFinite(newLng) ? newLng : null;
 
   // ✅ fetch existing merge slots (this date)
   const capRes = await ddb.send(
@@ -328,7 +367,13 @@ export async function bookSlot({
   );
 
   // ✅ resolve mergeKey by 25KM
-  const geo = resolveMergeKeyByRadius(existingMergeSlots, newLat, newLng, MERGE_RADIUS_KM);
+  const geo = resolveMergeKeyByRadius(
+  existingMergeSlots,
+  safeLat,
+  safeLng,
+  MERGE_RADIUS_KM
+);
+
   const mergeKey = geo.mergeKey;
   const blink = geo.blink;
 
@@ -368,11 +413,11 @@ export async function bookSlot({
               vehicleType: "HALF",
               userId: uid,
               distributorCode,
-              distributorName: distributorName || null,
+              distributorName: resolvedName,
               mergeKey,
               amount: amt,
-              lat: newLat || null,
-              lng: newLng || null,
+              lat: safeLat,
+              lng: safeLng,
               orderId,
               status: "PENDING_MANAGER_CONFIRM",
               createdAt: new Date().toISOString(),
@@ -435,9 +480,9 @@ export async function bookSlot({
     blink,
     status: "PENDING_MANAGER_CONFIRM",
     userId: uid,
-    lat: newLat || null,
-    lng: newLng || null,
-    distributorName: distributorName || null,
+    lat: safeLat,
+    lng: safeLng,
+    distributorName: resolvedName,
   };
 }
 
@@ -479,6 +524,37 @@ export async function managerConfirmMerge({ companyCode, date, time, mergeKey, m
       },
     })
   );
+// ✅ CONFIRM all HALF bookings under this mergeKey + time
+const allBookingsRes = await ddb.send(
+  new QueryCommand({
+    TableName: TABLE_BOOKINGS,
+    KeyConditionExpression: "pk = :pk",
+    ExpressionAttributeValues: { ":pk": pk },
+  })
+);
+
+const bookings = (allBookingsRes.Items || []).filter(
+  (b) =>
+    String(b.mergeKey || "") === String(mergeKey) &&
+    String(b.slotTime || "") === String(time) &&
+    String(b.vehicleType || "").toUpperCase() === "HALF"
+);
+
+for (const b of bookings) {
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_BOOKINGS,
+      Key: { pk, sk: b.sk },
+      UpdateExpression: "SET #s = :c, confirmedAt = :t, confirmedBy = :m",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: {
+        ":c": "CONFIRMED",
+        ":t": new Date().toISOString(),
+        ":m": String(managerId || "MANAGER"),
+      },
+    })
+  );
+}
 
   return { ok: true, mergeKey, totalAmount: total, status: "CONFIRMED" };
 }

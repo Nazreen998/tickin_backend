@@ -7,8 +7,23 @@ let pairingMap = {};
 let productsList = [];
 
 /* ---------------- PAIRING MAP LOAD ---------------- */
+function extractLatLngFromFinalUrl(url) {
+  if (!url) return { lat: null, lng: null };
+
+  // case1: /place/9.849421,78.086520/
+  const m1 = url.match(/\/place\/(-?\d+\.\d+),\s*(-?\d+\.\d+)/);
+  if (m1) return { lat: Number(m1[1]), lng: Number(m1[2]) };
+
+  // case2: /@9.849421,78.086520,17z
+  const m2 = url.match(/@(-?\d+\.\d+),\s*(-?\d+\.\d+)/);
+  if (m2) return { lat: Number(m2[1]), lng: Number(m2[2]) };
+
+  return { lat: null, lng: null };
+}
+
 try {
-  const pairingPath = process.env.PAIRING_EXCEL_PATH || "./data/location.xlsx";
+  const pairingPath =
+    process.env.PAIRING_EXCEL_PATH || "./data/distributor_location.xlsx";
   const resolvedPairingPath = path.resolve(pairingPath);
 
   if (!fs.existsSync(resolvedPairingPath)) {
@@ -16,11 +31,47 @@ try {
     pairingMap = {};
   } else {
     console.log("✅ pairingMap excel found:", resolvedPairingPath);
+
+    // ✅ get map
     pairingMap = loadDistributorPairingMap(resolvedPairingPath);
+
+    // ✅ Inject lat/lng from final_url for each distributor row
+    for (const locKey of Object.keys(pairingMap || {})) {
+      const list = pairingMap[locKey] || [];
+
+      pairingMap[locKey] = list.map((row) => {
+        const finalUrl =
+          row.final_url ||
+          row.finalUrl ||
+          row["final_url"] ||
+          row["Final Url"] ||
+          row["final url"];
+
+        const { lat, lng } = extractLatLngFromFinalUrl(finalUrl);
+
+        return {
+          ...row,
+          agencyName:
+            row.agencyName || row["Agency Name"] || row["agencyName"] || null,
+          distributorCode:
+            row.distributorCode || row["distributorCode"] || row["Distributor Code"],
+          locationBucket: String(row.Location || row.location || locKey || "UNKNOWN"),
+          finalUrl: finalUrl || null,
+          lat,
+          lng,
+        };
+      });
+    }
 
     const keys = Object.keys(pairingMap || {});
     console.log("✅ pairingMap loaded locations:", keys.length);
     if (keys.length > 0) console.log("📌 Sample locations:", keys.slice(0, 5));
+
+    // ✅ log one sample distributor
+    const firstKey = keys[0];
+    if (firstKey && pairingMap[firstKey]?.length) {
+      console.log("📌 Sample distributor row:", pairingMap[firstKey][0]);
+    }
   }
 } catch (err) {
   console.error("❌ pairingMap load failed:", err.message);
