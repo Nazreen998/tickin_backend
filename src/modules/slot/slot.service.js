@@ -14,6 +14,14 @@ import {
   DeleteCommand,
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
+import utc from "dayjs/plugin/utc.js";
+import timezone from "dayjs/plugin/timezone.js";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const IST_TZ = process.env.APP_TZ || "Asia/Kolkata";
+
 
 const TABLE_CAPACITY = "tickin_slot_capacity";
 const TABLE_BOOKINGS = "tickin_slot_bookings";
@@ -158,7 +166,7 @@ export async function managerToggleLastSlot({ companyCode, enabled, openAfter = 
   if (!companyCode) throw new Error("companyCode required");
 
   if (enabled) {
-    const nowTime = dayjs().format("HH:mm");
+    const nowTime = dayjs().tz(IST_TZ).format("HH:mm"); // ✅ IST time
     if (nowTime < openAfter) {
       throw new Error(`Last slot can be opened only after ${openAfter}`);
     }
@@ -176,7 +184,6 @@ export async function managerToggleLastSlot({ companyCode, enabled, openAfter = 
     openAfter,
   };
 }
-
 /* ---------------- SLOT GRID ---------------- */
 export async function getSlotGrid({ companyCode, date }) {
   validateSlotDate(date);
