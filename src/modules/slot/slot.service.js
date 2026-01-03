@@ -166,7 +166,7 @@ export async function managerToggleLastSlot({ companyCode, enabled, openAfter = 
   if (!companyCode) throw new Error("companyCode required");
 
   if (enabled) {
-    const nowTime = dayjs().tz(IST_TZ).format("HH:mm"); // ✅ IST time
+    const nowTime = dayjs().add(5, "hour").add(30, "minute").format("HH:mm"); // ✅ IST time
     if (nowTime < openAfter) {
       throw new Error(`Last slot can be opened only after ${openAfter}`);
     }
