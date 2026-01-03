@@ -53,15 +53,26 @@ function findDistributorFromPairingMap(code) {
 function extractLatLngFromFinalUrl(url) {
   if (!url) return { lat: null, lng: null };
 
-  const m1 = url.match(/\/place\/(-?\d+\.\d+),\s*(-?\d+\.\d+)/);
-  if (m1) return { lat: Number(m1[1]), lng: Number(m1[2]) };
+  const clean = String(url).trim();
 
-  const m2 = url.match(/@(-?\d+\.\d+),\s*(-?\d+\.\d+)/);
-  if (m2) return { lat: Number(m2[1]), lng: Number(m2[2]) };
+  // case1: /place/9.849421,78.086520/
+  const m1 = clean.match(/\/place\/(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)/);
+  if (m1) return { lat: Number(m1[1]), lng: Number(m1[3]) };
+
+  // case2: /@9.849421,78.086520,17z
+  const m2 = clean.match(/@(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)/);
+  if (m2) return { lat: Number(m2[1]), lng: Number(m2[3]) };
+
+  // ✅ case3: !3d9.94511!4d78.17485  (THIS IS YOUR URL FORMAT)
+  const m3 = clean.match(/!3d(-?\d+(\.\d+)?)!4d(-?\d+(\.\d+)?)/);
+  if (m3) return { lat: Number(m3[1]), lng: Number(m3[3]) };
+
+  // ✅ optional: q=lat,lng
+  const m4 = clean.match(/[?&]q=(-?\d+(\.\d+)?),(-?\d+(\.\d+)?)/);
+  if (m4) return { lat: Number(m4[1]), lng: Number(m4[3]) };
 
   return { lat: null, lng: null };
 }
-
 /* ---------------- DATE VALIDATION ---------------- */
 function validateSlotDate(date) {
   if (!date) throw new Error("date required");
