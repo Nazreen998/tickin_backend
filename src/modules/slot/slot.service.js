@@ -399,21 +399,6 @@ export async function bookSlot({
     const bookingSk = skForBooking(time, "FULL", pos, uid);
     const bookingId = uuidv4();
 
-// ✅ sanitize lat/lng (NO Number(null) -> 0 issue)
-const safeLat =
-  resolvedLat === null || resolvedLat === undefined
-    ? null
-    : Number.isFinite(Number(resolvedLat))
-    ? Number(resolvedLat)
-    : null;
-
-const safeLng =
-  resolvedLng === null || resolvedLng === undefined
-    ? null
-    : Number.isFinite(Number(resolvedLng))
-    ? Number(resolvedLng)
-    : null;
-
     await ddb.send(
       new TransactWriteCommand({
         TransactItems: [
@@ -463,7 +448,7 @@ const safeLng =
         event: "SLOT_BOOKED_FULL",
         by: uid,
         role: "BOOKING",
-        data: { vehicleType: "FULL", time, pos, distributorCode, distributorName: resolvedName },
+        data: { vehicleType: "FULL", time, pos, distributorCode, distributorName: resolvedName,lat: safeLat,lng: safeLng, },
       });
     }
 
