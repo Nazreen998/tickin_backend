@@ -82,7 +82,7 @@ router.post(
 router.post(
   "/create",
   verifyToken,
-  allowRoles("MANAGER", "SALES OFFICER"),
+  allowRoles("MANAGER", "SALES OFFICER", "SALES OFFICER_VNR"),
   createOrder
 );
 
@@ -90,7 +90,7 @@ router.post(
 router.patch(
   "/update/:orderId",
   verifyToken,
-  allowRoles("SALES OFFICER", "MANAGER", "MASTER"),
+  allowRoles("SALES OFFICER", "MANAGER", "SALES OFFICER_VNR"),
   updateOrderItems
 );
 
@@ -106,7 +106,7 @@ router.post(
 router.get(
   "/my",
   verifyToken,
-  allowRoles("SALES OFFICER", "SALESMAN", "DISTRIBUTOR"),
+  allowRoles("SALES OFFICER", "SALESMAN", "DISTRIBUTOR", "SALES OFFICER_VNR"),
   async (req, res) => {
     try {
       const user = req.user;
@@ -166,7 +166,7 @@ router.get(
 router.get(
   "/:orderId",
   verifyToken,
-  allowRoles("SALES OFFICER", "DISTRIBUTOR", "MANAGER", "MASTER"),
+  allowRoles("SALES OFFICER", "DISTRIBUTOR", "MANAGER", "SALES OFFICER_VNR"),
   getOrderById
 );
 

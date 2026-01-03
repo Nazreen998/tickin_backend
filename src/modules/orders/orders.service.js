@@ -94,7 +94,7 @@ export const createOrder = async (req, res) => {
       !(
         role === "SALES OFFICER" ||
         role === "SALES_OFFICER" ||
-        role === "MANAGER"
+         role === "SALES OFFICER_VNR" 
       )
     ) {
       return res.status(403).json({ message: "Access denied" });

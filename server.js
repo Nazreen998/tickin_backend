@@ -24,6 +24,8 @@ import tripsRoutes from "./src/modules/trips/trips.routes.js";
 import driverRoutes from "./src/routes/driver.routes.js";
 import goalsRoutes from "./src/routes/goals.routes.js";
 import distributorRoutes from "./src/modules/distributors/distributors.routes.js";
+import vehiclesRoutes from "./src/routes/vehicles.routes.js";
+
 
 // ✅ FIXED ✅
 // Import ManagerOrdersFlow as router
@@ -95,6 +97,7 @@ app.use("/api/driver", driverRoutes);
 app.use("/trips", tripsRoutes);
 app.use("/goals", goalsRoutes);
 app.use("/api/distributors", distributorRoutes);
+app.use("/vehicles", vehiclesRoutes);
 
 /**
  * ✅ Manager Orders Flow Route ✅
