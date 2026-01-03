@@ -279,11 +279,19 @@ async function resolveDistributorDetails({ distributorCode, distributorName, lat
   }
 
   // sanitize
-  resolvedLat = Number(resolvedLat);
-  resolvedLng = Number(resolvedLng);
+  const safeLat =
+  resolvedLat === null || resolvedLat === undefined
+    ? null
+    : Number.isFinite(Number(resolvedLat))
+    ? Number(resolvedLat)
+    : null;
 
-  const safeLat = Number.isFinite(resolvedLat) ? resolvedLat : null;
-  const safeLng = Number.isFinite(resolvedLng) ? resolvedLng : null;
+const safeLng =
+  resolvedLng === null || resolvedLng === undefined
+    ? null
+    : Number.isFinite(Number(resolvedLng))
+    ? Number(resolvedLng)
+    : null;
 
   return { resolvedName, safeLat, safeLng };
 }
