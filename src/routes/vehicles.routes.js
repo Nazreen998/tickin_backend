@@ -9,7 +9,7 @@ const router = express.Router();
 router.get(
   "/available",
   verifyToken,
-  allowRoles("MANAGER"),
+  allowRoles("MANAGER", "MASTER"),
   getAvailableVehicles
 );
 

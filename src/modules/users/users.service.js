@@ -1,18 +1,17 @@
-import { UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "../../config/dynamo.js";
 import { ScanCommand } from "@aws-sdk/lib-dynamodb";
 
 const USERS_TABLE = process.env.USERS_TABLE || "tickin_users";
 
-// ✅ GET DRIVERS
+// ✅ GET DRIVER USERS
 export const getDrivers = async (req, res) => {
   try {
     const result = await ddb.send(
       new ScanCommand({
         TableName: USERS_TABLE,
-        FilterExpression: "#r = :driverRole",
+        FilterExpression: "contains(#r, :driver)",
         ExpressionAttributeNames: { "#r": "role" },
-        ExpressionAttributeValues: { ":driverRole": "DRIVER" },
+        ExpressionAttributeValues: { ":driver": "DRIVER" },
       })
     );
 
@@ -30,35 +29,8 @@ export const getDrivers = async (req, res) => {
 };
 export const assignCompany = async (req, res) => {
   try {
-    const { mobile, companyId } = req.body;
-
-    if (!mobile || !companyId) {
-      return res.status(400).json({
-        message: "mobile and companyId required",
-      });
-    }
-
-    await ddb.send(
-      new UpdateCommand({
-        TableName: "tickin_users",
-        Key: {
-          pk: `USER#${mobile}`,
-          sk: "PROFILE",
-        },
-        UpdateExpression: "SET companyId = :c",
-        ExpressionAttributeValues: {
-          ":c": companyId,
-        },
-      })
-    );
-
-    res.json({
-      message: "Company assigned successfully",
-      mobile,
-      companyId,
-    });
+    return res.json({ ok: true, message: "assignCompany not implemented yet" });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error", error: err.message });
+    return res.status(500).json({ ok: false, message: err.message });
   }
 };

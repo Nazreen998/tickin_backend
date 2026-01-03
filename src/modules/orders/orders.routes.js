@@ -15,12 +15,12 @@ import {
   getOrderById,
   confirmDraftOrder,
   deleteOrder,
+  getSlotConfirmedOrders
 } from "./orders.service.js";
 
 import {
   vehicleSelected,
   loadingStart,
-  loadingItem,
   loadingEnd,
   assignDriverToOrder,
 } from "./orders.flow.service.js";
@@ -30,6 +30,13 @@ const router = express.Router();
 /* ===========================
    MASTER / MANAGER ROUTES
 =========================== */
+// ✅ Slot confirmed orders (Manager only flow)
+router.get(
+  "/slot-confirmed",
+  verifyToken,
+  allowRoles("MANAGER"),
+  getSlotConfirmedOrders
+);
 
 // ✅ MASTER pending orders
 router.get(
@@ -188,14 +195,6 @@ router.post(
   verifyToken,
   allowRoles("MANAGER", "MASTER"),
   loadingStart
-);
-
-// ✅ Loading add item
-router.post(
-  "/loading-item",
-  verifyToken,
-  allowRoles("MANAGER", "MASTER"),
-  loadingItem
 );
 
 // ✅ Loading end

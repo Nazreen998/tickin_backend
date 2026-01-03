@@ -5,18 +5,54 @@ import {
   GetCommand,
 } from "@aws-sdk/lib-dynamodb";
 
-import { ddb } from "../../config/dynamo.js";
+import crypto from "crypto";
 import { v4 as uuidv4 } from "uuid";
-import { pairingMap } from "../../appInit.js";
+
+import { ddb } from "../../config/dynamo.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
-const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 
-// ✅ NEW IMPORTS (product-wise)
 import {
   deductDistributorMonthlyGoalProductWise,
   addBackDistributorMonthlyGoalProductWise,
 } from "../../services/goals.service.js";
+
+const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
+const TRIPS_TABLE = process.env.TRIPS_TABLE || "tickin_trips";
+
+export const getSlotConfirmedOrders = async (req, res) => {
+  try {
+    const result = await ddb.send(
+      new ScanCommand({
+        TableName: ORDERS_TABLE,
+        FilterExpression: "#sk = :meta AND #st = :c AND slotBooked = :sb",
+        ExpressionAttributeNames: {
+          "#sk": "sk",
+          "#st": "status",
+        },
+        ExpressionAttributeValues: {
+          ":meta": "META",
+          ":c": "CONFIRMED",
+          ":sb": true,
+        },
+      })
+    );
+
+    const orders = (result.Items || []).map((o) => ({
+      orderId: String(o.pk || "").replace("ORDER#", ""),
+      status: o.status,
+      slotBooked: !!o.slotBooked,
+      slot: o.slot || null,
+      grandAmount: o.totalAmount ?? o.grandTotal ?? o.grandAmount ?? 0,
+      totalQty: o.totalQty ?? 0,
+      items: o.items ?? [],
+    }));
+
+    return res.json({ ok: true, count: orders.length, orders });
+  } catch (err) {
+    return res.status(500).json({ ok: false, message: err.message });
+  }
+};
 
 /* ==========================
    ✅ Confirm Draft Order
@@ -94,6 +130,7 @@ export const createOrder = async (req, res) => {
       !(
         role === "SALES OFFICER" ||
         role === "SALES_OFFICER" ||
+        role === "MANAGER" ||
          role === "SALES OFFICER_VNR" 
       )
     ) {
@@ -372,7 +409,7 @@ export const confirmOrder = async (req, res) => {
     // ✅ 1) Get order
     const orderRes = await ddb.send(
       new GetCommand({
-        TableName: "tickin_orders",
+        TableName: ORDERS_TABLE,
         Key: { pk: `ORDER#${orderId}`, sk: "META" },
       })
     );
@@ -382,44 +419,37 @@ export const confirmOrder = async (req, res) => {
     }
 
     const order = orderRes.Item;
-    const role = (user.role || "").toUpperCase();
+    const role = String(user.role || "").trim().toUpperCase();
 
-    // ✅ Sales Officer + Manager can confirm
-    if (
-      !(
-        role === "SALES OFFICER" ||
-        role === "SALES_OFFICER" ||
-        role === "MANAGER"
-      )
-    ) {
-      return res.status(403).json({ message: "Access denied" });
+    // ✅ Only MANAGER can confirm (as you requested)
+    if (role !== "MANAGER") {
+      return res.status(403).json({ message: "Access denied (MANAGER only)" });
     }
 
     // ✅ Only PENDING orders can be confirmed
-    if (order.status !== "PENDING") {
+    if (String(order.status || "") !== "PENDING") {
       return res.status(403).json({
         message: `Only PENDING orders can be confirmed. Current status: ${order.status}`,
       });
     }
 
-    // ✅ 2) Confirm Order (NO GOAL DEDUCTION HERE)
+    // ✅ 2) Confirm Order status => CONFIRMED, slotBooked false initially
     await ddb.send(
       new UpdateCommand({
-        TableName: "tickin_orders",
+        TableName: ORDERS_TABLE,
         Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression: "SET #st = :c, confirmedBy = :u, confirmedAt = :t",
-        ExpressionAttributeNames: {
-          "#st": "status",
-        },
+        UpdateExpression:
+          "SET #st = :c, confirmedBy = :u, confirmedAt = :t, slotBooked = :sb",
+        ExpressionAttributeNames: { "#st": "status" },
         ExpressionAttributeValues: {
           ":c": "CONFIRMED",
           ":u": user.mobile,
           ":t": new Date().toISOString(),
+          ":sb": false,
         },
       })
     );
 
-    // ✅ timeline event
     await addTimelineEvent({
       orderId,
       event: "ORDER_CONFIRMED",
@@ -427,34 +457,92 @@ export const confirmOrder = async (req, res) => {
       extra: { role: user.role, note: "Order confirmed" },
     });
 
+    // ✅ 3) Slot booking (if slot data provided)
     let slotBooked = false;
+    let slotDetails = null;
 
-    if (slot?.date && slot?.time && slot?.vehicleType && slot?.pos) {
-      await bookSlot({
+    if (slot?.date && slot?.time && slot?.pos) {
+      const amount = order.totalAmount || order.grandTotal || 0;
+
+      const booked = await bookSlot({
         companyCode,
         date: slot.date,
         time: slot.time,
-        vehicleType: slot.vehicleType,
         pos: slot.pos,
         userId: user.mobile,
-
         distributorCode: order.distributorId,
-
-        amount: order.totalAmount || order.grandTotal || 0,
+        distributorName: order.distributorName,
+        amount,
         orderId,
-
-        requesterRole: role,
-        requesterDistributorCode: user.distributorCode || user.distributorId || null,
       });
 
       slotBooked = true;
+      slotDetails = {
+        companyCode,
+        date: slot.date,
+        time: slot.time,
+        pos: slot.pos,
+        vehicleType: booked?.type || null,
+        bookingId: booked?.bookingId || null,
+        ...booked,
+      };
+
+      // ✅ Store slot + slotBooked in order
+      await ddb.send(
+        new UpdateCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${orderId}`, sk: "META" },
+          UpdateExpression: "SET slotBooked = :sb, slot = :slot",
+          ExpressionAttributeValues: {
+            ":sb": true,
+            ":slot": slotDetails,
+          },
+        })
+      );
+
+      // ✅ Create trip record (tickin_trips)
+      const tripId = "TRP" + crypto.randomBytes(4).toString("hex").toUpperCase();
+
+      await ddb.send(
+        new PutCommand({
+          TableName: TRIPS_TABLE,
+          Item: {
+            pk: `TRIP#${tripId}`,
+            sk: "META",
+            tripId,
+            orderId,
+            distributorId: order.distributorId || null,
+            distributorName: order.distributorName || null,
+            items: order.items || [],
+            totalAmount: order.totalAmount || 0,
+            totalQty: order.totalQty || 0,
+            slot: slotDetails,
+            status: "TRIP_CREATED",
+            createdAt: new Date().toISOString(),
+            createdBy: user.mobile,
+            createdRole: user.role,
+          },
+        })
+      );
+
+      // ✅ save tripId in order
+      await ddb.send(
+        new UpdateCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${orderId}`, sk: "META" },
+          UpdateExpression: "SET tripId = :tid",
+          ExpressionAttributeValues: { ":tid": tripId },
+        })
+      );
     }
 
     return res.json({
+      ok: true,
       message: "✅ Order confirmed successfully",
       orderId,
       status: "CONFIRMED",
       slotBooked,
+      slot: slotDetails,
     });
   } catch (err) {
     console.error(err);
