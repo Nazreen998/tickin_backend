@@ -98,4 +98,5 @@ try {
   productsList = [];
 }
 
-export { pairingMap, productsList };
+export { pairingMap, productsList, extractLatLngFromFinalUrl };
+

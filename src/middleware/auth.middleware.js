@@ -4,9 +4,14 @@ import { QueryCommand } from "@aws-sdk/lib-dynamodb";
 
 async function attachAllowedDistributors(decoded) {
   try {
-const role = String(decoded?.role || "").trim().toUpperCase();
+    const role = String(decoded?.role || "").trim().toUpperCase();
+
     const isSales =
-      role === "SALES OFFICER" || role === "SALESMAN" || role === "DISTRIBUTOR" || role === "SALES_OFFICER"|| role === "SALES_OFFICE";
+      role === "SALES OFFICER" ||
+      role === "SALESMAN" ||
+      role === "DISTRIBUTOR" ||
+      role === "SALES_OFFICER" ||
+      role === "SALES_OFFICE";
 
     if (!isSales) return decoded;
 
@@ -35,7 +40,6 @@ const role = String(decoded?.role || "").trim().toUpperCase();
 
     const items = res.Items || [];
 
-    // allowed distributors list
     const allowed = items
       .map((x) => String(x?.distributorCode || "").trim())
       .filter(Boolean);
@@ -43,8 +47,6 @@ const role = String(decoded?.role || "").trim().toUpperCase();
     if (allowed.length > 0) {
       decoded.allowedDistributors = allowed;
 
-      // ✅ also keep one distributorCode for backward compatibility
-      // (first one as default)
       if (!decoded.distributorCode) {
         decoded.distributorCode = allowed[0];
       }
@@ -52,7 +54,6 @@ const role = String(decoded?.role || "").trim().toUpperCase();
 
     return decoded;
   } catch (e) {
-    // do not block auth
     return decoded;
   }
 }
@@ -67,7 +68,6 @@ export const verifyToken = async (req, res, next) => {
     const token = authHeader.split(" ")[1];
     let decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // ✅ attach allowed distributors for Sales Officer/Salesman
     decoded = await attachAllowedDistributors(decoded);
 
     req.user = decoded;
@@ -77,5 +77,4 @@ export const verifyToken = async (req, res, next) => {
   }
 };
 
-// ✅ alias
 export const requireAuth = verifyToken;

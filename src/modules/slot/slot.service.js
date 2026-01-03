@@ -4,6 +4,8 @@ import { ddb } from "../../config/dynamo.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { resolveMergeKeyByRadius } from "./geoMerge.helper.js";
 import { pairingMap } from "../../appInit.js";
+import { getDistributorByCode } from "../distributors/distributors.service.js";
+
 import {
   GetCommand,
   QueryCommand,
@@ -25,6 +27,19 @@ const DEFAULT_THRESHOLD = Number(process.env.DEFAULT_MAX_AMOUNT || 80000);
 const MERGE_RADIUS_KM = Number(process.env.MERGE_RADIUS_KM || 25);
 
 const LAST_SLOT_TIME = "20:00";
+
+/* ✅ LOCAL URL LAT/LNG EXTRACTOR */
+function extractLatLngFromFinalUrl(url) {
+  if (!url) return { lat: null, lng: null };
+
+  const m1 = url.match(/\/place\/(-?\d+\.\d+),\s*(-?\d+\.\d+)/);
+  if (m1) return { lat: Number(m1[1]), lng: Number(m1[2]) };
+
+  const m2 = url.match(/@(-?\d+\.\d+),\s*(-?\d+\.\d+)/);
+  if (m2) return { lat: Number(m2[1]), lng: Number(m2[2]) };
+
+  return { lat: null, lng: null };
+}
 
 /* ---------------- DATE VALIDATION ---------------- */
 function validateSlotDate(date) {
@@ -181,23 +196,22 @@ export async function getSlotGrid({ companyCode, date }) {
   });
 
   const mergeSlots = overrides
-  .filter((o) => String(o.sk || "").startsWith("MERGE_SLOT#"))
-  .map((m) => ({
-    ...m,
-    blink: m.blink === true,
-    tripStatus: m.tripStatus || "PARTIAL",
-    vehicleType: "HALF",
-  }));
+    .filter((o) => String(o.sk || "").startsWith("MERGE_SLOT#"))
+    .map((m) => ({
+      ...m,
+      blink: m.blink === true,
+      tripStatus: m.tripStatus || "PARTIAL",
+      vehicleType: "HALF",
+    }));
 
-return {
-  slots: [...finalSlots, ...mergeSlots],
-  rules: {
-    maxAmount: rules.threshold,
-    lastSlotEnabled: rules.lastSlotEnabled,
-    lastSlotOpenAfter: rules.lastSlotOpenAfter,
-  },
-};
-
+  return {
+    slots: [...finalSlots, ...mergeSlots],
+    rules: {
+      maxAmount: rules.threshold,
+      lastSlotEnabled: rules.lastSlotEnabled,
+      lastSlotOpenAfter: rules.lastSlotOpenAfter,
+    },
+  };
 }
 
 /* ---------------- ORDERID DUPLICATE CHECK ---------------- */
@@ -214,6 +228,64 @@ async function checkOrderAlreadyBooked(pk, orderId) {
 
   const items = res.Items || [];
   return items.some((x) => String(x.orderId || "") === String(orderId));
+}
+
+/* ✅✅ NEW: COMMON RESOLVER (FULL + HALF) */
+async function resolveDistributorDetails({ distributorCode, distributorName, lat, lng }) {
+  let resolvedName = distributorName || null;
+  let resolvedLat = lat ?? null;
+  let resolvedLng = lng ?? null;
+
+  // 1) Excel pairingMap first (if exists)
+  let distributor = null;
+  for (const bucket of Object.keys(pairingMap || {})) {
+    const list = pairingMap[bucket] || [];
+    const found = list.find(
+      (d) =>
+        String(d.distributorCode || "")
+          .trim()
+          .toUpperCase() === String(distributorCode).trim().toUpperCase()
+    );
+    if (found) {
+      distributor = found;
+      break;
+    }
+  }
+
+  if (distributor) {
+    if (!resolvedName)
+      resolvedName =
+        distributor.agencyName || distributor["Agency Name"] || distributorName || null;
+
+    if (resolvedLat == null) resolvedLat = distributor.lat;
+    if (resolvedLng == null) resolvedLng = distributor.lng;
+  }
+
+  // 2) Dynamo distributor fallback
+  if (resolvedLat == null || resolvedLng == null || !resolvedName) {
+    try {
+      const dist = await getDistributorByCode(distributorCode);
+
+      if (!resolvedName) resolvedName = dist.agencyName || dist["Agency Name"] || null;
+
+      if (resolvedLat == null || resolvedLng == null) {
+        const url = dist.final_url || dist.finalUrl || dist.finalURL;
+        const parsed = extractLatLngFromFinalUrl(url);
+
+        if (resolvedLat == null) resolvedLat = parsed.lat;
+        if (resolvedLng == null) resolvedLng = parsed.lng;
+      }
+    } catch (_) {}
+  }
+
+  // sanitize
+  resolvedLat = Number(resolvedLat);
+  resolvedLng = Number(resolvedLng);
+
+  const safeLat = Number.isFinite(resolvedLat) ? resolvedLat : null;
+  const safeLng = Number.isFinite(resolvedLng) ? resolvedLng : null;
+
+  return { resolvedName, safeLat, safeLng };
 }
 
 /* ---------------- BOOK SLOT ---------------- */
@@ -238,7 +310,6 @@ export async function bookSlot({
 
   const pk = pkFor(companyCode, date);
 
-  // ✅ prevent same orderId booking again
   const already = await checkOrderAlreadyBooked(pk, orderId);
   if (already) throw new Error("❌ This Order already booked a slot");
 
@@ -247,6 +318,14 @@ export async function bookSlot({
 
   const uid = userId ? String(userId).trim() : uuidv4();
   const amt = Number(amount || 0);
+
+  // ✅ Resolve lat/lng + name before FULL + HALF
+  const { resolvedName, safeLat, safeLng } = await resolveDistributorDetails({
+    distributorCode,
+    distributorName,
+    lat,
+    lng,
+  });
 
   const vehicleType = amt >= threshold ? "FULL" : "HALF";
 
@@ -311,49 +390,26 @@ export async function bookSlot({
         event: "SLOT_BOOKED_FULL",
         by: uid,
         role: "BOOKING",
-        data: { vehicleType: "FULL", time, pos, distributorCode, distributorName },
+        data: { vehicleType: "FULL", time, pos, distributorCode, distributorName: resolvedName },
       });
     }
 
-    return { ok: true, bookingId, type: "FULL", userId: uid };
+    return {
+      ok: true,
+      bookingId,
+      type: "FULL",
+      userId: uid,
+      distributorName: resolvedName,
+      lat: safeLat,
+      lng: safeLng,
+    };
   }
 
   /* ✅ HALF (GEO MERGE) */
-/* ✅ HALF (GEO MERGE) */
-
-// ✅ Find distributor from pairingMap using distributorCode
-let distributor = null;
-
-for (const bucket of Object.keys(pairingMap || {})) {
-  const list = pairingMap[bucket] || [];
-  const found = list.find(
-    (d) =>
-      String(d.distributorCode || "")
-        .trim()
-        .toUpperCase() === String(distributorCode).trim().toUpperCase()
-  );
-  if (found) {
-    distributor = found;
-    break;
+  if (safeLat == null || safeLng == null) {
+    throw new Error("❌ lat/lng missing. Distributor final_url not available");
   }
-}
 
-// ✅ lat/lng from excel
-const newLat = Number(distributor?.lat);
-const newLng = Number(distributor?.lng);
-
-// ✅ name from excel
-const resolvedName =
-  distributor?.agencyName ||
-  distributor?.["Agency Name"] ||
-  distributorName ||
-  null;
-
-// ✅ if lat/lng missing => no geo merge (UNKNOWN)
-const safeLat = Number.isFinite(newLat) ? newLat : null;
-const safeLng = Number.isFinite(newLng) ? newLng : null;
-
-  // ✅ fetch existing merge slots (this date)
   const capRes = await ddb.send(
     new QueryCommand({
       TableName: TABLE_CAPACITY,
@@ -366,13 +422,7 @@ const safeLng = Number.isFinite(newLng) ? newLng : null;
     String(x.sk || "").startsWith("MERGE_SLOT#")
   );
 
-  // ✅ resolve mergeKey by 25KM
-  const geo = resolveMergeKeyByRadius(
-  existingMergeSlots,
-  safeLat,
-  safeLng,
-  MERGE_RADIUS_KM
-);
+  const geo = resolveMergeKeyByRadius(existingMergeSlots, safeLat, safeLng, MERGE_RADIUS_KM);
 
   const mergeKey = geo.mergeKey;
   const blink = geo.blink;
@@ -395,8 +445,8 @@ const safeLng = Number.isFinite(newLng) ? newLng : null;
               ":z": 0,
               ":a": amt,
               ":mk": mergeKey,
-              ":lat": newLat || null,
-              ":lng": newLng || null,
+              ":lat": safeLat,
+              ":lng": safeLng,
               ":b": Boolean(blink),
               ":u": new Date().toISOString(),
             },
@@ -428,7 +478,6 @@ const safeLng = Number.isFinite(newLng) ? newLng : null;
     })
   );
 
-  // ✅ update tripStatus
   const updated = await ddb.send(
     new GetCommand({
       TableName: TABLE_CAPACITY,
@@ -459,9 +508,9 @@ const safeLng = Number.isFinite(newLng) ? newLng : null;
         time,
         mergeKey,
         distributorCode,
-        distributorName,
-        lat: newLat || null,
-        lng: newLng || null,
+        distributorName: resolvedName,
+        lat: safeLat,
+        lng: safeLng,
         tripStatus,
         amount: amt,
         totalAmount: finalTotal,
@@ -489,6 +538,7 @@ const safeLng = Number.isFinite(newLng) ? newLng : null;
 /* ---------------- MANAGER CONFIRM MERGE ---------------- */
 export async function managerConfirmMerge({ companyCode, date, time, mergeKey, managerId }) {
   validateSlotDate(date);
+
   if (!companyCode || !date || !time || !mergeKey) {
     throw new Error("companyCode, date, time, mergeKey required");
   }
@@ -524,46 +574,47 @@ export async function managerConfirmMerge({ companyCode, date, time, mergeKey, m
       },
     })
   );
-// ✅ CONFIRM all HALF bookings under this mergeKey + time
-const allBookingsRes = await ddb.send(
-  new QueryCommand({
-    TableName: TABLE_BOOKINGS,
-    KeyConditionExpression: "pk = :pk",
-    ExpressionAttributeValues: { ":pk": pk },
-  })
-);
 
-const bookings = (allBookingsRes.Items || []).filter(
-  (b) =>
-    String(b.mergeKey || "") === String(mergeKey) &&
-    String(b.slotTime || "") === String(time) &&
-    String(b.vehicleType || "").toUpperCase() === "HALF"
-);
-
-for (const b of bookings) {
-  await ddb.send(
-    new UpdateCommand({
+  const allBookingsRes = await ddb.send(
+    new QueryCommand({
       TableName: TABLE_BOOKINGS,
-      Key: { pk, sk: b.sk },
-      UpdateExpression: "SET #s = :c, confirmedAt = :t, confirmedBy = :m",
-      ExpressionAttributeNames: { "#s": "status" },
-      ExpressionAttributeValues: {
-        ":c": "CONFIRMED",
-        ":t": new Date().toISOString(),
-        ":m": String(managerId || "MANAGER"),
-      },
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
     })
   );
-}
+
+  const bookings = (allBookingsRes.Items || []).filter(
+    (b) =>
+      String(b.mergeKey || "") === String(mergeKey) &&
+      String(b.slotTime || "") === String(time) &&
+      String(b.vehicleType || "").toUpperCase() === "HALF"
+  );
+
+  for (const b of bookings) {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_BOOKINGS,
+        Key: { pk, sk: b.sk },
+        UpdateExpression: "SET #s = :c, confirmedAt = :t, confirmedBy = :m",
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: {
+          ":c": "CONFIRMED",
+          ":t": new Date().toISOString(),
+          ":m": String(managerId || "MANAGER"),
+        },
+      })
+    );
+  }
 
   return { ok: true, mergeKey, totalAmount: total, status: "CONFIRMED" };
 }
+
+/* ✅ REST OF YOUR FUNCTIONS (cancel, disable, move, edit, waiting) கீழே SAME தான்... */
 
 /* ---------------- MANAGER CANCEL BOOKING ---------------- */
 export async function managerCancelBooking({ companyCode, date, time, pos, userId, bookingSk, mergeKey }) {
   const pk = pkFor(companyCode, date);
 
-  // FULL cancel
   if (pos && userId) {
     const slotSk = skForSlot(time, "FULL", pos);
     const bookingSK = skForBooking(time, "FULL", pos, userId);
@@ -590,7 +641,6 @@ export async function managerCancelBooking({ companyCode, date, time, pos, userI
     return { ok: true, type: "FULL" };
   }
 
-  // HALF cancel
   if (bookingSk && mergeKey) {
     const mergeSk2 = skForMergeSlot(time, mergeKey);
 

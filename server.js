@@ -25,6 +25,9 @@ import driverRoutes from "./src/routes/driver.routes.js";
 import goalsRoutes from "./src/routes/goals.routes.js";
 import distributorRoutes from "./src/modules/distributors/distributors.routes.js";
 
+// ✅ FIXED ✅
+// Import ManagerOrdersFlow as router
+import ManagerOrdersFlowRoutes from "./src/routes/managerOrdersFlow.routes.js";
 const app = express();
 
 /**
@@ -92,6 +95,12 @@ app.use("/api/driver", driverRoutes);
 app.use("/trips", tripsRoutes);
 app.use("/goals", goalsRoutes);
 app.use("/api/distributors", distributorRoutes);
+
+/**
+ * ✅ Manager Orders Flow Route ✅
+ */
+app.use("/manager-orders-flow", ManagerOrdersFlowRoutes);
+
 /**
  * ✅ Slot Routes
  */
@@ -147,7 +156,11 @@ function printRoutes(app) {
     });
 
     console.log("✅ Registered Endpoints:");
-    console.table(routes.length ? routes : [{ methods: "-", path: "No routes detected (but API can still work)" }]);
+    console.table(
+      routes.length
+        ? routes
+        : [{ methods: "-", path: "No routes detected (but API can still work)" }]
+    );
   } catch (e) {
     console.log("⚠️ Endpoint list print failed (not a blocker):", e.message);
   }
