@@ -85,7 +85,7 @@ app.get("/db-test", async (req, res) => {
 app.use("/auth", authRoutes);
 app.use("/users", usersRoutes);
 app.use("/dashboard", dashboardRoutes);
-app.use("/orders", ordersRoutes);
+app.use("/api/orders", ordersRoutes);
 app.use("/timeline", timelineRoutes);
 app.use("/products", productsRoutes);
 
