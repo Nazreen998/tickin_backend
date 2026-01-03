@@ -12,5 +12,10 @@ export const dynamoClient = new DynamoDBClient({
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   },
 });
+export const ddb = DynamoDBDocumentClient.from(dynamoClient, {
+  marshallOptions: {
+    removeUndefinedValues: true, // ✅ IMPORTANT FIX
+    convertEmptyValues: true,
+  },
+});
 
-export const ddb = DynamoDBDocumentClient.from(dynamoClient);
