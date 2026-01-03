@@ -15,6 +15,7 @@ import {
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 
+
 const TABLE_CAPACITY = "tickin_slot_capacity";
 const TABLE_BOOKINGS = "tickin_slot_bookings";
 const TABLE_QUEUE = "tickin_slot_waiting_queue";
@@ -27,6 +28,26 @@ const DEFAULT_THRESHOLD = Number(process.env.DEFAULT_MAX_AMOUNT || 80000);
 const MERGE_RADIUS_KM = Number(process.env.MERGE_RADIUS_KM || 25);
 
 const LAST_SLOT_TIME = "20:00";
+
+
+function findDistributorFromPairingMap(code) {
+  if (!code) return null;
+
+  for (const bucket of Object.keys(pairingMap || {})) {
+    const list = pairingMap[bucket] || [];
+
+    const found = list.find(
+      (d) =>
+        String(d.distributorCode || d["Distributor Code"] || "")
+          .trim()
+          .toUpperCase() === String(code).trim().toUpperCase()
+    );
+
+    if (found) return found;
+  }
+
+  return null;
+}
 
 /* ✅ LOCAL URL LAT/LNG EXTRACTOR */
 function extractLatLngFromFinalUrl(url) {
@@ -236,32 +257,23 @@ async function resolveDistributorDetails({ distributorCode, distributorName, lat
   let resolvedLat = lat ?? null;
   let resolvedLng = lng ?? null;
 
-  // 1) Excel pairingMap first (if exists)
-  let distributor = null;
-  for (const bucket of Object.keys(pairingMap || {})) {
-    const list = pairingMap[bucket] || [];
-    const found = list.find(
-      (d) =>
-        String(d.distributorCode || "")
-          .trim()
-          .toUpperCase() === String(distributorCode).trim().toUpperCase()
-    );
-    if (found) {
-      distributor = found;
-      break;
-    }
-  }
+  // ✅ 1) Excel pairingMap priority
+  const distributor = findDistributorFromPairingMap(distributorCode);
 
   if (distributor) {
-    if (!resolvedName)
+    if (!resolvedName) {
       resolvedName =
-        distributor.agencyName || distributor["Agency Name"] || distributorName || null;
+        distributor.agencyName ||
+        distributor["Agency Name"] ||
+        distributorName ||
+        null;
+    }
 
-    if (resolvedLat == null) resolvedLat = distributor.lat;
-    if (resolvedLng == null) resolvedLng = distributor.lng;
+    if (resolvedLat == null || resolvedLat === "") resolvedLat = distributor.lat;
+    if (resolvedLng == null || resolvedLng === "") resolvedLng = distributor.lng;
   }
 
-  // 2) Dynamo distributor fallback
+  // ✅ 2) Dynamo distributor fallback
   if (resolvedLat == null || resolvedLng == null || !resolvedName) {
     try {
       const dist = await getDistributorByCode(distributorCode);
@@ -277,21 +289,48 @@ async function resolveDistributorDetails({ distributorCode, distributorName, lat
       }
     } catch (_) {}
   }
+  // ✅ Excel map first
+  const excelDist = findDistributorFromPairingMap(distributorCode);
 
-  // sanitize
+  if (excelDist) {
+    if (!resolvedName)
+      resolvedName =
+        excelDist.agencyName || excelDist["Agency Name"] || distributorName || null;
+
+    if (resolvedLat == null || resolvedLat === "") resolvedLat = excelDist.lat;
+    if (resolvedLng == null || resolvedLng === "") resolvedLng = excelDist.lng;
+  }
+
+  // ✅ Dynamo fallback
+  if (resolvedLat == null || resolvedLng == null) {
+    try {
+      const dist = await getDistributorByCode(distributorCode);
+
+      if (!resolvedName) resolvedName = dist.agencyName || null;
+
+      const url = dist.final_url || dist.finalUrl || dist.finalURL;
+      if (url) {
+        const parsed = extractLatLngFromFinalUrl(url);
+        if (resolvedLat == null) resolvedLat = parsed.lat;
+        if (resolvedLng == null) resolvedLng = parsed.lng;
+      }
+    } catch (_) {}
+  }
+
+  // ✅ sanitize (prevent "" -> 0)
   const safeLat =
-  resolvedLat === null || resolvedLat === undefined
-    ? null
-    : Number.isFinite(Number(resolvedLat))
-    ? Number(resolvedLat)
-    : null;
+    resolvedLat === null || resolvedLat === undefined || resolvedLat === ""
+      ? null
+      : Number.isFinite(Number(resolvedLat))
+      ? Number(resolvedLat)
+      : null;
 
-const safeLng =
-  resolvedLng === null || resolvedLng === undefined
-    ? null
-    : Number.isFinite(Number(resolvedLng))
-    ? Number(resolvedLng)
-    : null;
+  const safeLng =
+    resolvedLng === null || resolvedLng === undefined || resolvedLng === ""
+      ? null
+      : Number.isFinite(Number(resolvedLng))
+      ? Number(resolvedLng)
+      : null;
 
   return { resolvedName, safeLat, safeLng };
 }
@@ -348,6 +387,21 @@ export async function bookSlot({
     const slotSk = skForSlot(time, "FULL", pos);
     const bookingSk = skForBooking(time, "FULL", pos, uid);
     const bookingId = uuidv4();
+
+// ✅ sanitize lat/lng (NO Number(null) -> 0 issue)
+const safeLat =
+  resolvedLat === null || resolvedLat === undefined
+    ? null
+    : Number.isFinite(Number(resolvedLat))
+    ? Number(resolvedLat)
+    : null;
+
+const safeLng =
+  resolvedLng === null || resolvedLng === undefined
+    ? null
+    : Number.isFinite(Number(resolvedLng))
+    ? Number(resolvedLng)
+    : null;
 
     await ddb.send(
       new TransactWriteCommand({
