@@ -44,36 +44,57 @@ export const vehicleSelected = async (req, res) => {
 };
 
 // ✅ 2) Loading Start
+
 export const loadingStart = async (req, res) => {
   try {
     const { orderId } = req.body;
     const user = req.user;
 
-    if (!orderId) return res.status(400).json({ ok: false, message: "orderId required" });
+    if (!orderId) {
+      return res.status(400).json({
+        ok: false,
+        message: "orderId required",
+      });
+    }
 
-    await ddb.send(new UpdateCommand({
-      TableName: ORDERS_TABLE,
-      Key: { pk: `ORDER#${orderId}`, sk: "META" },
-      UpdateExpression: "SET #s = :st, loadingStartAt = :t",
-      ExpressionAttributeNames: { "#s": "status" },
-      ExpressionAttributeValues: {
-        ":st": "LOADING_STARTED",
-        ":t": new Date().toISOString()
-      }
-    }));
+    await ddb.send(
+      new UpdateCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${orderId}`, sk: "META" },
+
+        // 🔴 IMPORTANT CHANGE HERE
+        UpdateExpression: `
+          SET 
+            loadingStarted = :ls,
+            loadingStartedAt = :t
+        `,
+        ExpressionAttributeValues: {
+          ":ls": true,
+          ":t": new Date().toISOString(),
+        },
+      })
+    );
 
     await addTimelineEvent({
       orderId,
       event: "LOADING_STARTED",
       by: user.mobile,
-      extra: { role: user.role }
+      extra: { role: user.role },
     });
 
-    return res.json({ ok: true, message: "✅ Loading started", orderId });
+    return res.json({
+      ok: true,
+      message: "✅ Loading started",
+      orderId,
+    });
   } catch (err) {
-    return res.status(500).json({ ok: false, message: err.message });
+    return res.status(500).json({
+      ok: false,
+      message: err.message,
+    });
   }
 };
+
 
 // ✅ 3) Loading Item (each by each)
 export const loadingItem = async (req, res) => {
