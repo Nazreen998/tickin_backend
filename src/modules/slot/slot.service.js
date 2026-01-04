@@ -246,7 +246,6 @@ export async function managerEnableSlot({
 }
 
 /* ---------------- SLOT GRID ---------------- */
-
 export async function getSlotGrid({ companyCode, date }) {
   validateSlotDate(date);
   const pk = pkFor(companyCode, date);
@@ -263,6 +262,7 @@ export async function getSlotGrid({ companyCode, date }) {
 
   const overrides = res.Items || [];
 
+  // ✅ 1) FULL default slots
   const defaultSlots = [];
   for (const time of DEFAULT_SLOTS) {
     for (const pos of ALL_POSITIONS) {
@@ -282,19 +282,51 @@ export async function getSlotGrid({ companyCode, date }) {
     }
   }
 
+  // ✅ 2) merge overrides into FULL slots
   const finalSlots = defaultSlots.map((slot) => {
     const override = overrides.find((o) => o.sk === slot.sk);
-    return override ? { ...slot, ...override } : slot;
+    const merged = override ? { ...slot, ...override } : slot;
+
+    // ✅ IMPORTANT FIX:
+    // sometimes capacity item has userId but status still AVAILABLE
+    if (
+      merged.vehicleType === "FULL" &&
+      String(merged.status || "").toUpperCase() === "AVAILABLE" &&
+      merged.userId
+    ) {
+      merged.status = "BOOKED";
+    }
+
+    return merged;
   });
 
+  // ✅ 3) mergeSlots response FIX
   const mergeSlots = overrides
     .filter((o) => String(o.sk || "").startsWith("MERGE_SLOT#"))
-    .map((m) => ({
-      ...m,
-      blink: m.blink === true,
-      tripStatus: m.tripStatus || "PARTIAL",
-      vehicleType: "HALF",
-    }));
+    .map((m) => {
+      // ✅ extract time from sk: MERGE_SLOT#09:00#KEY#...
+      let time = m.time;
+      if (!time) {
+        try {
+          const parts = String(m.sk).split("#");
+          if (parts.length > 1) time = parts[1];
+        } catch (_) {}
+      }
+
+      // ✅ normalize tripStatus
+      const tripStatus = m.tripStatus || "PARTIAL";
+
+      // ✅ blink logic (already stored in table)
+      const blink = m.blink === true;
+
+      return {
+        ...m,
+        time,
+        blink,
+        tripStatus,
+        vehicleType: "HALF",
+      };
+    });
 
   return {
     slots: [...finalSlots, ...mergeSlots],
@@ -305,7 +337,6 @@ export async function getSlotGrid({ companyCode, date }) {
     },
   };
 }
-
 /* ---------------- ORDERID DUPLICATE CHECK ---------------- */
 
 async function checkOrderAlreadyBooked(pk, orderId) {
