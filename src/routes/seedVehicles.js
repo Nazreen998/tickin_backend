@@ -1,7 +1,7 @@
 import { PutCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "./src/config/dynamo.js";
 
-const TABLE = "tickin_vehicle";
+const TABLE = "tickin_vehicles";
 
 const vehicles = [
   { vehicleNo: "TN64AD4438", driverName: "KATHAVARAYAN" },

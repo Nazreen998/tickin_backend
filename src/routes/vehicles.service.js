@@ -2,7 +2,7 @@ import { ddb } from "../config/dynamo.js";
 import { ScanCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
 import { v4 as uuidv4 } from "uuid";
 
-const VEHICLES_TABLE = process.env.VEHICLES_TABLE || "tickin_vehicle";
+const VEHICLES_TABLE = process.env.VEHICLES_TABLE || "tickin_vehicles";
 
 // ✅ GET vehicles
 export const getAvailableVehicles = async (req, res) => {
