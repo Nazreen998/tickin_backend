@@ -465,10 +465,10 @@ export const confirmOrder = async (req, res) => {
     const order = orderRes.Item;
     const role = String(user.role || "").trim().toUpperCase();
 
-    // ✅ Only MANAGER can confirm (as you requested)
-    if (role !== "MANAGER") {
-      return res.status(403).json({ message: "Access denied (MANAGER only)" });
-    }
+    // // ✅ Only MANAGER can confirm (as you requested)
+    // if (role !== "MANAGER") {
+    //   return res.status(403).json({ message: "Access denied (MANAGER only)" });
+    // }
 
     // ✅ Only PENDING orders can be confirmed
     if (String(order.status || "") !== "PENDING") {
