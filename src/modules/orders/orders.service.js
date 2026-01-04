@@ -19,41 +19,66 @@ import {
 
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const TRIPS_TABLE = process.env.TRIPS_TABLE || "tickin_trips";
-
+const BOOKINGS_TABLE = process.env.BOOKINGS_TABLE || "tickin_slot_bookings";
 export const getSlotConfirmedOrders = async (req, res) => {
   try {
-    const result = await ddb.send(
+    // ✅ 1) Scan tickin_slot_bookings where status = CONFIRMED
+    const bookingsRes = await ddb.send(
       new ScanCommand({
-        TableName: ORDERS_TABLE,
-        FilterExpression: "#sk = :meta AND #st = :c AND slotBooked = :sb",
-        ExpressionAttributeNames: {
-          "#sk": "sk",
-          "#st": "status",
-        },
-        ExpressionAttributeValues: {
-          ":meta": "META",
-          ":c": "CONFIRMED",
-          ":sb": true,
-        },
+        TableName: BOOKINGS_TABLE,
+        FilterExpression: "#s = :c",
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: { ":c": "CONFIRMED" },
       })
     );
 
-    const orders = (result.Items || []).map((o) => ({
-      orderId: String(o.pk || "").replace("ORDER#", ""),
-      status: o.status,
-      slotBooked: !!o.slotBooked,
-      slot: o.slot || null,
-      grandAmount: o.totalAmount ?? o.grandTotal ?? o.grandAmount ?? 0,
-      totalQty: o.totalQty ?? 0,
-      items: o.items ?? [],
-    }));
+    const bookings = bookingsRes.Items || [];
+
+    // ✅ 2) Unique orderIds from bookings
+    const orderIds = [...new Set(bookings.map((b) => b.orderId).filter(Boolean))];
+
+    const orders = [];
+
+    // ✅ 3) Fetch each order details from tickin_orders
+    for (const orderId of orderIds) {
+      const orderRes = await ddb.send(
+        new GetCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${orderId}`, sk: "META" },
+        })
+      );
+
+      if (!orderRes.Item) continue;
+
+      const order = orderRes.Item;
+      const booking = bookings.find((b) => b.orderId === orderId);
+
+      orders.push({
+        orderId,
+        distributorName: order.distributorName,
+        distributorId: order.distributorId,
+        status: order.status,
+        items: order.items || [],
+        totalQty: order.totalQty || 0,
+        grandAmount: order.totalAmount || 0,
+
+        // ✅ slot from bookings table
+        slot: {
+          bookingId: booking.bookingId,
+          companyCode: booking.pk?.split("#")[1] || null,
+          date: booking.pk?.split("#")[3] || null,
+          time: booking.slotTime,
+          pos: booking.pos,
+          vehicleType: booking.vehicleType,
+        },
+      });
+    }
 
     return res.json({ ok: true, count: orders.length, orders });
   } catch (err) {
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
-
 /* ==========================
    ✅ Confirm Draft Order
    DRAFT → PENDING (Salesman)
