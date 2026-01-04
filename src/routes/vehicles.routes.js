@@ -4,6 +4,7 @@ import { allowRoles } from "../middleware/role.middleware.js";
 import { getAvailableVehicles, addVehicle } from "./vehicles.service.js";
 
 const router = express.Router();
+console.log("✅ vehicles.routes.js LOADED");
 
 // ✅ GET /vehicles/available
 router.get(
