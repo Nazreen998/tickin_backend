@@ -247,7 +247,16 @@ export const createOrder = async (req, res) => {
       totalAmount,
       totalQty,
 
+<<<<<<< HEAD
       status: finalStatus,
+=======
+      status: "PENDING",
+
+      // 👇 NEW FLAGS
+      loadingStarted: false,
+      loadingStartedAt: null,
+
+>>>>>>> 4259ec057a2af9ea448990d9a754bac0362f3bcf
       pendingReason: "",
 
       createdBy: user.mobile,
@@ -319,20 +328,32 @@ export const createOrder = async (req, res) => {
 };
 /* ==========================
    ✅ Pending Orders (Master / Manager)
+   - Old + New data safe
 ========================== */
 export const getPendingOrders = async (req, res) => {
   try {
     const result = await ddb.send(
       new ScanCommand({
         TableName: "tickin_orders",
-        FilterExpression: "#st = :pending",
-        ExpressionAttributeNames: { "#st": "status" },
-        ExpressionAttributeValues: { ":pending": "PENDING" },
+        FilterExpression: `
+          #st = :pending 
+          AND (
+            attribute_not_exists(loadingStarted) 
+            OR loadingStarted = :ls
+          )
+        `,
+        ExpressionAttributeNames: {
+          "#st": "status",
+        },
+        ExpressionAttributeValues: {
+          ":pending": "PENDING",
+          ":ls": false,
+        },
       })
     );
 
     return res.json({
-      message: "Pending orders fetched",
+      message: "Pending orders (loading not started)",
       count: result.Items?.length || 0,
       orders: result.Items || [],
     });
@@ -341,6 +362,8 @@ export const getPendingOrders = async (req, res) => {
     res.status(500).json({ message: "Error", error: err.message });
   }
 };
+
+
 
 /* ==========================
    ✅ Today Orders (Master only)

@@ -11,27 +11,6 @@ function normalizeUserPk(id) {
   return s.startsWith("USER#") ? s : `USER#${s}`;
 }
 
-// ✅ common validation: only slot-confirmed orders can proceed
-async function assertSlotConfirmed(orderId) {
-  const res = await ddb.send(
-    new GetCommand({
-      TableName: ORDERS_TABLE,
-      Key: { pk: `ORDER#${orderId}`, sk: "META" },
-    })
-  );
-
-  if (!res.Item) throw new Error("Order not found");
-
-  const st = String(res.Item.status || "").trim().toUpperCase();
-  const slotBooked = !!res.Item.slotBooked;
-
-  if (st !== "CONFIRMED" || !slotBooked) {
-    throw new Error("Slot booking not confirmed. Process cannot start.");
-  }
-
-  return res.Item;
-}
-
 // ✅ 1) Vehicle Selected
 export const vehicleSelected = async (req, res) => {
   try {
@@ -39,34 +18,28 @@ export const vehicleSelected = async (req, res) => {
     const { vehicleType } = req.body;
     const user = req.user;
 
-    if (!vehicleType) {
-      return res.status(400).json({ ok: false, message: "vehicleType required" });
-    }
+    if (!vehicleType) return res.status(400).json({ ok: false, message: "vehicleType required" });
 
-    await assertSlotConfirmed(orderId);
-
-    await ddb.send(
-      new UpdateCommand({
-        TableName: ORDERS_TABLE,
-        Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression: "SET vehicleType = :v, vehicleSelectedAt = :t",
-        ExpressionAttributeValues: {
-          ":v": String(vehicleType).toUpperCase(),
-          ":t": new Date().toISOString(),
-        },
-      })
-    );
+    await ddb.send(new UpdateCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+      UpdateExpression: "SET vehicleType = :v, vehicleSelectedAt = :t",
+      ExpressionAttributeValues: {
+        ":v": String(vehicleType).toUpperCase(),
+        ":t": new Date().toISOString()
+      }
+    }));
 
     await addTimelineEvent({
       orderId,
       event: "VEHICLE_SELECTED",
       by: user.mobile,
-      extra: { vehicleType },
+      extra: { vehicleType }
     });
 
     return res.json({ ok: true, message: "✅ Vehicle selected", orderId, vehicleType });
   } catch (err) {
-    return res.status(400).json({ ok: false, message: err.message });
+    return res.status(500).json({ ok: false, message: err.message });
   }
 };
 
@@ -76,18 +49,26 @@ export const loadingStart = async (req, res) => {
     const { orderId } = req.body;
     const user = req.user;
 
-    if (!orderId) return res.status(400).json({ ok: false, message: "orderId required" });
-
-    await assertSlotConfirmed(orderId);
+    if (!orderId) {
+      return res.status(400).json({
+        ok: false,
+        message: "orderId required",
+      });
+    }
 
     await ddb.send(
       new UpdateCommand({
         TableName: ORDERS_TABLE,
         Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression: "SET #s = :st, loadingStartAt = :t",
-        ExpressionAttributeNames: { "#s": "status" },
+
+        // 🔴 IMPORTANT CHANGE HERE
+        UpdateExpression: `
+          SET 
+            loadingStarted = :ls,
+            loadingStartedAt = :t
+        `,
         ExpressionAttributeValues: {
-          ":st": "LOADING_STARTED",
+          ":ls": true,
           ":t": new Date().toISOString(),
         },
       })
@@ -100,13 +81,45 @@ export const loadingStart = async (req, res) => {
       extra: { role: user.role },
     });
 
-    return res.json({ ok: true, message: "✅ Loading started", orderId });
+    return res.json({
+      ok: true,
+      message: "✅ Loading started",
+      orderId,
+    });
   } catch (err) {
-    return res.status(400).json({ ok: false, message: err.message });
+    return res.status(500).json({
+      ok: false,
+      message: err.message,
+    });
   }
 };
 
-// ✅ 3) Loading End
+
+
+// ✅ 3) Loading Item (each by each)
+export const loadingItem = async (req, res) => {
+  try {
+    const { orderId, productId, qty } = req.body;
+    const user = req.user;
+
+    if (!orderId || !productId || !qty) {
+      return res.status(400).json({ ok: false, message: "orderId, productId, qty required" });
+    }
+
+    await addTimelineEvent({
+      orderId,
+      event: "LOADING_ITEM",
+      by: user.mobile,
+      extra: { productId, qty }
+    });
+
+    return res.json({ ok: true, message: "✅ Loading item added", orderId, productId, qty });
+  } catch (err) {
+    return res.status(500).json({ ok: false, message: err.message });
+  }
+};
+
+// ✅ 4) Loading End
 export const loadingEnd = async (req, res) => {
   try {
     const { orderId } = req.body;
@@ -114,35 +127,31 @@ export const loadingEnd = async (req, res) => {
 
     if (!orderId) return res.status(400).json({ ok: false, message: "orderId required" });
 
-    await assertSlotConfirmed(orderId);
-
-    await ddb.send(
-      new UpdateCommand({
-        TableName: ORDERS_TABLE,
-        Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression: "SET #s = :st, loadingEndAt = :t",
-        ExpressionAttributeNames: { "#s": "status" },
-        ExpressionAttributeValues: {
-          ":st": "LOADING_COMPLETED",
-          ":t": new Date().toISOString(),
-        },
-      })
-    );
+    await ddb.send(new UpdateCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+      UpdateExpression: "SET #s = :st, loadingEndAt = :t",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: {
+        ":st": "LOADING_COMPLETED",
+        ":t": new Date().toISOString()
+      }
+    }));
 
     await addTimelineEvent({
       orderId,
       event: "LOADING_COMPLETED",
       by: user.mobile,
-      extra: { role: user.role },
+      extra: { role: user.role }
     });
 
     return res.json({ ok: true, message: "✅ Loading completed", orderId });
   } catch (err) {
-    return res.status(400).json({ ok: false, message: err.message });
+    return res.status(500).json({ ok: false, message: err.message });
   }
 };
 
-// ✅ 4) Assign Driver
+// ✅ 5) Assign Driver
 export const assignDriverToOrder = async (req, res) => {
   try {
     const { orderId, driverId, vehicleNo } = req.body;
@@ -152,16 +161,13 @@ export const assignDriverToOrder = async (req, res) => {
       return res.status(400).json({ ok: false, message: "orderId + driverId required" });
     }
 
-    await assertSlotConfirmed(orderId);
-
     const driverPk = normalizeUserPk(driverId);
 
-    const driverRes = await ddb.send(
-      new GetCommand({
-        TableName: USERS_TABLE,
-        Key: { pk: driverPk, sk: "PROFILE" },
-      })
-    );
+    // ✅ validate driver exists in tickin_users
+    const driverRes = await ddb.send(new GetCommand({
+      TableName: USERS_TABLE,
+      Key: { pk: driverPk, sk: "PROFILE" }
+    }));
 
     if (!driverRes.Item || String(driverRes.Item.role || "").toUpperCase() !== "DRIVER") {
       return res.status(400).json({ ok: false, message: "Invalid driverId (not a DRIVER)" });
@@ -169,23 +175,21 @@ export const assignDriverToOrder = async (req, res) => {
 
     const driver = driverRes.Item;
 
-    await ddb.send(
-      new UpdateCommand({
-        TableName: ORDERS_TABLE,
-        Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression:
-          "SET #s = :st, driverId = :d, driverName = :n, driverMobile = :m, vehicleNo = :v, driverAssignedAt = :t",
-        ExpressionAttributeNames: { "#s": "status" },
-        ExpressionAttributeValues: {
-          ":st": "DRIVER_ASSIGNED",
-          ":d": driverPk,
-          ":n": driver.name || null,
-          ":m": driver.mobile || null,
-          ":v": vehicleNo || null,
-          ":t": new Date().toISOString(),
-        },
-      })
-    );
+    // ✅ Update order
+    await ddb.send(new UpdateCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+      UpdateExpression: "SET #s = :st, driverId = :d, driverName = :n, driverMobile = :m, vehicleNo = :v, driverAssignedAt = :t",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: {
+        ":st": "DRIVER_ASSIGNED",
+        ":d": driverPk,
+        ":n": driver.name || null,
+        ":m": driver.mobile || null,
+        ":v": vehicleNo || null,
+        ":t": new Date().toISOString()
+      }
+    }));
 
     await addTimelineEvent({
       orderId,
@@ -195,8 +199,8 @@ export const assignDriverToOrder = async (req, res) => {
         driverId: driverPk,
         driverName: driver.name,
         driverMobile: driver.mobile,
-        vehicleNo: vehicleNo || null,
-      },
+        vehicleNo: vehicleNo || null
+      }
     });
 
     return res.json({
@@ -207,33 +211,10 @@ export const assignDriverToOrder = async (req, res) => {
         driverId: driverPk,
         name: driver.name,
         mobile: driver.mobile,
-        vehicleNo: vehicleNo || null,
-      },
+        vehicleNo: vehicleNo || null
+      }
     });
   } catch (err) {
-    return res.status(400).json({ ok: false, message: err.message });
-  }
-};
-export const loadingItem = async (req, res) => {
-  try {
-    const { orderId, productId, qty } = req.body;
-    const user = req.user;
-
-    if (!orderId || !productId || !qty) {
-      return res.status(400).json({ ok: false, message: "orderId, productId, qty required" });
-    }
-
-    await assertSlotConfirmed(orderId);
-
-    await addTimelineEvent({
-      orderId,
-      event: "LOADING_ITEM",
-      by: user.mobile,
-      extra: { productId, qty },
-    });
-
-    return res.json({ ok: true, message: "✅ Loading item updated", orderId, productId, qty });
-  } catch (err) {
-    return res.status(400).json({ ok: false, message: err.message });
+    return res.status(500).json({ ok: false, message: err.message });
   }
 };
