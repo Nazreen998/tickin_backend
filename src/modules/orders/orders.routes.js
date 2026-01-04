@@ -30,6 +30,7 @@ const router = express.Router();
 /* ===========================
    MASTER / MANAGER ROUTES
 =========================== */
+
 // ✅ Slot confirmed orders (Manager only flow)
 router.get(
   "/slot-confirmed",
@@ -82,34 +83,34 @@ router.post(
 );
 
 /* ===========================
-   SALESMAN ROUTES
+   SALESMAN / SALES OFFICER ROUTES
 =========================== */
 
-// ✅ Create order as DRAFT
+// ✅ Create order as DRAFT ✅ (SALESMAN added)
 router.post(
   "/create",
   verifyToken,
-  allowRoles("MANAGER", "SALES OFFICER", "SALES OFFICER_VNR"),
+  allowRoles("MANAGER", "SALES OFFICER", "SALES OFFICER_VNR", "SALESMAN"),
   createOrder
 );
 
-// ✅ Salesman update order items (Edit/Add/Remove)
+// ✅ Update order items ✅ (SALESMAN added)
 router.patch(
   "/update/:orderId",
   verifyToken,
-  allowRoles("SALES OFFICER", "MANAGER", "SALES OFFICER_VNR"),
+  allowRoles("SALES OFFICER", "MANAGER", "SALES OFFICER_VNR", "SALESMAN"),
   updateOrderItems
 );
 
-// ✅ Confirm draft order (DRAFT → PENDING)
+// ✅ Confirm draft order ✅ (SALESMAN added)
 router.post(
   "/confirm-draft/:orderId",
   verifyToken,
-  allowRoles("SALES OFFICER"),
+  allowRoles("SALES OFFICER", "SALESMAN"),
   confirmDraftOrder
 );
 
-// ✅ Sales Officer view all assigned distributor orders (CONFIRMED)
+// ✅ Sales Officer / Salesman view all assigned distributor orders (CONFIRMED)
 router.get(
   "/my",
   verifyToken,
@@ -170,10 +171,11 @@ router.get(
    VIEW ORDER ROUTE
 =========================== */
 
+// ✅ View order by ID ✅ (SALESMAN added)
 router.get(
   "/:orderId",
   verifyToken,
-  allowRoles("SALES OFFICER", "DISTRIBUTOR", "MANAGER", "SALES OFFICER_VNR"),
+  allowRoles("SALES OFFICER", "SALESMAN", "DISTRIBUTOR", "MANAGER", "SALES OFFICER_VNR"),
   getOrderById
 );
 
