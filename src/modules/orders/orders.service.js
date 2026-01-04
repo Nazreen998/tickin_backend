@@ -246,17 +246,12 @@ export const createOrder = async (req, res) => {
       items: finalItems,
       totalAmount,
       totalQty,
+     status: finalStatus,
 
-<<<<<<< HEAD
-      status: finalStatus,
-=======
-      status: "PENDING",
-
-      // 👇 NEW FLAGS
+      // ✅ NEW FLAGS (keep safe)
       loadingStarted: false,
       loadingStartedAt: null,
 
->>>>>>> 4259ec057a2af9ea448990d9a754bac0362f3bcf
       pendingReason: "",
 
       createdBy: user.mobile,
