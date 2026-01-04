@@ -23,10 +23,11 @@ dayjs.extend(timezone);
 const IST_TZ = process.env.APP_TZ || "Asia/Kolkata";
 
 
-const TABLE_CAPACITY = "tickin_slot_capacity";
-const TABLE_BOOKINGS = "tickin_slot_bookings";
-const TABLE_QUEUE = "tickin_slot_waiting_queue";
-const TABLE_RULES = "tickin_slot_rules";
+const TABLE_CAPACITY = process.env.TABLE_CAPACITY || "tickin_slot_capacity";
+const TABLE_BOOKINGS = process.env.TABLE_BOOKINGS || "tickin-slot_bookings";
+const TABLE_QUEUE = process.env.TABLE_QUEUE || "tickin_slot_waiting_queue";
+const TABLE_RULES = process.env.TABLE_RULES || "tickin_slot_rules";
+
 
 const DEFAULT_SLOTS = ["09:00", "12:30", "16:00", "20:00"];
 const ALL_POSITIONS = ["A", "B", "C", "D"];
@@ -344,21 +345,6 @@ async function resolveDistributorDetails({ distributorCode, distributorName, lat
       }
     } catch (_) {}
   }
-
-  const safeLat =
-    resolvedLat === null || resolvedLat === undefined || resolvedLat === ""
-      ? null
-      : Number.isFinite(Number(resolvedLat))
-      ? Number(resolvedLat)
-      : null;
-
-  const safeLng =
-    resolvedLng === null || resolvedLng === undefined || resolvedLng === ""
-      ? null
-      : Number.isFinite(Number(resolvedLng))
-      ? Number(resolvedLng)
-      : null;
-
   return { resolvedName, safeLat, safeLng };
 }
 
