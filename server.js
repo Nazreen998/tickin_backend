@@ -97,7 +97,7 @@ app.use("/api/driver", driverRoutes);
 app.use("/trips", tripsRoutes);
 app.use("/goals", goalsRoutes);
 app.use("/api/distributors", distributorRoutes);
-app.use("/vehicles", vehiclesRoutes);
+app.use("/api/vehicles", vehiclesRoutes);
 
 /**
  * ✅ Manager Orders Flow Route ✅

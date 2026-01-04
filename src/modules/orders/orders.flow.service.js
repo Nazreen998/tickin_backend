@@ -44,7 +44,6 @@ export const vehicleSelected = async (req, res) => {
 };
 
 // ✅ 2) Loading Start
-
 export const loadingStart = async (req, res) => {
   try {
     const { orderId } = req.body;
@@ -94,6 +93,7 @@ export const loadingStart = async (req, res) => {
     });
   }
 };
+
 
 
 // ✅ 3) Loading Item (each by each)

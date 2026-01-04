@@ -12,6 +12,7 @@ import {
   managerMoveBookingToMerge,
   managerEditSlotTime,
   managerSetSlotMax,
+  managerEnableSlot,
   managerToggleLastSlot,
   managerSetGlobalMax,
 } from "../slot/slot.service.js";
@@ -29,7 +30,7 @@ router.get(
       const data = await getSlotGrid({ companyCode, date });
       return res.json({ ok: true, slots: data });
     } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, error: err.message });
     }
   }
 );
@@ -44,7 +45,7 @@ router.post(
       const data = await bookSlot(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, error: err.message });
     }
   }
 );
@@ -59,7 +60,7 @@ router.post(
       const data = await joinWaiting(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, error: err.message });
     }
   }
 );
@@ -74,7 +75,7 @@ router.post(
       const data = await managerCancelBooking(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, error: err.message });
     }
   }
 );
@@ -89,7 +90,22 @@ router.post(
       const data = await managerDisableSlot(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, error: err.message });
+    }
+  }
+);
+
+/* ✅ MANAGER ENABLE SLOT */
+router.post(
+  "/enable-slot",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const data = await managerEnableSlot(req.body);
+      return res.json(data);
+    } catch (err) {
+      return res.status(400).json({ ok: false, error: err.message });
     }
   }
 );
@@ -104,7 +120,7 @@ router.post(
       const data = await managerConfirmMerge(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, error: err.message });
     }
   }
 );
@@ -119,7 +135,7 @@ router.post(
       const data = await managerMoveBookingToMerge(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, error: err.message });
     }
   }
 );
@@ -134,12 +150,12 @@ router.post(
       const data = await managerEditSlotTime(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, error: err.message });
     }
   }
 );
 
-/* ✅ SET MERGE SLOT MAX (per merge slot) */
+/* ✅ SET MERGE SLOT MAX */
 router.post(
   "/set-max",
   verifyToken,
@@ -149,7 +165,7 @@ router.post(
       const data = await managerSetSlotMax(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, error: err.message });
     }
   }
 );
@@ -164,7 +180,7 @@ router.post(
       const data = await managerSetGlobalMax(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, error: err.message });
     }
   }
 );
@@ -179,7 +195,7 @@ router.post(
       const data = await managerToggleLastSlot(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(500).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, error: err.message });
     }
   }
 );

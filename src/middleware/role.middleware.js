@@ -1,7 +1,15 @@
 export const allowRoles = (...roles) => {
+  const allowed = roles.map(r => String(r || "").trim().toUpperCase());
+
   return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ message: "Access denied" });
+    const actual = String(req.user?.role || "").trim().toUpperCase();
+
+    if (!allowed.includes(actual)) {
+      return res.status(403).json({
+        message: "Access denied",
+        role: actual,
+        allowed
+      });
     }
     next();
   };

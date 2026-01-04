@@ -15,12 +15,12 @@ import {
   getOrderById,
   confirmDraftOrder,
   deleteOrder,
+  getSlotConfirmedOrders
 } from "./orders.service.js";
 
 import {
   vehicleSelected,
   loadingStart,
-  loadingItem,
   loadingEnd,
   assignDriverToOrder,
 } from "./orders.flow.service.js";
@@ -30,6 +30,14 @@ const router = express.Router();
 /* ===========================
    MASTER / MANAGER ROUTES
 =========================== */
+
+// ✅ Slot confirmed orders (Manager only flow)
+router.get(
+  "/slot-confirmed",
+  verifyToken,
+  allowRoles("MANAGER"),
+  getSlotConfirmedOrders
+);
 
 // ✅ MASTER pending orders
 router.get(
@@ -75,34 +83,34 @@ router.post(
 );
 
 /* ===========================
-   SALESMAN ROUTES
+   SALESMAN / SALES OFFICER ROUTES
 =========================== */
 
-// ✅ Create order as DRAFT
+// ✅ Create order as DRAFT ✅ (SALESMAN added)
 router.post(
   "/create",
   verifyToken,
-  allowRoles("MANAGER", "SALES OFFICER", "SALES OFFICER_VNR"),
+  allowRoles("MANAGER", "SALES OFFICER", "SALES OFFICER_VNR", "SALESMAN"),
   createOrder
 );
 
-// ✅ Salesman update order items (Edit/Add/Remove)
+// ✅ Update order items ✅ (SALESMAN added)
 router.patch(
   "/update/:orderId",
   verifyToken,
-  allowRoles("SALES OFFICER", "MANAGER", "SALES OFFICER_VNR"),
+  allowRoles("SALES OFFICER", "MANAGER", "SALES OFFICER_VNR", "SALESMAN"),
   updateOrderItems
 );
 
-// ✅ Confirm draft order (DRAFT → PENDING)
+// ✅ Confirm draft order ✅ (SALESMAN added)
 router.post(
   "/confirm-draft/:orderId",
   verifyToken,
-  allowRoles("SALES OFFICER"),
+  allowRoles("SALES OFFICER", "SALESMAN"),
   confirmDraftOrder
 );
 
-// ✅ Sales Officer view all assigned distributor orders (CONFIRMED)
+// ✅ Sales Officer / Salesman view all assigned distributor orders (CONFIRMED)
 router.get(
   "/my",
   verifyToken,
@@ -163,10 +171,11 @@ router.get(
    VIEW ORDER ROUTE
 =========================== */
 
+// ✅ View order by ID ✅ (SALESMAN added)
 router.get(
   "/:orderId",
   verifyToken,
-  allowRoles("SALES OFFICER", "DISTRIBUTOR", "MANAGER", "SALES OFFICER_VNR"),
+  allowRoles("SALES OFFICER", "SALESMAN", "DISTRIBUTOR", "MANAGER", "SALES OFFICER_VNR"),
   getOrderById
 );
 
@@ -188,14 +197,6 @@ router.post(
   verifyToken,
   allowRoles("MANAGER", "MASTER"),
   loadingStart
-);
-
-// ✅ Loading add item
-router.post(
-  "/loading-item",
-  verifyToken,
-  allowRoles("MANAGER", "MASTER"),
-  loadingItem
 );
 
 // ✅ Loading end
