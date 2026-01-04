@@ -90,7 +90,7 @@ export const confirmDraftOrder = async (req, res) => {
 
     const existing = await ddb.send(
       new GetCommand({
-        TableName: "tickin_orders",
+        TableName: ORDERS_TABLE,
         Key: { pk: `ORDER#${orderId}`, sk: "META" },
       })
     );
@@ -109,15 +109,18 @@ export const confirmDraftOrder = async (req, res) => {
       return res.status(403).json({ message: "Order already confirmed" });
     }
 
+    // ✅ CHANGE HERE
     await ddb.send(
       new UpdateCommand({
-        TableName: "tickin_orders",
+        TableName: ORDERS_TABLE,
         Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression: "SET #st = :p, confirmedAt = :t",
+        UpdateExpression: "SET #st = :c, confirmedAt = :t, confirmedBy = :u, slotBooked = :sb",
         ExpressionAttributeNames: { "#st": "status" },
         ExpressionAttributeValues: {
-          ":p": "PENDING",
+          ":c": "CONFIRMED",
           ":t": new Date().toISOString(),
+          ":u": user.mobile,
+          ":sb": false,
         },
       })
     );
@@ -126,22 +129,23 @@ export const confirmDraftOrder = async (req, res) => {
       orderId,
       event: "ORDER_CONFIRMED",
       by: user.mobile,
-      extra: { role: user.role, note: "Order confirmed by Salesman" },
+      extra: { role: user.role, note: "Draft order confirmed directly" },
     });
 
     return res.json({
-      message: "✅ Order confirmed successfully",
+      ok: true,
+      message: "✅ Draft Order confirmed successfully",
       orderId,
-      status: "PENDING",
+      status: "CONFIRMED",
       totalAmount: order.totalAmount,
       distributorName: order.distributorName,
+      slotBooked: false,
     });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Error", error: err.message });
   }
 };
-
 /* ==========================
    ✅ Create Order (Direct PENDING)
 ========================== */
@@ -156,7 +160,8 @@ export const createOrder = async (req, res) => {
         role === "SALES OFFICER" ||
         role === "SALES_OFFICER" ||
         role === "MANAGER" ||
-         role === "SALES OFFICER_VNR" 
+        role === "SALES OFFICER_VNR" ||
+        role === "SALESMAN"
       )
     ) {
       return res.status(403).json({ message: "Access denied" });
@@ -203,7 +208,7 @@ export const createOrder = async (req, res) => {
       const itemTotal = qty * price;
 
       finalItems.push({
-        productId: prod.productId, // might be "P#1002"
+        productId: prod.productId,
         name: prod.name,
         category: prod.category,
         price: prod.price,
@@ -217,7 +222,7 @@ export const createOrder = async (req, res) => {
 
     const orderId = "ORD" + uuidv4().slice(0, 8);
 
-    // ✅ GOAL DEDUCT (PRODUCT-WISE)
+    // ✅ GOAL DEDUCT
     await deductDistributorMonthlyGoalProductWise({
       distributorCode: distributorId,
       items: finalItems.map((x) => ({
@@ -225,6 +230,12 @@ export const createOrder = async (req, res) => {
         qty: Number(x.qty || 0),
       })),
     });
+
+    // ✅ 🔥 CHANGE HERE: Default status should be CONFIRMED for salesman/sales officer
+    const finalStatus =
+      role === "SALESMAN" || role.includes("SALES")
+        ? "CONFIRMED"
+        : "PENDING";
 
     const orderItem = {
       pk: `ORDER#${orderId}`,
@@ -236,20 +247,29 @@ export const createOrder = async (req, res) => {
       totalAmount,
       totalQty,
 
+<<<<<<< HEAD
+      status: finalStatus,
+=======
       status: "PENDING",
 
       // 👇 NEW FLAGS
       loadingStarted: false,
       loadingStartedAt: null,
 
+>>>>>>> 4259ec057a2af9ea448990d9a754bac0362f3bcf
       pendingReason: "",
 
       createdBy: user.mobile,
       createdRole: user.role,
       createdAt: new Date().toISOString(),
 
+      confirmedAt: finalStatus === "CONFIRMED" ? new Date().toISOString() : null,
+      confirmedBy: finalStatus === "CONFIRMED" ? user.mobile : null,
+
       goalDeducted: true,
       goalDeductedAt: new Date().toISOString(),
+
+      slotBooked: false, // ✅ VERY IMPORTANT
     };
 
     await ddb.send(
@@ -259,7 +279,6 @@ export const createOrder = async (req, res) => {
       })
     );
 
-    // ✅ NEW TIMELINE EVENT (ORDER_CREATED)
     await addTimelineEvent({
       orderId,
       event: "ORDER_CREATED",
@@ -270,12 +289,13 @@ export const createOrder = async (req, res) => {
         distributorName,
         totalAmount,
         totalQty,
+        status: finalStatus,
       },
     });
 
     await addTimelineEvent({
       orderId,
-      event: "ORDER_PLACED_PENDING",
+      event: finalStatus === "CONFIRMED" ? "ORDER_CONFIRMED" : "ORDER_PLACED_PENDING",
       by: user.mobile,
       extra: {
         role: user.role,
@@ -287,25 +307,25 @@ export const createOrder = async (req, res) => {
     });
 
     return res.json({
-      message: "✅ Order placed (PENDING) + Goal deducted (Product-wise)",
+      ok: true,
+      message:
+        finalStatus === "CONFIRMED"
+          ? "✅ Order created & confirmed"
+          : "✅ Order placed (PENDING)",
+
       orderId,
-      status: "PENDING",
+      status: finalStatus,
       distributorName,
       totalAmount,
       totalQty,
-      orderCard: {
-        distributor: distributorName,
-        items: finalItems,
-        grandTotal: totalAmount,
-        status: "PENDING",
-      },
+
+      slotBooked: false,
     });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: "Error", error: err.message });
   }
 };
-
 /* ==========================
    ✅ Pending Orders (Master / Manager)
    - Old + New data safe
