@@ -482,11 +482,11 @@ export const confirmOrder = async (req, res) => {
     // }
 
     // ✅ Only PENDING orders can be confirmed
-    if (String(order.status || "") !== "PENDING") {
-      return res.status(403).json({
-        message: `Only PENDING orders can be confirmed. Current status: ${order.status}`,
-      });
-    }
+    // if (String(order.status || "") !== "PENDING") {
+    //   return res.status(403).json({
+    //     message: `Only PENDING orders can be confirmed. Current status: ${order.status}`,
+    //   });
+    // }
 
     // ✅ 2) Confirm Order status => CONFIRMED, slotBooked false initially
     await ddb.send(
