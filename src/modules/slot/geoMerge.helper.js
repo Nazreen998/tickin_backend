@@ -29,9 +29,8 @@ export function resolveMergeKeyByRadius(existingMergeSlots, newLat, newLng, radi
   const latN = Number(newLat);
   const lngN = Number(newLng);
 
-  // ✅ strict check
   if (!Number.isFinite(latN) || !Number.isFinite(lngN) || latN === 0 || lngN === 0) {
-    return { mergeKey: "UNKNOWN", blink: false };
+    return { mergeKey: "UNKNOWN", distanceKm: null };
   }
 
   let best = null;
@@ -50,22 +49,18 @@ export function resolveMergeKeyByRadius(existingMergeSlots, newLat, newLng, radi
     }
   }
 
-  // ✅ No nearby group
   if (!best) {
     return {
       mergeKey: `GEO_${latN.toFixed(4)}_${lngN.toFixed(4)}`,
-      blink: false,
       distanceKm: null,
     };
   }
 
-  // ✅ Nearby group
   const mk =
     extractMergeKey(best) || `GEO_${Number(best.lat).toFixed(4)}_${Number(best.lng).toFixed(4)}`;
 
   return {
     mergeKey: mk,
-    blink: true,
     distanceKm: Number(bestDist.toFixed(2)),
   };
 }

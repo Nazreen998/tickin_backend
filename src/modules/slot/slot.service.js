@@ -89,7 +89,7 @@ function sanitizeLatLng(v) {
   if (v === null || v === undefined || v === "") return null;
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
-  if (Math.abs(n) < 0.0001) return null; // treat (0,0) invalid
+  if (Math.abs(n) < 0.0001) return null;
   return n;
 }
 
@@ -98,12 +98,15 @@ function sanitizeLatLng(v) {
 function pkFor(companyCode, date) {
   return `COMPANY#${companyCode}#DATE#${date}`;
 }
+
 function skForSlot(time, vehicleType, pos) {
   return `SLOT#${time}#TYPE#${vehicleType}#POS#${pos}`;
 }
+
 function skForBooking(time, vehicleType, pos, userId) {
   return `BOOKING#${time}#TYPE#${vehicleType}#POS#${pos}#USER#${userId}`;
 }
+
 function skForMergeSlot(time, mergeKey) {
   return `MERGE_SLOT#${time}#KEY#${mergeKey}`;
 }
@@ -246,6 +249,7 @@ export async function managerEnableSlot({
 }
 
 /* ---------------- SLOT GRID ---------------- */
+
 export async function getSlotGrid({ companyCode, date }) {
   validateSlotDate(date);
   const pk = pkFor(companyCode, date);
@@ -262,7 +266,6 @@ export async function getSlotGrid({ companyCode, date }) {
 
   const overrides = res.Items || [];
 
-  // ✅ 1) FULL default slots
   const defaultSlots = [];
   for (const time of DEFAULT_SLOTS) {
     for (const pos of ALL_POSITIONS) {
@@ -282,13 +285,10 @@ export async function getSlotGrid({ companyCode, date }) {
     }
   }
 
-  // ✅ 2) merge overrides into FULL slots
   const finalSlots = defaultSlots.map((slot) => {
     const override = overrides.find((o) => o.sk === slot.sk);
     const merged = override ? { ...slot, ...override } : slot;
 
-    // ✅ IMPORTANT FIX:
-    // sometimes capacity item has userId but status still AVAILABLE
     if (
       merged.vehicleType === "FULL" &&
       String(merged.status || "").toUpperCase() === "AVAILABLE" &&
@@ -300,11 +300,9 @@ export async function getSlotGrid({ companyCode, date }) {
     return merged;
   });
 
-  // ✅ 3) mergeSlots response FIX
   const mergeSlots = overrides
     .filter((o) => String(o.sk || "").startsWith("MERGE_SLOT#"))
     .map((m) => {
-      // ✅ extract time from sk: MERGE_SLOT#09:00#KEY#...
       let time = m.time;
       if (!time) {
         try {
@@ -313,10 +311,7 @@ export async function getSlotGrid({ companyCode, date }) {
         } catch (_) {}
       }
 
-      // ✅ normalize tripStatus
       const tripStatus = m.tripStatus || "PARTIAL";
-
-      // ✅ blink logic (already stored in table)
       const blink = m.blink === true;
 
       return {
@@ -337,6 +332,7 @@ export async function getSlotGrid({ companyCode, date }) {
     },
   };
 }
+
 /* ---------------- ORDERID DUPLICATE CHECK ---------------- */
 
 async function checkOrderAlreadyBooked(pk, orderId) {
@@ -536,6 +532,7 @@ export async function bookSlot({
     String(x.sk || "").startsWith(`MERGE_SLOT#${time}#`)
   );
 
+  // ✅ find mergeKey by radius
   const geo = resolveMergeKeyByRadius(
     existingMergeSlots,
     safeLat,
@@ -544,17 +541,33 @@ export async function bookSlot({
   );
 
   const mergeKey = geo.mergeKey;
-
-  // ✅ IMPORTANT: If already blink true => keep it true
-  const old = existingMergeSlots.find(
-    (x) => String(x.mergeKey) === String(mergeKey)
-  );
-  const blink = Boolean(geo.blink || old?.blink === true);
-
   const mergeSk = skForMergeSlot(time, mergeKey);
+
+  // ✅ find existing HALF bookings count for this mergeKey & time
+  const allBookingsRes = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_BOOKINGS,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
+    })
+  );
+
+  const alreadyBookings = (allBookingsRes.Items || []).filter(
+    (b) =>
+      String(b.mergeKey || "") === String(mergeKey) &&
+      String(b.slotTime || "") === String(time) &&
+      String(b.vehicleType || "").toUpperCase() === "HALF"
+  );
+
+  const bookingCountBefore = alreadyBookings.length;
+
+  // ✅ Blink ON when 2nd distributor joins this merge group
+  const blink = bookingCountBefore >= 1;
+
   const bookingId = uuidv4();
   const bookingSk = `BOOKING#${time}#KEY#${mergeKey}#USER#${uid}#${bookingId}`;
 
+  // ✅ write merge capacity + booking
   await ddb.send(
     new TransactWriteCommand({
       TransactItems: [
@@ -610,7 +623,13 @@ export async function bookSlot({
   );
 
   const finalTotal = Number(updated?.Item?.totalAmount || 0);
-  const tripStatus = finalTotal >= threshold ? "READY_FOR_CONFIRM" : "PARTIAL";
+
+  const bookingCountAfter = bookingCountBefore + 1;
+
+  const tripStatus =
+    bookingCountAfter >= 2 && finalTotal >= threshold
+      ? "READY_FOR_CONFIRM"
+      : "PARTIAL";
 
   await ddb.send(
     new UpdateCommand({
@@ -620,28 +639,6 @@ export async function bookSlot({
       ExpressionAttributeValues: { ":s": tripStatus },
     })
   );
-
-  if (orderId) {
-    await addTimelineEvent({
-      orderId,
-      event: "SLOT_BOOKED_PARTIAL",
-      by: uid,
-      role: "BOOKING",
-      data: {
-        vehicleType: "HALF",
-        time,
-        mergeKey,
-        distributorCode,
-        distributorName: resolvedName,
-        lat: safeLat,
-        lng: safeLng,
-        tripStatus,
-        amount: amt,
-        totalAmount: finalTotal,
-        blink,
-      },
-    });
-  }
 
   return {
     ok: true,
@@ -659,7 +656,7 @@ export async function bookSlot({
   };
 }
 
-/* ✅ CONFIRM MERGE */
+/* ✅ CONFIRM MERGE -> assigns FULL slot */
 export async function managerConfirmMerge({
   companyCode,
   date,
@@ -692,18 +689,57 @@ export async function managerConfirmMerge({
   const total = Number(item.totalAmount || 0);
   if (total < threshold) throw new Error("Not enough amount to confirm");
 
-  // ✅ confirm + clear blink
+  // ✅ find available FULL slot position
+  let chosenPos = null;
+
+  for (const p of ALL_POSITIONS) {
+    const slotSk = skForSlot(time, "FULL", p);
+
+    const cap = await ddb.send(
+      new GetCommand({
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: slotSk },
+      })
+    );
+
+    const status = String(cap.Item?.status || "AVAILABLE").toUpperCase();
+    if (status === "AVAILABLE") {
+      chosenPos = p;
+      break;
+    }
+  }
+
+  if (!chosenPos) throw new Error("❌ No FULL slots available");
+
+  // ✅ book FULL slot
+  const fullSk = skForSlot(time, "FULL", chosenPos);
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: fullSk },
+      UpdateExpression: "SET #s = :b, userId = :uid",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: {
+        ":b": "BOOKED",
+        ":uid": mergeKey,
+      },
+    })
+  );
+
+  // ✅ confirm mergeSlot
   await ddb.send(
     new UpdateCommand({
       TableName: TABLE_CAPACITY,
       Key: { pk, sk: mergeSk },
       UpdateExpression:
-        "SET tripStatus = :s, blink = :b, confirmedBy = :m, confirmedAt = :t",
+        "SET tripStatus = :s, blink = :b, confirmedBy = :m, confirmedAt = :t, pos = :p",
       ExpressionAttributeValues: {
-        ":s": "CONFIRMED",
+        ":s": "FULL",
         ":b": false,
         ":m": String(managerId || "MANAGER"),
         ":t": new Date().toISOString(),
+        ":p": chosenPos,
       },
     })
   );
@@ -740,7 +776,13 @@ export async function managerConfirmMerge({
     );
   }
 
-  return { ok: true, mergeKey, totalAmount: total, status: "CONFIRMED" };
+  return {
+    ok: true,
+    mergeKey,
+    totalAmount: total,
+    status: "FULL",
+    pos: chosenPos,
+  };
 }
 
 /* ✅ CANCEL BOOKING */
@@ -982,7 +1024,6 @@ export async function joinWaiting({
 
   return { ok: true, message: "Added to waiting queue" };
 }
-
 /* ---------------- MANAGER MOVE BOOKING ---------------- */
 export async function managerMoveBookingToMerge({
   companyCode,
@@ -995,14 +1036,7 @@ export async function managerMoveBookingToMerge({
 }) {
   validateSlotDate(date);
 
-  if (
-    !companyCode ||
-    !date ||
-    !time ||
-    !bookingSk ||
-    !fromMergeKey ||
-    !toMergeKey
-  ) {
+  if (!companyCode || !date || !time || !bookingSk || !fromMergeKey || !toMergeKey) {
     throw new Error("Missing required fields");
   }
 
@@ -1010,6 +1044,7 @@ export async function managerMoveBookingToMerge({
   const fromSk = skForMergeSlot(time, fromMergeKey);
   const toSk = skForMergeSlot(time, toMergeKey);
 
+  // ✅ fetch booking
   const bookingRes = await ddb.send(
     new GetCommand({
       TableName: TABLE_BOOKINGS,
@@ -1022,6 +1057,7 @@ export async function managerMoveBookingToMerge({
 
   const amt = Number(booking.amount || 0);
 
+  // ✅ move amount between merge slots + update booking mergeKey
   await ddb.send(
     new TransactWriteCommand({
       TransactItems: [
@@ -1029,8 +1065,7 @@ export async function managerMoveBookingToMerge({
           Update: {
             TableName: TABLE_CAPACITY,
             Key: { pk, sk: fromSk },
-            UpdateExpression:
-              "SET totalAmount = totalAmount - :a, updatedAt = :u",
+            UpdateExpression: "SET totalAmount = totalAmount - :a, updatedAt = :u",
             ConditionExpression: "totalAmount >= :a",
             ExpressionAttributeValues: {
               ":a": amt,
@@ -1055,8 +1090,7 @@ export async function managerMoveBookingToMerge({
           Update: {
             TableName: TABLE_BOOKINGS,
             Key: { pk, sk: bookingSk },
-            UpdateExpression:
-              "SET mergeKey = :mk, movedBy = :m, movedAt = :t",
+            UpdateExpression: "SET mergeKey = :mk, movedBy = :m, movedAt = :t",
             ExpressionAttributeValues: {
               ":mk": toMergeKey,
               ":m": String(managerId || "MANAGER"),
@@ -1068,5 +1102,11 @@ export async function managerMoveBookingToMerge({
     })
   );
 
-  return { ok: true, fromMergeKey, toMergeKey, movedAmount: amt };
+  return {
+    ok: true,
+    message: "✅ Booking moved successfully",
+    fromMergeKey,
+    toMergeKey,
+    movedAmount: amt,
+  };
 }
