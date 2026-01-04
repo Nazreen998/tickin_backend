@@ -24,7 +24,7 @@ const IST_TZ = process.env.APP_TZ || "Asia/Kolkata";
 
 
 const TABLE_CAPACITY = process.env.TABLE_CAPACITY || "tickin_slot_capacity";
-const TABLE_BOOKINGS = process.env.TABLE_BOOKINGS || "tickin-slot_bookings";
+const TABLE_BOOKINGS = process.env.TABLE_BOOKINGS || "tickin_slot_bookings";
 const TABLE_QUEUE = process.env.TABLE_QUEUE || "tickin_slot_waiting_queue";
 const TABLE_RULES = process.env.TABLE_RULES || "tickin_slot_rules";
 
@@ -166,7 +166,7 @@ export async function managerToggleLastSlot({ companyCode, enabled, openAfter = 
   if (!companyCode) throw new Error("companyCode required");
 
   if (enabled) {
-    const nowTime = dayjs().tz(TZ).format("HH:mm");  // ✅ IST based
+    const nowTime = dayjs().tz(IST_TZ).format("HH:mm");  // ✅ IST based
     if (nowTime < openAfter) {
       throw new Error(`Last slot can be opened only after ${openAfter}`);
     }
@@ -282,6 +282,16 @@ export async function getSlotGrid({ companyCode, date }) {
     },
   };
 }
+function sanitizeLatLng(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+
+  // treat (0,0) invalid
+  if (Math.abs(n) < 0.0001) return null;
+
+  return n;
+}
 
 /* ---------------- ORDERID DUPLICATE CHECK ---------------- */
 async function checkOrderAlreadyBooked(pk, orderId) {
@@ -294,23 +304,6 @@ async function checkOrderAlreadyBooked(pk, orderId) {
       ExpressionAttributeValues: { ":pk": pk },
     })
   );
-function sanitizeLatLng(v) {
-  if (v === null || v === undefined || v === "") return null;
-  const n = Number(v);
-  if (!Number.isFinite(n)) return null;
-
-  // ✅ treat (0,0) as invalid
-  if (Math.abs(n) < 0.0001) return null;
-
-  return n;
-}
-
-// ...
-
-const safeLat = sanitizeLatLng(resolvedLat);
-const safeLng = sanitizeLatLng(resolvedLng);
-
-return { resolvedName, safeLat, safeLng };
 
   const items = res.Items || [];
   return items.some((x) => String(x.orderId || "") === String(orderId));
@@ -331,11 +324,12 @@ async function resolveDistributorDetails({ distributorCode, distributorName, lat
     if (resolvedLng == null || resolvedLng === "") resolvedLng = excelDist.lng;
   }
 
+  // fallback from distributors table
   if (resolvedLat == null || resolvedLng == null || !resolvedName) {
     try {
       const dist = await getDistributorByCode(distributorCode);
 
-      if (!resolvedName) resolvedName = dist.agencyName || null;
+      if (!resolvedName) resolvedName = dist.agencyName || dist.distributorName || null;
 
       if (resolvedLat == null || resolvedLng == null) {
         const url = dist.final_url || dist.finalUrl || dist.finalURL;
@@ -345,9 +339,12 @@ async function resolveDistributorDetails({ distributorCode, distributorName, lat
       }
     } catch (_) {}
   }
+
+  const safeLat = sanitizeLatLng(resolvedLat);
+  const safeLng = sanitizeLatLng(resolvedLng);
+
   return { resolvedName, safeLat, safeLng };
 }
-
 /* ---------------- BOOK SLOT ---------------- */
 export async function bookSlot({
   companyCode,

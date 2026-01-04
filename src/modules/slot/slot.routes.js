@@ -12,19 +12,12 @@ import {
   managerMoveBookingToMerge,
   managerEditSlotTime,
   managerSetSlotMax,
+  managerEnableSlot,  
   managerToggleLastSlot,
   managerSetGlobalMax,
 } from "../slot/slot.service.js";
 
 const router = express.Router();
-router.post("/enable-slot", verifyToken, allowRoles("MANAGER"), async (req,res)=>{
-  try {
-    const data = await managerEnableSlot(req.body);
-    res.json(data);
-  } catch(err) {
-    res.status(500).json({ok:false,error:err.message});
-  }
-})
 
 /* ✅ GET GRID */
 router.get(
@@ -185,6 +178,20 @@ router.post(
   async (req, res) => {
     try {
       const data = await managerToggleLastSlot(req.body);
+      return res.json(data);
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
+/* MAnger Enable SLot */
+router.post(
+  "/enable-slot",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const data = await managerEnableSlot(req.body);
       return res.json(data);
     } catch (err) {
       return res.status(500).json({ ok: false, error: err.message });
