@@ -321,35 +321,47 @@ export const createOrder = async (req, res) => {
    ✅ Pending Orders (Master / Manager)
    
 ========================== */
+/* ==========================
+   ✅ Pending Orders (Manager / Master)
+   - CONFIRMED
+   - Loading NOT started
+========================== */
 export const getPendingOrders = async (req, res) => {
   try {
     const result = await ddb.send(
       new ScanCommand({
-        TableName: "tickin_orders",
-        FilterExpression:
-          "#st = :confirmed AND attribute_not_exists(loadingStartAt)",
+        TableName: ORDERS_TABLE,
+        FilterExpression: `
+          #st = :confirmed
+          AND (
+            attribute_not_exists(loadingStartedAt)
+            OR loadingStartedAt = :null
+          )
+        `,
         ExpressionAttributeNames: {
           "#st": "status",
         },
         ExpressionAttributeValues: {
           ":confirmed": "CONFIRMED",
+          ":null": null,
         },
       })
     );
 
     return res.json({
-      message: "Manager pending orders (before loading)",
+      ok: true,
+      message: "Pending orders (before loading)",
       count: result.Items?.length || 0,
       orders: result.Items || [],
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error(err);
+    return res.status(500).json({
+      ok: false,
+      message: err.message,
+    });
   }
 };
-
-
-
-
 /* ==========================
    ✅ Today Orders (Master only)
 ========================== */
