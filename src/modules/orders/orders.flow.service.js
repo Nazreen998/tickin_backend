@@ -175,7 +175,7 @@ export const assignDriverToOrder = async (req, res) => {
       orderId,
       event: "DRIVER_ASSIGNED",
       by: user.mobile,
-      extra: {
+      data: {
         driverId: driverPk,
         driverName: driver.name,
         driverMobile: driver.mobile,
