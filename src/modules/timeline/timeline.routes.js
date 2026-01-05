@@ -181,7 +181,7 @@ router.post(
         orderId,
         event: "DRIVER_ASSIGNED",
         by: user.mobile,
-        extra: { role: user.role, driverId, vehicleNo },
+        data: { role: user.role, driverId, vehicleNo },
       });
 
       // 2) ✅ update order meta (THIS makes driver dashboard card appear)
