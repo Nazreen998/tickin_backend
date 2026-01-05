@@ -1,17 +1,13 @@
 import dayjs from "dayjs";
 import { v4 as uuidv4 } from "uuid";
 import { ddb } from "../../config/dynamo.js";
-import { dynamoClient } from "../../config/dynamo.js";
-
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { resolveMergeKeyByRadius, haversineKm } from "./geoMerge.helper.js";
 import { pairingMap } from "../../appInit.js";
 import { getDistributorByCode } from "../distributors/distributors.service.js";
-import { ScanCommand } from "@aws-sdk/client-dynamodb";
-import { unmarshall } from "@aws-sdk/util-dynamodb";
+
 import {
   GetCommand,
-  QueryCommand,
   PutCommand,
   UpdateCommand,
   DeleteCommand,
@@ -39,6 +35,9 @@ const DEFAULT_THRESHOLD = Number(process.env.DEFAULT_MAX_AMOUNT || 80000);
 const MERGE_RADIUS_KM = Number(process.env.MERGE_RADIUS_KM || 25);
 
 const LAST_SLOT_TIME = "20:00";
+import { QueryCommand } from "@aws-sdk/client-dynamodb";
+import { unmarshall, marshall } from "@aws-sdk/util-dynamodb";
+import { dynamoClient } from "../../config/dynamo.js";
 
 const TABLE = process.env.SLOT_BOOKINGS_TABLE || "tickin_slot_bookings";
 
@@ -51,15 +50,23 @@ const ELIGIBLE_STATUSES = [
 
 export async function fetchEligibleHalfBookings({ date, time }) {
   const pk = `COMPANY#VAGR_IT#DATE#${date}`;
+  const skprefix = `BOOKING#${time}`;
+
+  // ✅ Build filter: status IN (...) safely
+  const statusFilters = ELIGIBLE_STATUSES.map((_, i) => `#st = :s${i}`).join(" OR ");
+
+  const exprValues = marshall({
+    pk,
+    skprefix,
+    half: "HALF",
+    ...Object.fromEntries(ELIGIBLE_STATUSES.map((s, i) => [`s${i}`, s])),
+  });
 
   const res = await dynamoClient.send(
     new QueryCommand({
       TableName: TABLE,
       KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :skprefix)",
-      FilterExpression:
-        "#vt = :half AND (" +
-        ELIGIBLE_STATUSES.map((_, i) => `#st = :s${i}`).join(" OR ") +
-        ")",
+      FilterExpression: `#vt = :half AND (${statusFilters})`,
       ExpressionAttributeNames: {
         "#pk": "pk",
         "#sk": "sk",
@@ -67,11 +74,11 @@ export async function fetchEligibleHalfBookings({ date, time }) {
         "#st": "status",
       },
       ExpressionAttributeValues: {
-        ":pk": { S: pk },
-        ":skprefix": { S: `BOOKING#${time}` },
-        ":half": { S: "HALF" },
+        ":pk": exprValues.pk,
+        ":skprefix": exprValues.skprefix,
+        ":half": exprValues.half,
         ...Object.fromEntries(
-          ELIGIBLE_STATUSES.map((s, i) => [`:s${i}`, { S: s }])
+          ELIGIBLE_STATUSES.map((_, i) => [`:s${i}`, exprValues[`s${i}`]])
         ),
       },
     })
