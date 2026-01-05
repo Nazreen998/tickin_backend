@@ -2,6 +2,7 @@ import dayjs from "dayjs";
 import { v4 as uuidv4 } from "uuid";
 import { ddb } from "../../config/dynamo.js";
 import { dynamoClient } from "../../config/dynamo.js";
+
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { resolveMergeKeyByRadius, haversineKm } from "./geoMerge.helper.js";
 import { pairingMap } from "../../appInit.js";
@@ -39,27 +40,39 @@ const MERGE_RADIUS_KM = Number(process.env.MERGE_RADIUS_KM || 25);
 
 const LAST_SLOT_TIME = "20:00";
 
+const TABLE = process.env.SLOT_BOOKINGS_TABLE || "tickin_slot_bookings";
+
+const ELIGIBLE_STATUSES = [
+  "PENDING_MANAGER_CONFIRM",
+  "WAITING_MANAGER_CONFIRM",
+  "PENDING",
+  "WAITING",
+];
 
 export async function fetchEligibleHalfBookings({ date, time }) {
-  const tableName = process.env.SLOT_BOOKINGS_TABLE || "tickin_slot_bookings";
+  const pk = `COMPANY#VAGR_IT#DATE#${date}`;
 
   const res = await dynamoClient.send(
-    new ScanCommand({
-      TableName: tableName,
+    new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :skprefix)",
       FilterExpression:
-        "#d = :date AND #t = :time AND #vt = :half AND (#s = :p OR #s = :w)",
+        "#vt = :half AND (" +
+        ELIGIBLE_STATUSES.map((_, i) => `#st = :s${i}`).join(" OR ") +
+        ")",
       ExpressionAttributeNames: {
-        "#d": "date",
-        "#t": "slotTime",
+        "#pk": "pk",
+        "#sk": "sk",
         "#vt": "vehicleType",
-        "#s": "status",
+        "#st": "status",
       },
       ExpressionAttributeValues: {
-        ":date": { S: date },
-        ":time": { S: time },
+        ":pk": { S: pk },
+        ":skprefix": { S: `BOOKING#${time}` },
         ":half": { S: "HALF" },
-        ":p": { S: "PENDING" },
-        ":w": { S: "WAITING" },
+        ...Object.fromEntries(
+          ELIGIBLE_STATUSES.map((s, i) => [`:s${i}`, { S: s }])
+        ),
       },
     })
   );
@@ -69,18 +82,26 @@ export async function fetchEligibleHalfBookings({ date, time }) {
 export async function getEligibleHalfBookings(req, res) {
   try {
     const { date, time } = req.query;
+
     if (!date || !time) {
-      return res.status(400).json({ ok: false, message: "date and time required" });
+      return res.status(400).json({
+        ok: false,
+        message: "date and time are required",
+      });
     }
 
     const bookings = await fetchEligibleHalfBookings({ date, time });
 
-    return res.json({ ok: true, count: bookings.length, bookings });
+    return res.json({
+      ok: true,
+      count: bookings.length,
+      bookings,
+    });
   } catch (err) {
+    console.error("getEligibleHalfBookings error:", err);
     return res.status(500).json({ ok: false, message: err.message });
   }
 }
-
 /* ---------------- HELPERS ---------------- */
 
 function findDistributorFromPairingMap(code) {
