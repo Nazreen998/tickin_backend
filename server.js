@@ -26,10 +26,10 @@ import goalsRoutes from "./src/routes/goals.routes.js";
 import distributorRoutes from "./src/modules/distributors/distributors.routes.js";
 import vehiclesRoutes from "./src/routes/vehicles.routes.js";
 
-
 // ✅ FIXED ✅
 // Import ManagerOrdersFlow as router
 import ManagerOrdersFlowRoutes from "./src/routes/managerOrdersFlow.routes.js";
+
 const app = express();
 
 /**
@@ -87,7 +87,10 @@ app.get("/db-test", async (req, res) => {
 app.use("/auth", authRoutes);
 app.use("/users", usersRoutes);
 app.use("/dashboard", dashboardRoutes);
+
+// ✅ Orders routes ✅ (ONLY THIS)
 app.use("/api/orders", ordersRoutes);
+
 app.use("/timeline", timelineRoutes);
 app.use("/products", productsRoutes);
 
@@ -96,6 +99,7 @@ app.use("/api/driver", driverRoutes);
 
 app.use("/trips", tripsRoutes);
 app.use("/goals", goalsRoutes);
+
 app.use("/api/distributors", distributorRoutes);
 app.use("/api/vehicles", vehiclesRoutes);
 
