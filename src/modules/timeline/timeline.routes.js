@@ -47,13 +47,12 @@ router.post(
       const trackingOrderId = await resolveTrackingOrderId(orderId);
 
       await addTimelineEvent({
-        orderId: trackingOrderId,
-        event: "LOAD_START",
-        by: user.mobile,
-        role: user.role,
-        data: { originalOrderId: orderId },
-      });
-
+  orderId,
+  event: "LOAD_START",
+  by: user.mobile,
+  role: user.role,
+  data: {},
+});    
       return res.json({
         ok: true,
         message: "✅ LOAD_START added",

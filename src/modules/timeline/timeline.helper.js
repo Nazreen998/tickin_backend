@@ -1,11 +1,38 @@
 import dayjs from "dayjs";
-import { PutCommand } from "@aws-sdk/lib-dynamodb";
+import { PutCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "../../config/dynamo.js";
+
+/**
+ * ✅ Resolve Timeline Target Order
+ * - If order is merged, write into FULL master order
+ */
+async function resolveTimelineOrderId(orderId) {
+  if (!orderId) return null;
+
+  try {
+    const res = await ddb.send(
+      new GetCommand({
+        TableName: "tickin_orders",
+        Key: { pk: `ORDER#${orderId}`, sk: "META" },
+      })
+    );
+
+    const meta = res.Item;
+    if (!meta) return orderId;
+
+    // ✅ if mergedIntoOrderId exists -> timeline goes to FULL master
+    if (meta.mergedIntoOrderId) return meta.mergedIntoOrderId;
+
+    return orderId;
+  } catch (e) {
+    return orderId;
+  }
+}
 
 /**
  * ✅ NEAT Timeline Event Writer
  * - Always uses data:{}
- * - Same keys always
+ * - Always writes to correct targetOrderId
  */
 export const addTimelineEvent = async ({
   orderId,
@@ -23,12 +50,15 @@ export const addTimelineEvent = async ({
   if (!orderId) throw new Error("orderId required");
   if (!evt) throw new Error("event required");
 
+  // ✅ auto redirect if order is merged into FULL
+  const targetOrderId = await resolveTimelineOrderId(orderId);
+
   const sk = `TS#${timestamp}#EVT#${evt}`;
 
   const item = {
-    pk: `ORDER#${orderId}`,
+    pk: `ORDER#${targetOrderId}`,
     sk,
-    orderId,
+    orderId: targetOrderId,
 
     event: evt,
     step: evt,
@@ -42,7 +72,6 @@ export const addTimelineEvent = async ({
     role: role ? String(role) : null,
 
     eventId: eventId ? String(eventId) : null,
-
     data: data || {},
     createdAt: timestamp,
   };
@@ -51,7 +80,9 @@ export const addTimelineEvent = async ({
     new PutCommand({
       TableName: "tickin_timeline",
       Item: item,
-      ConditionExpression: eventId ? "attribute_not_exists(eventId)" : undefined,
+      ConditionExpression: eventId
+        ? "attribute_not_exists(eventId)"
+        : undefined,
     })
   );
 

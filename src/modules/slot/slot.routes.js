@@ -15,9 +15,17 @@ import {
   managerToggleLastSlot,
   managerMergeOrdersToMergeKey,
   managerSetGlobalMax,
+  getEligibleHalfBookings,
 } from "../slot/slot.service.js";
 
 const router = express.Router();
+
+router.get(
+  "/eligible-half-bookings",
+  verifyToken,
+  allowRoles("MANAGER"),
+  getEligibleHalfBookings
+);
 
 /* ✅ GET GRID */
 router.get(

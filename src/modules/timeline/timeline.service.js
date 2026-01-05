@@ -1,5 +1,21 @@
 import { v4 as uuidv4 } from "uuid";
 // keep your existing imports...
+async function resolveTargetOrderId(orderId) {
+  if (!orderId) return null;
+
+  const res = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_ORDERS,
+      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    })
+  );
+
+  if (!res.Item) return orderId;
+
+  if (res.Item.mergedIntoOrderId) return res.Item.mergedIntoOrderId;
+
+  return orderId;
+}
 export async function getOrderTimeline(req, res) {
   try {
     const { orderId } = req.params;
@@ -11,23 +27,25 @@ export async function getOrderTimeline(req, res) {
       });
     }
 
-    const pk = `ORDER#${orderId}`;
+    // ✅ redirect to FULL order if merged
+    const targetOrderId = await resolveTargetOrderId(orderId);
+
+    const pk = `ORDER#${targetOrderId}`;
 
     const out = await ddb.send(
       new QueryCommand({
         TableName: TABLE_TIMELINE,
         KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: {
-          ":pk": pk,
-        },
-        ScanIndexForward: true, // oldest -> latest
+        ExpressionAttributeValues: { ":pk": pk },
+        ScanIndexForward: true,
       })
     );
 
     return res.json({
       ok: true,
-      orderId,
-      items: out.Items || [],
+      requestedOrderId: orderId,
+      orderId: targetOrderId,
+      timeline: out.Items || [],
     });
   } catch (e) {
     return res.status(500).json({

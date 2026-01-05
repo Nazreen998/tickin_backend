@@ -1644,3 +1644,28 @@ export async function managerMoveBookingToMerge({
     movedAmount: amt,
   };
 }
+export async function getEligibleHalfBookings(req, res) {
+  try {
+    const { date, time } = req.query;
+
+    // ✅ Validate
+    if (!date || !time) {
+      return res.status(400).json({
+        ok: false,
+        message: "date and time are required",
+      });
+    }
+
+    // ✅ Here fetch from tickin_slot_bookings table
+    // Example: use your dynamo access method
+    const bookings = await fetchEligibleHalfBookings({ date, time });
+
+    return res.json({
+      ok: true,
+      count: bookings.length,
+      bookings,
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, message: err.message });
+  }
+}
