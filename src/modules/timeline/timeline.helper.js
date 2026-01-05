@@ -3,8 +3,9 @@ import { PutCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "../../config/dynamo.js";
 
 /**
- * ✅ Timeline Event Writer
- * - supports both data + extra (backward compatibility)
+ * ✅ NEAT Timeline Event Writer
+ * - Always uses data:{}
+ * - Same keys always
  */
 export const addTimelineEvent = async ({
   orderId,
@@ -12,26 +13,17 @@ export const addTimelineEvent = async ({
   by,
   byUserName = null,
   role = null,
-
   data = {},
-  extra = {}, // ✅ allow existing route code
 
   eventId = null,
   eventAt = null,
 }) => {
   const timestamp = eventAt || new Date().toISOString();
   const evt = String(event || "").trim().toUpperCase();
-
   if (!orderId) throw new Error("orderId required");
   if (!evt) throw new Error("event required");
 
   const sk = `TS#${timestamp}#EVT#${evt}`;
-
-  // ✅ merge both into one payload
-  const finalData = {
-    ...(data || {}),
-    ...(extra || {}),
-  };
 
   const item = {
     pk: `ORDER#${orderId}`,
@@ -51,7 +43,7 @@ export const addTimelineEvent = async ({
 
     eventId: eventId ? String(eventId) : null,
 
-    data: finalData,
+    data: data || {},
     createdAt: timestamp,
   };
 
@@ -59,9 +51,7 @@ export const addTimelineEvent = async ({
     new PutCommand({
       TableName: "tickin_timeline",
       Item: item,
-      ConditionExpression: eventId
-        ? "attribute_not_exists(eventId)"
-        : undefined,
+      ConditionExpression: eventId ? "attribute_not_exists(eventId)" : undefined,
     })
   );
 

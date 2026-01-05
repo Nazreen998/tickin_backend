@@ -3,13 +3,36 @@ import { verifyToken } from "../../middleware/auth.middleware.js";
 import { allowRoles } from "../../middleware/role.middleware.js";
 import { addTimelineEvent } from "./timeline.helper.js";
 import { ddb } from "../../config/dynamo.js";
-import { UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { UpdateCommand, GetCommand, } from "@aws-sdk/lib-dynamodb";
 import { getOrderTimeline } from "./timeline.service.js";
 
 const router = express.Router();
 
 /* ===========================
-   ✅ 1) LOADING START
+   ✅ helper: resolve tracking orderId
+   If HALF order merged -> return FULL orderId
+=========================== */
+async function resolveTrackingOrderId(orderId) {
+  const res = await ddb.send(
+    new GetCommand({
+      TableName: "tickin_orders",
+      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    })
+  );
+
+  const order = res.Item;
+  if (!order) return orderId;
+
+  // ✅ if this order is merged into FULL order
+  if (order.mergedIntoOrderId) {
+    return String(order.mergedIntoOrderId);
+  }
+
+  return orderId;
+}
+
+/* ===========================
+   ✅ LOADING START
 =========================== */
 router.post(
   "/loading-start",
@@ -21,23 +44,30 @@ router.post(
       const { orderId } = req.body;
       if (!orderId) return res.status(400).json({ message: "orderId required" });
 
+      const trackingOrderId = await resolveTrackingOrderId(orderId);
+
       await addTimelineEvent({
-        orderId,
+        orderId: trackingOrderId,
         event: "LOAD_START",
         by: user.mobile,
-        data: { role: user.role },   // ✅ fixed
+        role: user.role,
+        data: { originalOrderId: orderId },
       });
 
-      return res.json({ message: "✅ LOAD_START added", orderId });
+      return res.json({
+        ok: true,
+        message: "✅ LOAD_START added",
+        orderId,
+        trackingOrderId,
+      });
     } catch (err) {
-      console.error("loading-start error:", err);
       return res.status(500).json({ message: err.message });
     }
   }
 );
 
 /* ===========================
-   ✅ 2) VEHICLE SELECTED (Loading item scan)
+   ✅ LOADING ITEM
 =========================== */
 router.post(
   "/loading-item",
@@ -51,16 +81,110 @@ router.post(
       if (!orderId) return res.status(400).json({ message: "orderId required" });
       if (!productId) return res.status(400).json({ message: "productId required" });
 
+      const trackingOrderId = await resolveTrackingOrderId(orderId);
+
       await addTimelineEvent({
-        orderId,
-        event: "VEHICLE_SELECTED", // ✅ changed to match timeline steps
+        orderId: trackingOrderId,
+        event: "VEHICLE_SELECTED",
         by: user.mobile,
-        data: { role: user.role, productId, qty: Number(qty || 0) },
+        role: user.role,
+        data: {
+          productId,
+          qty: Number(qty || 0),
+          originalOrderId: orderId,
+        },
       });
 
-      return res.json({ message: "✅ VEHICLE_SELECTED added", orderId, productId });
+      return res.json({
+        ok: true,
+        message: "✅ VEHICLE_SELECTED added",
+        orderId,
+        trackingOrderId,
+      });
     } catch (err) {
-      console.error("loading-item error:", err);
+      return res.status(500).json({ message: err.message });
+    }
+  }
+);
+
+/* ===========================
+   ✅ LOADING END
+=========================== */
+router.post(
+  "/loading-end",
+  verifyToken,
+  allowRoles("MASTER", "MANAGER"),
+  async (req, res) => {
+    try {
+      const user = req.user;
+      const { orderId } = req.body;
+      if (!orderId) return res.status(400).json({ message: "orderId required" });
+
+      const trackingOrderId = await resolveTrackingOrderId(orderId);
+
+      await addTimelineEvent({
+        orderId: trackingOrderId,
+        event: "LOAD_END",
+        by: user.mobile,
+        role: user.role,
+        data: { originalOrderId: orderId },
+      });
+
+      return res.json({ ok: true, message: "✅ LOAD_END added", orderId, trackingOrderId });
+    } catch (err) {
+      return res.status(500).json({ message: err.message });
+    }
+  }
+);
+
+/* ===========================
+   ✅ ASSIGN DRIVER
+=========================== */
+router.post(
+  "/assign-driver",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const user = req.user;
+      const { orderId, driverId, vehicleNo } = req.body;
+
+      if (!orderId) return res.status(400).json({ message: "orderId required" });
+      if (!driverId) return res.status(400).json({ message: "driverId required" });
+
+      const trackingOrderId = await resolveTrackingOrderId(orderId);
+
+      await addTimelineEvent({
+        orderId: trackingOrderId,
+        event: "DRIVER_ASSIGNED",
+        by: user.mobile,
+        role: user.role,
+        data: { driverId, vehicleNo, originalOrderId: orderId },
+      });
+
+      // ✅ update FULL order META (so driver dashboard shows correct)
+      await ddb.send(
+        new UpdateCommand({
+          TableName: "tickin_orders",
+          Key: { pk: `ORDER#${trackingOrderId}`, sk: "META" },
+          UpdateExpression: "SET driverId=:d, vehicleNo=:v, #st=:s, updatedAt=:t",
+          ExpressionAttributeNames: { "#st": "status" },
+          ExpressionAttributeValues: {
+            ":d": String(driverId),
+            ":v": vehicleNo || null,
+            ":s": "DRIVER_ASSIGNED",
+            ":t": new Date().toISOString(),
+          },
+        })
+      );
+
+      return res.json({
+        ok: true,
+        message: "✅ DRIVER_ASSIGNED added",
+        orderId,
+        trackingOrderId,
+      });
+    } catch (err) {
       return res.status(500).json({ message: err.message });
     }
   }
@@ -79,14 +203,17 @@ router.post(
       const { orderId } = req.body;
       if (!orderId) return res.status(400).json({ message: "orderId required" });
 
+      const trackingOrderId = await resolveTrackingOrderId(orderId);
+
       await addTimelineEvent({
-        orderId,
+        orderId: trackingOrderId,
         event: "DRIVER_STARTED",
         by: user.mobile,
-        data: { role: user.role },
+        role: user.role,
+        data: { originalOrderId: orderId },
       });
 
-      return res.json({ message: "✅ DRIVER_STARTED added", orderId });
+      return res.json({ ok: true, message: "✅ DRIVER_STARTED added", orderId, trackingOrderId });
     } catch (err) {
       return res.status(500).json({ message: err.message });
     }
@@ -94,83 +221,7 @@ router.post(
 );
 
 /* ===========================
-   ✅ 3) LOADING END
-=========================== */
-router.post(
-  "/loading-end",
-  verifyToken,
-  allowRoles("MASTER", "MANAGER"),
-  async (req, res) => {
-    try {
-      const user = req.user;
-      const { orderId } = req.body;
-      if (!orderId) return res.status(400).json({ message: "orderId required" });
-
-      await addTimelineEvent({
-        orderId,
-        event: "LOAD_END",
-        by: user.mobile,
-        data: { role: user.role },
-      });
-
-      return res.json({ message: "✅ LOAD_END added", orderId });
-    } catch (err) {
-      console.error("loading-end error:", err);
-      return res.status(500).json({ message: err.message });
-    }
-  }
-);
-
-/* ===========================
-   ✅ 4) ASSIGN DRIVER
-=========================== */
-router.post(
-  "/assign-driver",
-  verifyToken,
-  allowRoles("MANAGER"),
-  async (req, res) => {
-    try {
-      const user = req.user;
-      const { orderId, driverId, vehicleNo } = req.body;
-
-      if (!orderId) return res.status(400).json({ message: "orderId required" });
-      if (!driverId) return res.status(400).json({ message: "driverId required" });
-
-      await addTimelineEvent({
-        orderId,
-        event: "DRIVER_ASSIGNED",
-        by: user.mobile,
-        data: { role: user.role, driverId, vehicleNo },
-      });
-
-      await ddb.send(
-        new UpdateCommand({
-          TableName: "tickin_orders",
-          Key: { pk: `ORDER#${orderId}`, sk: "META" },
-          UpdateExpression:
-            "SET driverId = :d, vehicleNo = :v, #st = :s, updatedAt = :t",
-          ExpressionAttributeNames: {
-            "#st": "status",
-          },
-          ExpressionAttributeValues: {
-            ":d": String(driverId),
-            ":v": vehicleNo || null,
-            ":s": "DRIVER_ASSIGNED",
-            ":t": new Date().toISOString(),
-          },
-        })
-      );
-
-      return res.json({ message: "✅ DRIVER_ASSIGNED added", orderId, driverId });
-    } catch (err) {
-      console.error("assign-driver error:", err);
-      return res.status(500).json({ message: err.message });
-    }
-  }
-);
-
-/* ===========================
-   ✅ 5) ARRIVED
+   ✅ ARRIVED
 =========================== */
 router.post(
   "/arrived",
@@ -182,27 +233,28 @@ router.post(
       const { orderId, stage } = req.body;
       if (!orderId) return res.status(400).json({ message: "orderId required" });
 
+      const trackingOrderId = await resolveTrackingOrderId(orderId);
+
       const s = (stage || "DISTRIBUTOR").toUpperCase();
-      const event =
-        s === "WAREHOUSE" ? "WAREHOUSE_REACHED" : "DRIVER_REACHED_DISTRIBUTOR";
+      const event = s === "WAREHOUSE" ? "WAREHOUSE_REACHED" : "DRIVER_REACHED_DISTRIBUTOR";
 
       await addTimelineEvent({
-        orderId,
+        orderId: trackingOrderId,
         event,
         by: user.mobile,
-        data: { role: user.role, stage: s },
+        role: user.role,
+        data: { stage: s, originalOrderId: orderId },
       });
 
-      return res.json({ message: `✅ ${event} added`, orderId });
+      return res.json({ ok: true, message: `✅ ${event} added`, orderId, trackingOrderId });
     } catch (err) {
-      console.error("arrived error:", err);
       return res.status(500).json({ message: err.message });
     }
   }
 );
 
 /* ===========================
-   ✅ 6) UNLOAD START
+   ✅ UNLOAD START / END
 =========================== */
 router.post(
   "/unload-start",
@@ -214,24 +266,23 @@ router.post(
       const { orderId } = req.body;
       if (!orderId) return res.status(400).json({ message: "orderId required" });
 
+      const trackingOrderId = await resolveTrackingOrderId(orderId);
+
       await addTimelineEvent({
-        orderId,
+        orderId: trackingOrderId,
         event: "UNLOAD_START",
         by: user.mobile,
-        data: { role: user.role },
+        role: user.role,
+        data: { originalOrderId: orderId },
       });
 
-      return res.json({ message: "✅ UNLOAD_START added", orderId });
+      return res.json({ ok: true, message: "✅ UNLOAD_START added", orderId, trackingOrderId });
     } catch (err) {
-      console.error("unload-start error:", err);
       return res.status(500).json({ message: err.message });
     }
   }
 );
 
-/* ===========================
-   ✅ 7) UNLOAD END
-=========================== */
 router.post(
   "/unload-end",
   verifyToken,
@@ -242,16 +293,18 @@ router.post(
       const { orderId } = req.body;
       if (!orderId) return res.status(400).json({ message: "orderId required" });
 
+      const trackingOrderId = await resolveTrackingOrderId(orderId);
+
       await addTimelineEvent({
-        orderId,
+        orderId: trackingOrderId,
         event: "UNLOAD_END",
         by: user.mobile,
-        data: { role: user.role },
+        role: user.role,
+        data: { originalOrderId: orderId },
       });
 
-      return res.json({ message: "✅ UNLOAD_END added", orderId });
+      return res.json({ ok: true, message: "✅ UNLOAD_END added", orderId, trackingOrderId });
     } catch (err) {
-      console.error("unload-end error:", err);
       return res.status(500).json({ message: err.message });
     }
   }

@@ -248,12 +248,14 @@ export async function managerEnableSlot({
 }
 
 /* ---------------- SLOT GRID ---------------- */
+/* ---------------- SLOT GRID ---------------- */
 export async function getSlotGrid({ companyCode, date }) {
   validateSlotDate(date);
   const pk = pkFor(companyCode, date);
 
   const rules = await getRules(companyCode);
 
+  // ✅ Capacity overrides (FULL slots + MERGE_SLOT rows)
   const res = await ddb.send(
     new QueryCommand({
       TableName: TABLE_CAPACITY,
@@ -264,7 +266,7 @@ export async function getSlotGrid({ companyCode, date }) {
 
   const overrides = res.Items || [];
 
-  // ✅ NEW: fetch bookings once for participants
+  // ✅ All bookings (HALF + FULL) - we need HALF to show participants / waiting list
   const bookingsRes = await ddb.send(
     new QueryCommand({
       TableName: TABLE_BOOKINGS,
@@ -275,10 +277,13 @@ export async function getSlotGrid({ companyCode, date }) {
 
   const allBookings = bookingsRes.Items || [];
 
+  // ✅ Default FULL grid
   const defaultSlots = [];
   for (const time of DEFAULT_SLOTS) {
     for (const pos of ALL_POSITIONS) {
       let status = "AVAILABLE";
+
+      // ✅ Last slot control
       if (time === LAST_SLOT_TIME && rules.lastSlotEnabled === false) {
         status = "DISABLED";
       }
@@ -294,10 +299,12 @@ export async function getSlotGrid({ companyCode, date }) {
     }
   }
 
+  // ✅ Apply overrides to FULL slots
   const finalSlots = defaultSlots.map((slot) => {
     const override = overrides.find((o) => o.sk === slot.sk);
     const merged = override ? { ...slot, ...override } : slot;
 
+    // ✅ If AVAILABLE but userId exists => BOOKED
     if (
       merged.vehicleType === "FULL" &&
       String(merged.status || "").toUpperCase() === "AVAILABLE" &&
@@ -309,19 +316,19 @@ export async function getSlotGrid({ companyCode, date }) {
     return merged;
   });
 
-  // ✅ UPDATED: mergeSlots include participants + distanceKm
+  // ✅ MERGE_SLOT rows (HALF auto merge groups)
   const mergeSlots = overrides
     .filter((o) => String(o.sk || "").startsWith("MERGE_SLOT#"))
     .map((m) => {
       let time = m.time;
       if (!time) {
         try {
-          const parts = String(m.sk).split("#");
+          const parts = String(m.sk).split("#"); // MERGE_SLOT#09:00#KEY#...
           if (parts.length > 1) time = parts[1];
         } catch (_) {}
       }
 
-      // mergeKey extract
+      // ✅ extract mergeKey from SK if missing
       let mergeKey = m.mergeKey;
       if (!mergeKey) {
         try {
@@ -331,6 +338,7 @@ export async function getSlotGrid({ companyCode, date }) {
         } catch (_) {}
       }
 
+      // ✅ Participants for this mergeKey+time
       const participants = allBookings
         .filter(
           (b) =>
@@ -345,17 +353,24 @@ export async function getSlotGrid({ companyCode, date }) {
           orderId: b.orderId || null,
           bookingSk: b.sk,
           status: b.status,
+          slotTime: b.slotTime,
+          mergeKey: b.mergeKey,
           lat: b.lat,
           lng: b.lng,
         }));
 
-      // ✅ distanceKm between first 2 participants
+      // ✅ distance between first 2 participants
       let distanceKm = null;
       if (participants.length >= 2) {
         const a = participants[0];
         const b = participants[1];
         if (a.lat && a.lng && b.lat && b.lng) {
-          distanceKm = haversineKm(Number(a.lat), Number(a.lng), Number(b.lat), Number(b.lng));
+          distanceKm = haversineKm(
+            Number(a.lat),
+            Number(a.lng),
+            Number(b.lat),
+            Number(b.lng)
+          );
           distanceKm = Number(distanceKm.toFixed(2));
         }
       }
@@ -376,8 +391,32 @@ export async function getSlotGrid({ companyCode, date }) {
       };
     });
 
+  // ✅ ✅ NEW: ALL waiting + pending HALF bookings (for manual merge dialog)
+  const waitingHalfBookings = allBookings
+    .filter((b) => {
+      const vt = String(b.vehicleType || "").toUpperCase();
+      const st = String(b.status || "").toUpperCase();
+      return (
+        vt === "HALF" &&
+        (st.includes("PENDING") || st.includes("WAIT"))
+      );
+    })
+    .map((b) => ({
+      distributorName: b.distributorName,
+      distributorCode: b.distributorCode,
+      amount: Number(b.amount || 0),
+      orderId: b.orderId,
+      status: b.status,
+      slotTime: b.slotTime,
+      mergeKey: b.mergeKey,
+      bookingSk: b.sk,
+      lat: b.lat,
+      lng: b.lng,
+    }));
+
   return {
     slots: [...finalSlots, ...mergeSlots],
+    waitingHalfBookings, // ✅ use this in Flutter manual merge dialog
     rules: {
       maxAmount: rules.threshold,
       lastSlotEnabled: rules.lastSlotEnabled,
