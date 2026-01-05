@@ -34,6 +34,15 @@ router.get(
     }
   }
 );
+/*MAnual Merge*/
+router.post("/merge/orders/manual", async (req, res) => {
+  try {
+    const out = await managerMergeOrdersToMergeKey(req.body);
+    res.json(out);
+  } catch (e) {
+    res.status(400).json({ ok: false, message: e.message || String(e) });
+  }
+});
 
 /* ✅ BOOK */
 router.post(

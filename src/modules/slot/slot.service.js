@@ -2,7 +2,7 @@ import dayjs from "dayjs";
 import { v4 as uuidv4 } from "uuid";
 import { ddb } from "../../config/dynamo.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
-import { resolveMergeKeyByRadius } from "./geoMerge.helper.js";
+import { resolveMergeKeyByRadius, haversineKm } from "./geoMerge.helper.js";
 import { pairingMap } from "../../appInit.js";
 import { getDistributorByCode } from "../distributors/distributors.service.js";
 
@@ -249,7 +249,6 @@ export async function managerEnableSlot({
 }
 
 /* ---------------- SLOT GRID ---------------- */
-
 export async function getSlotGrid({ companyCode, date }) {
   validateSlotDate(date);
   const pk = pkFor(companyCode, date);
@@ -265,6 +264,17 @@ export async function getSlotGrid({ companyCode, date }) {
   );
 
   const overrides = res.Items || [];
+
+  // ✅ NEW: fetch bookings once for participants
+  const bookingsRes = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_BOOKINGS,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
+    })
+  );
+
+  const allBookings = bookingsRes.Items || [];
 
   const defaultSlots = [];
   for (const time of DEFAULT_SLOTS) {
@@ -300,6 +310,7 @@ export async function getSlotGrid({ companyCode, date }) {
     return merged;
   });
 
+  // ✅ UPDATED: mergeSlots include participants + distanceKm
   const mergeSlots = overrides
     .filter((o) => String(o.sk || "").startsWith("MERGE_SLOT#"))
     .map((m) => {
@@ -311,6 +322,44 @@ export async function getSlotGrid({ companyCode, date }) {
         } catch (_) {}
       }
 
+      // mergeKey extract
+      let mergeKey = m.mergeKey;
+      if (!mergeKey) {
+        try {
+          const sk = String(m.sk || "");
+          const parts = sk.split("#KEY#");
+          if (parts.length > 1) mergeKey = parts[1];
+        } catch (_) {}
+      }
+
+      const participants = allBookings
+        .filter(
+          (b) =>
+            String(b.vehicleType || "").toUpperCase() === "HALF" &&
+            String(b.slotTime || "") === String(time) &&
+            String(b.mergeKey || "") === String(mergeKey)
+        )
+        .map((b) => ({
+          distributorCode: b.distributorCode,
+          distributorName: b.distributorName,
+          amount: Number(b.amount || 0),
+          bookingSk: b.sk,
+          status: b.status,
+          lat: b.lat,
+          lng: b.lng,
+        }));
+
+      // ✅ distanceKm between first 2 participants
+      let distanceKm = null;
+      if (participants.length >= 2) {
+        const a = participants[0];
+        const b = participants[1];
+        if (a.lat && a.lng && b.lat && b.lng) {
+          distanceKm = haversineKm(Number(a.lat), Number(a.lng), Number(b.lat), Number(b.lng));
+          distanceKm = Number(distanceKm.toFixed(2));
+        }
+      }
+
       const tripStatus = m.tripStatus || "PARTIAL";
       const blink = m.blink === true;
 
@@ -320,6 +369,10 @@ export async function getSlotGrid({ companyCode, date }) {
         blink,
         tripStatus,
         vehicleType: "HALF",
+        mergeKey,
+        participants,
+        bookingCount: participants.length,
+        distanceKm,
       };
     });
 
@@ -332,7 +385,6 @@ export async function getSlotGrid({ companyCode, date }) {
     },
   };
 }
-
 /* ---------------- ORDERID DUPLICATE CHECK ---------------- */
 
 async function checkOrderAlreadyBooked(pk, orderId) {
@@ -761,7 +813,7 @@ export async function managerConfirmMerge({
     })
   );
 
-  // ✅ update all bookings
+  // ✅ find all bookings
   const allBookingsRes = await ddb.send(
     new QueryCommand({
       TableName: TABLE_BOOKINGS,
@@ -777,24 +829,45 @@ export async function managerConfirmMerge({
       String(b.vehicleType || "").toUpperCase() === "HALF"
   );
 
+  // ✅ UPDATED: update booking table + order meta
   for (const b of bookings) {
-  if (b.orderId) {
+
+    // ✅ Update Booking itself (THIS WAS MISSING)
     await ddb.send(
       new UpdateCommand({
-        TableName: "tickin_orders",
-        Key: { pk: `ORDER#${b.orderId}`, sk: "META" },
+        TableName: TABLE_BOOKINGS,
+        Key: { pk, sk: b.sk },
         UpdateExpression:
-          "SET slotVehicleType=:vt, slotPos=:p, tripStatus=:ts, updatedAt=:u",
+          "SET #st = :c, confirmedBy = :m, confirmedAt = :t, slotPos = :p, slotVehicleType = :vt",
+        ExpressionAttributeNames: { "#st": "status" },
         ExpressionAttributeValues: {
-          ":vt": "FULL",
+          ":c": "CONFIRMED",
+          ":m": String(managerId || "MANAGER"),
+          ":t": new Date().toISOString(),
           ":p": chosenPos,
-          ":ts": "CONFIRMED",
-          ":u": new Date().toISOString(),
+          ":vt": "FULL",
         },
       })
     );
+
+    // ✅ Update order meta (existing)
+    if (b.orderId) {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: "tickin_orders",
+          Key: { pk: `ORDER#${b.orderId}`, sk: "META" },
+          UpdateExpression:
+            "SET slotVehicleType=:vt, slotPos=:p, tripStatus=:ts, updatedAt=:u",
+          ExpressionAttributeValues: {
+            ":vt": "FULL",
+            ":p": chosenPos,
+            ":ts": "CONFIRMED",
+            ":u": new Date().toISOString(),
+          },
+        })
+      );
+    }
   }
-}
 
   return {
     ok: true,
@@ -802,6 +875,191 @@ export async function managerConfirmMerge({
     totalAmount: total,
     status: "FULL",
     pos: chosenPos,
+  };
+}
+/*MAnual merge MANAGER */
+export async function managerMergeOrdersToMergeKey({
+  companyCode,
+  date,
+  time,
+  orderIds = [],
+  targetMergeKey, // optional
+  managerId,
+}) {
+  validateSlotDate(date);
+
+  if (!companyCode || !date || !time) {
+    throw new Error("companyCode, date, time required");
+  }
+
+  if (!Array.isArray(orderIds) || orderIds.length < 2) {
+    throw new Error("Provide at least 2 orderIds to merge");
+  }
+
+  const pk = pkFor(companyCode, date);
+
+  const rules = await getRules(companyCode);
+  const threshold = rules.threshold;
+
+  // ✅ fetch all bookings once
+  const allBookingsRes = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_BOOKINGS,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
+    })
+  );
+
+  const allBookings = allBookingsRes.Items || [];
+
+  // ✅ pick only HALF bookings for given time and orderIds
+  const selected = allBookings.filter(
+    (b) =>
+      String(b.vehicleType || "").toUpperCase() === "HALF" &&
+      String(b.slotTime || "") === String(time) &&
+      orderIds.includes(String(b.orderId || ""))
+  );
+
+  if (selected.length < 2) {
+    throw new Error("Not enough HALF bookings found for given orderIds");
+  }
+
+  // ✅ determine target mergeKey (if not given, use first booking mergeKey)
+  let toMergeKey = targetMergeKey;
+  if (!toMergeKey || String(toMergeKey).trim() === "") {
+    // ✅ auto use first booking's mergeKey
+    toMergeKey = selected[0].mergeKey || null;
+  }
+
+  if (!toMergeKey) {
+    throw new Error("targetMergeKey missing and cannot infer from bookings");
+  }
+
+  const toSk = skForMergeSlot(time, toMergeKey);
+
+  // ✅ group bookings by fromMergeKey
+  const groups = {};
+  for (const b of selected) {
+    const fromKey = b.mergeKey || "UNKNOWN";
+    groups[fromKey] = groups[fromKey] || [];
+    groups[fromKey].push(b);
+  }
+
+  // ✅ ensure target merge slot exists (capacity row)
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: toSk },
+      UpdateExpression:
+        "SET mergeKey = if_not_exists(mergeKey, :mk), " +
+        "lat = if_not_exists(lat, :lat), lng = if_not_exists(lng, :lng), updatedAt = :u",
+      ExpressionAttributeValues: {
+        ":mk": toMergeKey,
+        ":lat": selected[0].lat,
+        ":lng": selected[0].lng,
+        ":u": new Date().toISOString(),
+      },
+    })
+  );
+
+  let movedTotal = 0;
+
+  // ✅ move bookings from each fromMergeKey -> toMergeKey
+  for (const fromMergeKey of Object.keys(groups)) {
+    if (fromMergeKey === toMergeKey) continue;
+
+    const fromSk = skForMergeSlot(time, fromMergeKey);
+    const list = groups[fromMergeKey];
+
+    for (const booking of list) {
+      const amt = Number(booking.amount || 0);
+      movedTotal += amt;
+
+      await ddb.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            // ✅ subtract from old merge slot
+            {
+              Update: {
+                TableName: TABLE_CAPACITY,
+                Key: { pk, sk: fromSk },
+                UpdateExpression:
+                  "SET totalAmount = totalAmount - :a, updatedAt = :u",
+                ConditionExpression: "totalAmount >= :a",
+                ExpressionAttributeValues: {
+                  ":a": amt,
+                  ":u": new Date().toISOString(),
+                },
+              },
+            },
+            // ✅ add to target merge slot
+            {
+              Update: {
+                TableName: TABLE_CAPACITY,
+                Key: { pk, sk: toSk },
+                UpdateExpression:
+                  "SET totalAmount = if_not_exists(totalAmount, :z) + :a, updatedAt = :u",
+                ExpressionAttributeValues: {
+                  ":z": 0,
+                  ":a": amt,
+                  ":u": new Date().toISOString(),
+                },
+              },
+            },
+            // ✅ update booking mergeKey
+            {
+              Update: {
+                TableName: TABLE_BOOKINGS,
+                Key: { pk, sk: booking.sk },
+                UpdateExpression:
+                  "SET mergeKey = :mk, movedBy = :m, movedAt = :t",
+                ExpressionAttributeValues: {
+                  ":mk": toMergeKey,
+                  ":m": String(managerId || "MANAGER"),
+                  ":t": new Date().toISOString(),
+                },
+              },
+            },
+          ],
+        })
+      );
+    }
+  }
+
+  // ✅ recompute totalAmount from target merge slot
+  const cap = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: toSk },
+    })
+  );
+
+  const finalTotal = Number(cap?.Item?.totalAmount || 0);
+
+  const newTripStatus =
+    finalTotal >= threshold ? "READY_FOR_CONFIRM" : "PARTIAL";
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: toSk },
+      UpdateExpression: "SET tripStatus = :s, blink = :b, updatedAt = :u",
+      ExpressionAttributeValues: {
+        ":s": newTripStatus,
+        ":b": true,
+        ":u": new Date().toISOString(),
+      },
+    })
+  );
+
+  return {
+    ok: true,
+    message: "✅ Orders merged into one MergeKey",
+    targetMergeKey: toMergeKey,
+    movedCount: selected.length,
+    movedTotal,
+    finalTotal,
+    tripStatus: newTripStatus,
   };
 }
 
