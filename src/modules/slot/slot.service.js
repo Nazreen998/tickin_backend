@@ -5,7 +5,8 @@ import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { resolveMergeKeyByRadius, haversineKm } from "./geoMerge.helper.js";
 import { pairingMap } from "../../appInit.js";
 import { getDistributorByCode } from "../distributors/distributors.service.js";
-
+import { ScanCommand } from "@aws-sdk/client-dynamodb";
+import { unmarshall } from "@aws-sdk/util-dynamodb";
 import {
   GetCommand,
   QueryCommand,
@@ -36,6 +37,48 @@ const DEFAULT_THRESHOLD = Number(process.env.DEFAULT_MAX_AMOUNT || 80000);
 const MERGE_RADIUS_KM = Number(process.env.MERGE_RADIUS_KM || 25);
 
 const LAST_SLOT_TIME = "20:00";
+
+
+export async function fetchEligibleHalfBookings({ date, time }) {
+  const tableName = process.env.SLOT_BOOKINGS_TABLE || "tickin_slot_bookings";
+
+  const res = await dynamoClient.send(
+    new ScanCommand({
+      TableName: tableName,
+      FilterExpression:
+        "#d = :date AND #t = :time AND #vt = :half AND (#s = :p OR #s = :w)",
+      ExpressionAttributeNames: {
+        "#d": "date",
+        "#t": "slotTime",
+        "#vt": "vehicleType",
+        "#s": "status",
+      },
+      ExpressionAttributeValues: {
+        ":date": { S: date },
+        ":time": { S: time },
+        ":half": { S: "HALF" },
+        ":p": { S: "PENDING" },
+        ":w": { S: "WAITING" },
+      },
+    })
+  );
+
+  return (res.Items || []).map((it) => unmarshall(it));
+}
+export async function getEligibleHalfBookings(req, res) {
+  try {
+    const { date, time } = req.query;
+    if (!date || !time) {
+      return res.status(400).json({ ok: false, message: "date and time required" });
+    }
+
+    const bookings = await fetchEligibleHalfBookings({ date, time });
+
+    return res.json({ ok: true, count: bookings.length, bookings });
+  } catch (err) {
+    return res.status(500).json({ ok: false, message: err.message });
+  }
+}
 
 /* ---------------- HELPERS ---------------- */
 
@@ -1643,29 +1686,4 @@ export async function managerMoveBookingToMerge({
     toMergeKey,
     movedAmount: amt,
   };
-}
-export async function getEligibleHalfBookings(req, res) {
-  try {
-    const { date, time } = req.query;
-
-    // ✅ Validate
-    if (!date || !time) {
-      return res.status(400).json({
-        ok: false,
-        message: "date and time are required",
-      });
-    }
-
-    // ✅ Here fetch from tickin_slot_bookings table
-    // Example: use your dynamo access method
-    const bookings = await fetchEligibleHalfBookings({ date, time });
-
-    return res.json({
-      ok: true,
-      count: bookings.length,
-      bookings,
-    });
-  } catch (err) {
-    return res.status(500).json({ ok: false, message: err.message });
-  }
 }
