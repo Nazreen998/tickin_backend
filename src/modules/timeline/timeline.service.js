@@ -21,18 +21,15 @@ const TIMELINE_STEPS = [
 
 /**
  * ✅ Alias mapping (important)
- * Because your DB has ORDER_PLACED_PENDING, ORDER_CONFIRMED etc
  */
 const EVENT_ALIASES = {
   ORDER_PLACED_PENDING: "ORDER_CREATED",
   ORDER_CONFIRMED: "ORDER_CREATED",
 
-  // ✅ new neat event types
   SLOT_BOOKED_PARTIAL: "SLOT_BOOKED",
   SLOT_BOOKED_FULL: "SLOT_BOOKED",
   SLOT_BOOKED_CONFIRMED: "SLOT_BOOKED",
 };
-
 
 /**
  * ✅ Build progress (Amazon UI)
@@ -40,7 +37,6 @@ const EVENT_ALIASES = {
 function buildProgress({ timelineItems = [], orderCreatedAt = null }) {
   const firstTimeByEvent = {};
 
-  // 1️⃣ Map raw events into standard steps
   for (const it of timelineItems) {
     const rawEv = String(it.event || "").toUpperCase();
     const mappedEv = EVENT_ALIASES[rawEv] || rawEv;
@@ -50,12 +46,10 @@ function buildProgress({ timelineItems = [], orderCreatedAt = null }) {
     }
   }
 
-  // 2️⃣ Ensure ORDER_CREATED always true if orderCreatedAt exists
   if (!firstTimeByEvent["ORDER_CREATED"] && orderCreatedAt) {
     firstTimeByEvent["ORDER_CREATED"] = orderCreatedAt;
   }
 
-  // 3️⃣ Find currentStatus (latest completed step)
   let currentStatus = null;
   for (let i = TIMELINE_STEPS.length - 1; i >= 0; i--) {
     const step = TIMELINE_STEPS[i];
@@ -65,7 +59,6 @@ function buildProgress({ timelineItems = [], orderCreatedAt = null }) {
     }
   }
 
-  // 4️⃣ Build final progress list
   const progress = TIMELINE_STEPS.map((step) => {
     const ts = firstTimeByEvent[step] || null;
     return {
@@ -81,7 +74,33 @@ function buildProgress({ timelineItems = [], orderCreatedAt = null }) {
 }
 
 /**
- * ✅ Get Order Timeline API
+ * ✅ Resolve Final Timeline OrderId
+ * - if this order merged into FULL order, show FULL timeline
+ */
+async function resolveFinalOrderId(orderId) {
+  const orderRes = await ddb.send(
+    new GetCommand({
+      TableName: "tickin_orders",
+      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    })
+  );
+
+  if (!orderRes.Item) return { finalOrderId: null, order: null };
+
+  const order = orderRes.Item;
+
+  // ✅ if merged, redirect timeline to FULL orderId
+  const mergedInto = order.mergedIntoOrderId || null;
+
+  if (mergedInto) {
+    return { finalOrderId: mergedInto, order };
+  }
+
+  return { finalOrderId: orderId, order };
+}
+
+/**
+ * ✅ GET Timeline API
  */
 export const getOrderTimeline = async (req, res) => {
   try {
@@ -94,21 +113,14 @@ export const getOrderTimeline = async (req, res) => {
       return res.status(401).json({ ok: false, message: "Invalid token" });
     }
 
-    // ✅ 1) Read Order META
-    const orderRes = await ddb.send(
-      new GetCommand({
-        TableName: "tickin_orders",
-        Key: { pk: `ORDER#${orderId}`, sk: "META" },
-      })
-    );
+    // ✅ Resolve final orderId for timeline
+    const { finalOrderId, order } = await resolveFinalOrderId(orderId);
 
-    if (!orderRes.Item) {
+    if (!order) {
       return res.status(404).json({ ok: false, message: "Order not found" });
     }
 
-    const order = orderRes.Item;
-
-    // ✅ 2) Ownership restrictions
+    // ✅ Ownership checks use original order meta
     if (role === "SALES OFFICER") {
       if (String(order.createdBy) !== String(mobile)) {
         return res
@@ -148,19 +160,18 @@ export const getOrderTimeline = async (req, res) => {
       }
     }
 
-    // ✅ 3) Fetch timeline events
+    // ✅ Fetch timeline using FINAL orderId
     const result = await ddb.send(
       new QueryCommand({
         TableName: "tickin_timeline",
         KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: { ":pk": `ORDER#${orderId}` },
+        ExpressionAttributeValues: { ":pk": `ORDER#${finalOrderId}` },
         ScanIndexForward: true,
       })
     );
 
     const timeline = result.Items || [];
 
-    // ✅ 4) Build Amazon style progress
     const { currentStatus, progress } = buildProgress({
       timelineItems: timeline,
       orderCreatedAt: order.createdAt || order.timestamp || null,
@@ -171,13 +182,14 @@ export const getOrderTimeline = async (req, res) => {
     return res.json({
       ok: true,
       message: "Timeline fetched ✅",
-      orderId,
+      orderId: finalOrderId,              // ✅ show full orderId here
+      requestedOrderId: orderId,          // ✅ for reference
       role,
       currentStatus,
       progress,
       count: timeline.length,
       orderMeta: {
-        orderId: order.orderId || orderId,
+        orderId: finalOrderId,
         distributorId: order.distributorId,
         distributorName: order.distributorName,
         status: order.status,
@@ -186,6 +198,7 @@ export const getOrderTimeline = async (req, res) => {
         totalAmount: order.totalAmount || order.amount || 0,
         createdBy: order.createdBy,
         createdAt: order.createdAt || null,
+        mergedIntoOrderId: order.mergedIntoOrderId || null,
       },
       orderItems,
       timeline,

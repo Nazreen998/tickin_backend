@@ -9,29 +9,7 @@ import { getOrderTimeline } from "./timeline.service.js";
 const router = express.Router();
 
 /* ===========================
-   ✅ OPTIONAL: Update order status helper
-=========================== */
-const updateOrderStatus = async (orderId, status) => {
-  if (!status) return;
-  await ddb.send(
-    new UpdateCommand({
-      TableName: "tickin_orders",
-      Key: { pk: `ORDER#${orderId}`, sk: "META" },
-      UpdateExpression: "SET #st = :s, updatedAt = :t",
-      ExpressionAttributeNames: { "#st": "status" },
-      ExpressionAttributeValues: {
-        ":s": status,
-        ":t": new Date().toISOString(),
-      },
-    })
-  );
-};
-
-/* ===========================
    ✅ 1) LOADING START
-   POST /timeline/loading-start
-   Roles: MASTER / MANAGER
-   Body: { orderId }
 =========================== */
 router.post(
   "/loading-start",
@@ -47,11 +25,8 @@ router.post(
         orderId,
         event: "LOAD_START",
         by: user.mobile,
-        extra: { role: user.role },
+        data: { role: user.role },   // ✅ fixed
       });
-
-      // optional order status update
-      // await updateOrderStatus(orderId, "LOAD_START");
 
       return res.json({ message: "✅ LOAD_START added", orderId });
     } catch (err) {
@@ -62,12 +37,8 @@ router.post(
 );
 
 /* ===========================
-   ✅ 2) LOADING ITEM (each item scan)
-   POST /timeline/loading-item
-   Roles: MASTER / MANAGER
-   Body: { orderId, productId, qty }
+   ✅ 2) VEHICLE SELECTED (Loading item scan)
 =========================== */
-event: "VEHICLE_SELECTED",
 router.post(
   "/loading-item",
   verifyToken,
@@ -82,23 +53,21 @@ router.post(
 
       await addTimelineEvent({
         orderId,
-        event: "LOADING ITEM", // ✅ you said flow has VEHICLE_SELECTED; if you want "LOADING_ITEM" tell me
+        event: "VEHICLE_SELECTED", // ✅ changed to match timeline steps
         by: user.mobile,
-        extra: { role: user.role, productId, qty: Number(qty || 0) },
+        data: { role: user.role, productId, qty: Number(qty || 0) },
       });
 
-      return res.json({ message: "✅ LOADING_ITEM added", orderId, productId });
+      return res.json({ message: "✅ VEHICLE_SELECTED added", orderId, productId });
     } catch (err) {
       console.error("loading-item error:", err);
       return res.status(500).json({ message: err.message });
     }
   }
 );
+
 /* ===========================
    ✅ DRIVER STARTED
-   POST /timeline/driver-started
-   Roles: DRIVER
-   Body: { orderId }
 =========================== */
 router.post(
   "/driver-started",
@@ -114,7 +83,7 @@ router.post(
         orderId,
         event: "DRIVER_STARTED",
         by: user.mobile,
-        extra: { role: user.role },
+        data: { role: user.role },
       });
 
       return res.json({ message: "✅ DRIVER_STARTED added", orderId });
@@ -126,9 +95,6 @@ router.post(
 
 /* ===========================
    ✅ 3) LOADING END
-   POST /timeline/loading-end
-   Roles: MASTER / MANAGER
-   Body: { orderId }
 =========================== */
 router.post(
   "/loading-end",
@@ -144,11 +110,8 @@ router.post(
         orderId,
         event: "LOAD_END",
         by: user.mobile,
-        extra: { role: user.role },
+        data: { role: user.role },
       });
-
-      // optional
-      // await updateOrderStatus(orderId, "LOAD_END");
 
       return res.json({ message: "✅ LOAD_END added", orderId });
     } catch (err) {
@@ -160,9 +123,6 @@ router.post(
 
 /* ===========================
    ✅ 4) ASSIGN DRIVER
-   POST /timeline/assign-driver
-   Roles: MASTER / MANAGER
-   Body: { orderId, driverId, vehicleNo? }
 =========================== */
 router.post(
   "/assign-driver",
@@ -176,7 +136,6 @@ router.post(
       if (!orderId) return res.status(400).json({ message: "orderId required" });
       if (!driverId) return res.status(400).json({ message: "driverId required" });
 
-      // 1) ✅ timeline event
       await addTimelineEvent({
         orderId,
         event: "DRIVER_ASSIGNED",
@@ -184,7 +143,6 @@ router.post(
         data: { role: user.role, driverId, vehicleNo },
       });
 
-      // 2) ✅ update order meta (THIS makes driver dashboard card appear)
       await ddb.send(
         new UpdateCommand({
           TableName: "tickin_orders",
@@ -195,7 +153,7 @@ router.post(
             "#st": "status",
           },
           ExpressionAttributeValues: {
-            ":d": String(driverId),        // driverId should match what driver API receives
+            ":d": String(driverId),
             ":v": vehicleNo || null,
             ":s": "DRIVER_ASSIGNED",
             ":t": new Date().toISOString(),
@@ -210,12 +168,9 @@ router.post(
     }
   }
 );
+
 /* ===========================
-   ✅ 5) ARRIVED (driver reached distributor / warehouse etc)
-   POST /timeline/arrived
-   Roles: DRIVER
-   Body: { orderId, stage }
-   stage can be: "DISTRIBUTOR" | "WAREHOUSE"
+   ✅ 5) ARRIVED
 =========================== */
 router.post(
   "/arrived",
@@ -227,9 +182,7 @@ router.post(
       const { orderId, stage } = req.body;
       if (!orderId) return res.status(400).json({ message: "orderId required" });
 
-      // default distributor arrival
       const s = (stage || "DISTRIBUTOR").toUpperCase();
-
       const event =
         s === "WAREHOUSE" ? "WAREHOUSE_REACHED" : "DRIVER_REACHED_DISTRIBUTOR";
 
@@ -237,7 +190,7 @@ router.post(
         orderId,
         event,
         by: user.mobile,
-        extra: { role: user.role, stage: s },
+        data: { role: user.role, stage: s },
       });
 
       return res.json({ message: `✅ ${event} added`, orderId });
@@ -250,9 +203,6 @@ router.post(
 
 /* ===========================
    ✅ 6) UNLOAD START
-   POST /timeline/unload-start
-   Roles: DRIVER
-   Body: { orderId }
 =========================== */
 router.post(
   "/unload-start",
@@ -268,7 +218,7 @@ router.post(
         orderId,
         event: "UNLOAD_START",
         by: user.mobile,
-        extra: { role: user.role },
+        data: { role: user.role },
       });
 
       return res.json({ message: "✅ UNLOAD_START added", orderId });
@@ -281,9 +231,6 @@ router.post(
 
 /* ===========================
    ✅ 7) UNLOAD END
-   POST /timeline/unload-end
-   Roles: DRIVER
-   Body: { orderId }
 =========================== */
 router.post(
   "/unload-end",
@@ -299,11 +246,8 @@ router.post(
         orderId,
         event: "UNLOAD_END",
         by: user.mobile,
-        extra: { role: user.role },
+        data: { role: user.role },
       });
-
-      // optional
-      // await updateOrderStatus(orderId, "DELIVERED");
 
       return res.json({ message: "✅ UNLOAD_END added", orderId });
     } catch (err) {
@@ -314,9 +258,7 @@ router.post(
 );
 
 /* ===========================
-   ✅ GET Timeline (already)
-   GET /timeline/:orderId
-   Roles: MASTER / MANAGER / DISTRIBUTOR / SALES OFFICER / DRIVER
+   ✅ GET Timeline
 =========================== */
 router.get(
   "/:orderId",

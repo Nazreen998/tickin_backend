@@ -3,10 +3,8 @@ import { PutCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "../../config/dynamo.js";
 
 /**
- * ✅ NEAT Timeline Event Writer (Mongo Style)
- * - No spread extra
- * - Everything goes inside data{}
- * - Standard keys always same
+ * ✅ Timeline Event Writer
+ * - supports both data + extra (backward compatibility)
  */
 export const addTimelineEvent = async ({
   orderId,
@@ -14,18 +12,26 @@ export const addTimelineEvent = async ({
   by,
   byUserName = null,
   role = null,
-  data = {},
 
-  // Optional: stop duplicate insert (ex: "SLOT_BOOKED#ORD#DATE")
+  data = {},
+  extra = {}, // ✅ allow existing route code
+
   eventId = null,
   eventAt = null,
 }) => {
   const timestamp = eventAt || new Date().toISOString();
   const evt = String(event || "").trim().toUpperCase();
+
   if (!orderId) throw new Error("orderId required");
   if (!evt) throw new Error("event required");
 
   const sk = `TS#${timestamp}#EVT#${evt}`;
+
+  // ✅ merge both into one payload
+  const finalData = {
+    ...(data || {}),
+    ...(extra || {}),
+  };
 
   const item = {
     pk: `ORDER#${orderId}`,
@@ -33,7 +39,7 @@ export const addTimelineEvent = async ({
     orderId,
 
     event: evt,
-    step: evt, // ✅ later mapping can override
+    step: evt,
     status: "DONE",
 
     timestamp,
@@ -45,8 +51,7 @@ export const addTimelineEvent = async ({
 
     eventId: eventId ? String(eventId) : null,
 
-    // ✅ all extra goes only here
-    data: data || {},
+    data: finalData,
     createdAt: timestamp,
   };
 

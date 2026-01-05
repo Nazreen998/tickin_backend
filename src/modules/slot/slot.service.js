@@ -5,7 +5,6 @@ import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { resolveMergeKeyByRadius, haversineKm } from "./geoMerge.helper.js";
 import { pairingMap } from "../../appInit.js";
 import { getDistributorByCode } from "../distributors/distributors.service.js";
-
 import {
   GetCommand,
   QueryCommand,
@@ -343,6 +342,7 @@ export async function getSlotGrid({ companyCode, date }) {
           distributorCode: b.distributorCode,
           distributorName: b.distributorName,
           amount: Number(b.amount || 0),
+          orderId: b.orderId || null,
           bookingSk: b.sk,
           status: b.status,
           lat: b.lat,

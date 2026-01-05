@@ -1,7 +1,6 @@
 import express from "express";
 import { verifyToken } from "../../middleware/auth.middleware.js";
 import { allowRoles } from "../../middleware/role.middleware.js";
-
 import {
   getSlotGrid,
   bookSlot,
@@ -14,6 +13,7 @@ import {
   managerSetSlotMax,
   managerEnableSlot,
   managerToggleLastSlot,
+  managerMergeOrdersToMergeKey,
   managerSetGlobalMax,
 } from "../slot/slot.service.js";
 
@@ -35,14 +35,19 @@ router.get(
   }
 );
 /*MAnual Merge*/
-router.post("/merge/orders/manual", async (req, res) => {
-  try {
-    const out = await managerMergeOrdersToMergeKey(req.body);
-    res.json(out);
-  } catch (e) {
-    res.status(400).json({ ok: false, message: e.message || String(e) });
+router.post(
+  "/merge/orders/manual",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const out = await managerMergeOrdersToMergeKey(req.body);
+      res.json(out);
+    } catch (e) {
+      res.status(400).json({ ok: false, message: e.message || String(e) });
+    }
   }
-});
+);
 
 /* ✅ BOOK */
 router.post(
