@@ -248,14 +248,10 @@ export const createOrder = async (req, res) => {
       totalQty,
      status: finalStatus,
 
-<<<<<<< HEAD
       // ✅ NEW FLAGS (keep safe)
       loadingStarted: false,
       loadingStartedAt: null,
 
-=======
-      status: finalStatus,
->>>>>>> ea356aba5362e7afe1acb57752b4a97d9795846c
       pendingReason: "",
 
       createdBy: user.mobile,
