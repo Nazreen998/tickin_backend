@@ -614,7 +614,24 @@ export async function bookSlot({
       ],
     })
   );
-
+// ✅ HERE — ADD THIS BLOCK
+if (orderId) {
+  await ddb.send(
+    new UpdateCommand({
+      TableName: "tickin_orders",
+      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+      UpdateExpression:
+        "SET slotDate=:d, slotTime=:t, slotVehicleType=:vt, mergeKey=:mk, updatedAt=:u",
+      ExpressionAttributeValues: {
+        ":d": date,
+        ":t": time,
+        ":vt": "HALF",
+        ":mk": mergeKey,
+        ":u": new Date().toISOString(),
+      },
+    })
+  );
+}
   const updated = await ddb.send(
     new GetCommand({
       TableName: TABLE_CAPACITY,
@@ -761,20 +778,23 @@ export async function managerConfirmMerge({
   );
 
   for (const b of bookings) {
+  if (b.orderId) {
     await ddb.send(
       new UpdateCommand({
-        TableName: TABLE_BOOKINGS,
-        Key: { pk, sk: b.sk },
-        UpdateExpression: "SET #s = :c, confirmedAt = :t, confirmedBy = :m",
-        ExpressionAttributeNames: { "#s": "status" },
+        TableName: "tickin_orders",
+        Key: { pk: `ORDER#${b.orderId}`, sk: "META" },
+        UpdateExpression:
+          "SET slotVehicleType=:vt, slotPos=:p, tripStatus=:ts, updatedAt=:u",
         ExpressionAttributeValues: {
-          ":c": "CONFIRMED",
-          ":t": new Date().toISOString(),
-          ":m": String(managerId || "MANAGER"),
+          ":vt": "FULL",
+          ":p": chosenPos,
+          ":ts": "CONFIRMED",
+          ":u": new Date().toISOString(),
         },
       })
     );
   }
+}
 
   return {
     ok: true,

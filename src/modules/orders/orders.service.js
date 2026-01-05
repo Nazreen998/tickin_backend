@@ -327,43 +327,49 @@ export const createOrder = async (req, res) => {
 };
 /* ==========================
    ✅ Pending Orders (Master / Manager)
-   - Old + New data safe
+   
+========================== */
+/* ==========================
+   ✅ Pending Orders (Manager / Master)
+   - CONFIRMED
+   - Loading NOT started
 ========================== */
 export const getPendingOrders = async (req, res) => {
   try {
     const result = await ddb.send(
       new ScanCommand({
-        TableName: "tickin_orders",
+        TableName: ORDERS_TABLE,
         FilterExpression: `
-          #st = :pending 
+          #st = :confirmed
           AND (
-            attribute_not_exists(loadingStarted) 
-            OR loadingStarted = :ls
+            attribute_not_exists(loadingStartedAt)
+            OR loadingStartedAt = :null
           )
         `,
         ExpressionAttributeNames: {
           "#st": "status",
         },
         ExpressionAttributeValues: {
-          ":pending": "PENDING",
-          ":ls": false,
+          ":confirmed": "CONFIRMED",
+          ":null": null,
         },
       })
     );
 
     return res.json({
-      message: "Pending orders (loading not started)",
+      ok: true,
+      message: "Pending orders (before loading)",
       count: result.Items?.length || 0,
       orders: result.Items || [],
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: "Error", error: err.message });
+    return res.status(500).json({
+      ok: false,
+      message: err.message,
+    });
   }
 };
-
-
-
 /* ==========================
    ✅ Today Orders (Master only)
 ========================== */
@@ -490,11 +496,11 @@ export const confirmOrder = async (req, res) => {
     // }
 
     // ✅ Only PENDING orders can be confirmed
-    if (String(order.status || "") !== "PENDING") {
-      return res.status(403).json({
-        message: `Only PENDING orders can be confirmed. Current status: ${order.status}`,
-      });
-    }
+    // if (String(order.status || "") !== "PENDING") {
+    //   return res.status(403).json({
+    //     message: `Only PENDING orders can be confirmed. Current status: ${order.status}`,
+    //   });
+    // }
 
     // ✅ 2) Confirm Order status => CONFIRMED, slotBooked false initially
     await ddb.send(

@@ -43,7 +43,9 @@ export const vehicleSelected = async (req, res) => {
   }
 };
 
-// ✅ 2) Loading Start
+/* ==========================
+   ✅ Loading Start
+========================== */
 export const loadingStart = async (req, res) => {
   try {
     const { orderId } = req.body;
@@ -60,14 +62,17 @@ export const loadingStart = async (req, res) => {
       new UpdateCommand({
         TableName: ORDERS_TABLE,
         Key: { pk: `ORDER#${orderId}`, sk: "META" },
-
-        // 🔴 IMPORTANT CHANGE HERE
         UpdateExpression: `
           SET 
+            #s = :st,
             loadingStarted = :ls,
             loadingStartedAt = :t
         `,
+        ExpressionAttributeNames: {
+          "#s": "status",
+        },
         ExpressionAttributeValues: {
+          ":st": "LOADING_STARTED",
           ":ls": true,
           ":t": new Date().toISOString(),
         },
@@ -87,38 +92,13 @@ export const loadingStart = async (req, res) => {
       orderId,
     });
   } catch (err) {
+    console.error(err);
     return res.status(500).json({
       ok: false,
       message: err.message,
     });
   }
 };
-
-
-
-// ✅ 3) Loading Item (each by each)
-export const loadingItem = async (req, res) => {
-  try {
-    const { orderId, productId, qty } = req.body;
-    const user = req.user;
-
-    if (!orderId || !productId || !qty) {
-      return res.status(400).json({ ok: false, message: "orderId, productId, qty required" });
-    }
-
-    await addTimelineEvent({
-      orderId,
-      event: "LOADING_ITEM",
-      by: user.mobile,
-      extra: { productId, qty }
-    });
-
-    return res.json({ ok: true, message: "✅ Loading item added", orderId, productId, qty });
-  } catch (err) {
-    return res.status(500).json({ ok: false, message: err.message });
-  }
-};
-
 // ✅ 4) Loading End
 export const loadingEnd = async (req, res) => {
   try {
@@ -195,7 +175,7 @@ export const assignDriverToOrder = async (req, res) => {
       orderId,
       event: "DRIVER_ASSIGNED",
       by: user.mobile,
-      extra: {
+      data: {
         driverId: driverPk,
         driverName: driver.name,
         driverMobile: driver.mobile,
