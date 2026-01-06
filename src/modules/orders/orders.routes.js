@@ -16,6 +16,7 @@ import {
   confirmDraftOrder,
   deleteOrder,
   getOrdersByMergeKey,
+  getOrderFlowByKey,
   getSlotConfirmedOrders
 } from "./orders.service.js";
 
@@ -223,6 +224,12 @@ router.post(
   verifyToken,
   allowRoles("MANAGER", "MASTER"),
   assignDriverToOrder
+);
+router.get(
+  "/flow/:flowKey",
+  verifyToken,
+  allowRoles("MANAGER", "MASTER"),
+  getOrderFlowByKey
 );
 
 export default router;
