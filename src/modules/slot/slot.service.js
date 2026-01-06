@@ -12,6 +12,7 @@ import {
   UpdateCommand,
   DeleteCommand,
   TransactWriteCommand,
+  QueryCommand,              // ✅ ADD THIS
 } from "@aws-sdk/lib-dynamodb";
 
 import utc from "dayjs/plugin/utc.js";
@@ -19,7 +20,6 @@ import timezone from "dayjs/plugin/timezone.js";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
-
 const IST_TZ = process.env.APP_TZ || "Asia/Kolkata";
 
 const TABLE_CAPACITY = process.env.TABLE_CAPACITY || "tickin_slot_capacity";
@@ -35,11 +35,13 @@ const DEFAULT_THRESHOLD = Number(process.env.DEFAULT_MAX_AMOUNT || 80000);
 const MERGE_RADIUS_KM = Number(process.env.MERGE_RADIUS_KM || 25);
 
 const LAST_SLOT_TIME = "20:00";
-import { QueryCommand } from "@aws-sdk/client-dynamodb";
-import { unmarshall, marshall } from "@aws-sdk/util-dynamodb";
-import { dynamoClient } from "../../config/dynamo.js";
-
-const TABLE = process.env.SLOT_BOOKINGS_TABLE || "tickin_slot_bookings";
+/* ============================================================
+   ✅ Eligible HALF Bookings (Manual Merge list API)
+   - Uses lib-dynamodb (ddb) for correct types
+   - Works with your PK/SK structure:
+     pk = COMPANY#VAGR_IT#DATE#2026-01-06
+     sk = BOOKING#09:00#KEY#GEO_...#USER#...#bookingId
+============================================================ */
 
 const ELIGIBLE_STATUSES = [
   "PENDING_MANAGER_CONFIRM",
@@ -48,24 +50,18 @@ const ELIGIBLE_STATUSES = [
   "WAITING",
 ];
 
-export async function fetchEligibleHalfBookings({ date, time }) {
-  const pk = `COMPANY#VAGR_IT#DATE#${date}`;
-  const skprefix = `BOOKING#${time}`;
+export async function fetchEligibleHalfBookings({ companyCode, date, time }) {
+  const pk = `COMPANY#${companyCode}#DATE#${date}`;
+  const skPrefix = `BOOKING#${time}#KEY#`;
 
-  // ✅ Build filter: status IN (...) safely
-  const statusFilters = ELIGIBLE_STATUSES.map((_, i) => `#st = :s${i}`).join(" OR ");
+  const statusFilters = ELIGIBLE_STATUSES
+    .map((_, i) => `#st = :s${i}`)
+    .join(" OR ");
 
-  const exprValues = marshall({
-    pk,
-    skprefix,
-    half: "HALF",
-    ...Object.fromEntries(ELIGIBLE_STATUSES.map((s, i) => [`s${i}`, s])),
-  });
-
-  const res = await dynamoClient.send(
+  const res = await ddb.send(
     new QueryCommand({
-      TableName: TABLE,
-      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :skprefix)",
+      TableName: TABLE_BOOKINGS,
+      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :skPrefix)",
       FilterExpression: `#vt = :half AND (${statusFilters})`,
       ExpressionAttributeNames: {
         "#pk": "pk",
@@ -74,21 +70,23 @@ export async function fetchEligibleHalfBookings({ date, time }) {
         "#st": "status",
       },
       ExpressionAttributeValues: {
-        ":pk": exprValues.pk,
-        ":skprefix": exprValues.skprefix,
-        ":half": exprValues.half,
+        ":pk": pk,
+        ":skPrefix": skPrefix,
+        ":half": "HALF",
         ...Object.fromEntries(
-          ELIGIBLE_STATUSES.map((_, i) => [`:s${i}`, exprValues[`s${i}`]])
+          ELIGIBLE_STATUSES.map((s, i) => [`:s${i}`, s])
         ),
       },
     })
   );
 
-  return (res.Items || []).map((it) => unmarshall(it));
+  return res.Items || [];
 }
+
 export async function getEligibleHalfBookings(req, res) {
   try {
     const { date, time } = req.query;
+    const companyCode = req.user?.companyCode || "VAGR_IT";
 
     if (!date || !time) {
       return res.status(400).json({
@@ -97,7 +95,11 @@ export async function getEligibleHalfBookings(req, res) {
       });
     }
 
-    const bookings = await fetchEligibleHalfBookings({ date, time });
+    const bookings = await fetchEligibleHalfBookings({
+      companyCode,
+      date,
+      time,
+    });
 
     return res.json({
       ok: true,
