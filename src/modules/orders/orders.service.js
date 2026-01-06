@@ -22,24 +22,42 @@ const TRIPS_TABLE = process.env.TRIPS_TABLE || "tickin_trips";
 const BOOKINGS_TABLE = process.env.BOOKINGS_TABLE || "tickin_slot_bookings";
 export const getSlotConfirmedOrders = async (req, res) => {
   try {
-    // ✅ 1) Scan tickin_slot_bookings where status = CONFIRMED
+    const { date } = req.query;
+
+    // ✅ date query required for better performance
+    if (!date) {
+      return res.status(400).json({
+        ok: false,
+        message: "date is required (YYYY-MM-DD)",
+      });
+    }
+
+    // ✅ 1) Query bookings for company + date
+    const pk = `COMPANY#VAGR_IT#DATE#${date}`;
+
     const bookingsRes = await ddb.send(
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
-        FilterExpression: "#s = :c",
-        ExpressionAttributeNames: { "#s": "status" },
-        ExpressionAttributeValues: { ":c": "CONFIRMED" },
+        FilterExpression: "#pk = :pk AND #st = :c",
+        ExpressionAttributeNames: {
+          "#pk": "pk",
+          "#st": "status",
+        },
+        ExpressionAttributeValues: {
+          ":pk": pk,
+          ":c": "CONFIRMED",
+        },
       })
     );
 
     const bookings = bookingsRes.Items || [];
 
-    // ✅ 2) Unique orderIds from bookings
+    // ✅ 2) Unique orderIds from confirmed bookings
     const orderIds = [...new Set(bookings.map((b) => b.orderId).filter(Boolean))];
 
     const orders = [];
 
-    // ✅ 3) Fetch each order details from tickin_orders
+    // ✅ 3) Fetch each order meta
     for (const orderId of orderIds) {
       const orderRes = await ddb.send(
         new GetCommand({
@@ -51,31 +69,42 @@ export const getSlotConfirmedOrders = async (req, res) => {
       if (!orderRes.Item) continue;
 
       const order = orderRes.Item;
+
+      // ✅ booking for this order
       const booking = bookings.find((b) => b.orderId === orderId);
+      if (!booking) continue;
 
       orders.push({
         orderId,
-        distributorName: order.distributorName,
-        distributorId: order.distributorId,
+        distributorName: booking.distributorName || order.distributorName,
+        distributorId: booking.distributorCode || order.distributorId,
         status: order.status,
         items: order.items || [],
         totalQty: order.totalQty || 0,
         grandAmount: order.totalAmount || 0,
 
-        // ✅ slot from bookings table
+        // ✅ slot booking details
         slot: {
           bookingId: booking.bookingId,
           companyCode: booking.pk?.split("#")[1] || null,
           date: booking.pk?.split("#")[3] || null,
           time: booking.slotTime,
-          pos: booking.pos,
+          pos: booking.slotPos || booking.pos || null,
           vehicleType: booking.vehicleType,
+          mergeKey: booking.mergeKey || null,
+          bookedBy: booking.userId || null,
         },
       });
     }
 
-    return res.json({ ok: true, count: orders.length, orders });
+    return res.json({
+      ok: true,
+      count: orders.length,
+      date,
+      orders,
+    });
   } catch (err) {
+    console.error("getSlotConfirmedOrders error:", err);
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
@@ -914,5 +943,27 @@ export const getOrderById = async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: "Error", error: err.message });
+  }
+};
+export const getOrdersByMergeKey = async (req, res) => {
+  try {
+    const { mergeKey } = req.params;
+
+    const scanRes = await ddb.send(
+      new ScanCommand({
+        TableName: ORDERS_TABLE,
+        FilterExpression: "mergeKey = :mk",
+        ExpressionAttributeValues: { ":mk": mergeKey },
+      })
+    );
+
+    return res.json({
+      ok: true,
+      mergeKey,
+      count: scanRes.Items?.length || 0,
+      orders: scanRes.Items || [],
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, message: err.message });
   }
 };

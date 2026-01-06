@@ -1,6 +1,7 @@
 import express from "express";
 import { verifyToken } from "../../middleware/auth.middleware.js";
 import { allowRoles } from "../../middleware/role.middleware.js";
+
 import {
   getSlotGrid,
   bookSlot,
@@ -20,6 +21,7 @@ import {
 
 const router = express.Router();
 
+/* ✅ Eligible HALF bookings (Manager only) */
 router.get(
   "/eligible-half-bookings",
   verifyToken,
@@ -35,14 +37,25 @@ router.get(
   async (req, res) => {
     try {
       const { companyCode, date } = req.query;
+
+      if (!companyCode || !date) {
+        return res.status(400).json({ ok: false, message: "companyCode & date required" });
+      }
+
       const data = await getSlotGrid({ companyCode, date });
-      return res.json({ ok: true, slots: data });
+
+      // ✅ IMPORTANT: return data directly (not wrapped again)
+      return res.json({
+        ok: true,
+        ...data,
+      });
     } catch (err) {
-      return res.status(400).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, message: err.message });
     }
   }
 );
-/*MAnual Merge*/
+
+/* ✅ Manual Merge */
 router.post(
   "/merge/orders/manual",
   verifyToken,
@@ -67,7 +80,7 @@ router.post(
       const data = await bookSlot(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(400).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, message: err.message });
     }
   }
 );
@@ -82,7 +95,7 @@ router.post(
       const data = await joinWaiting(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(400).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, message: err.message });
     }
   }
 );
@@ -97,7 +110,7 @@ router.post(
       const data = await managerCancelBooking(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(400).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, message: err.message });
     }
   }
 );
@@ -112,7 +125,7 @@ router.post(
       const data = await managerDisableSlot(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(400).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, message: err.message });
     }
   }
 );
@@ -127,7 +140,7 @@ router.post(
       const data = await managerEnableSlot(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(400).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, message: err.message });
     }
   }
 );
@@ -142,7 +155,7 @@ router.post(
       const data = await managerConfirmMerge(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(400).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, message: err.message });
     }
   }
 );
@@ -157,7 +170,7 @@ router.post(
       const data = await managerMoveBookingToMerge(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(400).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, message: err.message });
     }
   }
 );
@@ -172,7 +185,7 @@ router.post(
       const data = await managerEditSlotTime(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(400).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, message: err.message });
     }
   }
 );
@@ -187,7 +200,7 @@ router.post(
       const data = await managerSetSlotMax(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(400).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, message: err.message });
     }
   }
 );
@@ -202,7 +215,7 @@ router.post(
       const data = await managerSetGlobalMax(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(400).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, message: err.message });
     }
   }
 );
@@ -217,7 +230,7 @@ router.post(
       const data = await managerToggleLastSlot(req.body);
       return res.json(data);
     } catch (err) {
-      return res.status(400).json({ ok: false, error: err.message });
+      return res.status(400).json({ ok: false, message: err.message });
     }
   }
 );

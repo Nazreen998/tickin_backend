@@ -15,6 +15,7 @@ import {
   getOrderById,
   confirmDraftOrder,
   deleteOrder,
+  getOrdersByMergeKey,
   getSlotConfirmedOrders
 } from "./orders.service.js";
 
@@ -49,6 +50,15 @@ router.get(
 
 // ✅ delete order
 router.delete("/:orderId", verifyToken, deleteOrder);
+router.post("/vehicle-selected/:flowKey", vehicleSelected)
+
+router.get(
+  "/merge/:mergeKey",
+  verifyToken,
+  allowRoles("MANAGER", "MASTER"),
+  getOrdersByMergeKey
+);
+
 
 // ✅ MASTER today orders
 router.get(
