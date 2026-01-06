@@ -1,4 +1,9 @@
-import { v4 as uuidv4 } from "uuid";
+
+import { ddb } from "../../config/dynamo.js";
+import { QueryCommand } from "@aws-sdk/lib-dynamodb";
+
+const TABLE_TIMELINE = process.env.TABLE_TIMELINE || "tickin_timeline";
+
 // keep your existing imports...
 async function resolveTargetOrderId(orderId) {
   if (!orderId) return null;
