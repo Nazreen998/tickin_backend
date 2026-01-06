@@ -85,11 +85,11 @@ app.get("/db-test", async (req, res) => {
  * ✅ API Routes
  */
 app.use("/auth", authRoutes);
-app.use("/users", usersRoutes);
+app.use("/api/users", usersRoutes);
 app.use("/dashboard", dashboardRoutes);
 
 // ✅ Orders routes ✅ (ONLY THIS)
-app.use("/api/orders", ordersRoutes);
+app.use("/orders", ordersRoutes);
 
 app.use("/timeline", timelineRoutes);
 app.use("/products", productsRoutes);

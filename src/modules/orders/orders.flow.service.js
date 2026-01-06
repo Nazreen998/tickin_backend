@@ -5,7 +5,6 @@ import { addTimelineEvent } from "../timeline/timeline.helper.js";
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const USERS_TABLE = process.env.USERS_TABLE || "tickin_users";
 
-// ✅ helper normalize
 function normalizeUserPk(id) {
   const s = String(id || "").trim();
   if (!s) return null;
@@ -20,17 +19,15 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
   const key = String(flowKey || "").trim();
   if (!key) return [];
 
-  // ✅ If looks like orderId (ORDxxxx)
+  // ✅ orderId case
   if (key.startsWith("ORD")) return [key];
 
-  // ✅ else treat as mergeKey
+  // ✅ mergeKey case
   const scanRes = await ddb.send(
     new ScanCommand({
       TableName: ORDERS_TABLE,
       FilterExpression: "mergeKey = :mk",
-      ExpressionAttributeValues: {
-        ":mk": key,
-      },
+      ExpressionAttributeValues: { ":mk": key },
     })
   );
 
@@ -40,39 +37,45 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
 }
 
 /* ============================================================
+   ✅ COMMON: Update multiple orders helper
+============================================================ */
+async function updateOrders(orderIds, updatePayload) {
+  for (const oid of orderIds) {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${oid}`, sk: "META" },
+        ...updatePayload,
+      })
+    );
+  }
+}
+
+/* ============================================================
    ✅ 1) Vehicle Selected (mergeKey supported)
-   endpoint: /vehicle-selected/:flowKey
 ============================================================ */
 export const vehicleSelected = async (req, res) => {
   try {
-    const { orderId } = req.params; // keep param name (flowKey)
-    const flowKey = orderId;
-
+    const flowKey = req.params.orderId;
     const { vehicleType } = req.body;
     const user = req.user;
 
     if (!vehicleType)
-      return res
-        .status(400)
-        .json({ ok: false, message: "vehicleType required" });
+      return res.status(400).json({ ok: false, message: "vehicleType required" });
 
     const orderIds = await resolveOrderIdsFromFlowKey(flowKey);
     if (orderIds.length === 0)
       return res.status(404).json({ ok: false, message: "No orders found" });
 
-    for (const oid of orderIds) {
-      await ddb.send(
-        new UpdateCommand({
-          TableName: ORDERS_TABLE,
-          Key: { pk: `ORDER#${oid}`, sk: "META" },
-          UpdateExpression: "SET vehicleType = :v, vehicleSelectedAt = :t",
-          ExpressionAttributeValues: {
-            ":v": String(vehicleType).toUpperCase(),
-            ":t": new Date().toISOString(),
-          },
-        })
-      );
+    await updateOrders(orderIds, {
+      UpdateExpression: "SET vehicleType = :v, vehicleSelectedAt = :t",
+      ExpressionAttributeValues: {
+        ":v": String(vehicleType).toUpperCase(),
+        ":t": new Date().toISOString(),
+      },
+    });
 
+    for (const oid of orderIds) {
       await addTimelineEvent({
         orderId: oid,
         event: "VEHICLE_SELECTED",
@@ -95,41 +98,33 @@ export const vehicleSelected = async (req, res) => {
 
 /* ============================================================
    ✅ 2) Loading Start (mergeKey supported)
-   body: { flowKey }
 ============================================================ */
 export const loadingStart = async (req, res) => {
   try {
-    const { orderId, mergeKey, flowKey } = req.body;
+    const key = req.body.flowKey || req.body.mergeKey || req.body.orderId;
     const user = req.user;
 
-    const key = flowKey || mergeKey || orderId;
-    if (!key)
-      return res.status(400).json({ ok: false, message: "flowKey required" });
+    if (!key) return res.status(400).json({ ok: false, message: "flowKey required" });
 
     const orderIds = await resolveOrderIdsFromFlowKey(key);
     if (orderIds.length === 0)
       return res.status(404).json({ ok: false, message: "No orders found" });
 
-    for (const oid of orderIds) {
-      await ddb.send(
-        new UpdateCommand({
-          TableName: ORDERS_TABLE,
-          Key: { pk: `ORDER#${oid}`, sk: "META" },
-          UpdateExpression: `
-            SET 
-              #s = :st,
-              loadingStarted = :ls,
-              loadingStartedAt = :t
-          `,
-          ExpressionAttributeNames: { "#s": "status" },
-          ExpressionAttributeValues: {
-            ":st": "LOADING_STARTED",
-            ":ls": true,
-            ":t": new Date().toISOString(),
-          },
-        })
-      );
+    await updateOrders(orderIds, {
+      UpdateExpression: `
+        SET #s = :st,
+            loadingStarted = :ls,
+            loadingStartedAt = :t
+      `,
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: {
+        ":st": "LOADING_STARTED",
+        ":ls": true,
+        ":t": new Date().toISOString(),
+      },
+    });
 
+    for (const oid of orderIds) {
       await addTimelineEvent({
         orderId: oid,
         event: "LOADING_STARTED",
@@ -151,35 +146,28 @@ export const loadingStart = async (req, res) => {
 
 /* ============================================================
    ✅ 3) Loading End (mergeKey supported)
-   body: { flowKey }
 ============================================================ */
 export const loadingEnd = async (req, res) => {
   try {
-    const { orderId, mergeKey, flowKey } = req.body;
+    const key = req.body.flowKey || req.body.mergeKey || req.body.orderId;
     const user = req.user;
 
-    const key = flowKey || mergeKey || orderId;
-    if (!key)
-      return res.status(400).json({ ok: false, message: "flowKey required" });
+    if (!key) return res.status(400).json({ ok: false, message: "flowKey required" });
 
     const orderIds = await resolveOrderIdsFromFlowKey(key);
     if (orderIds.length === 0)
       return res.status(404).json({ ok: false, message: "No orders found" });
 
-    for (const oid of orderIds) {
-      await ddb.send(
-        new UpdateCommand({
-          TableName: ORDERS_TABLE,
-          Key: { pk: `ORDER#${oid}`, sk: "META" },
-          UpdateExpression: "SET #s = :st, loadingEndAt = :t",
-          ExpressionAttributeNames: { "#s": "status" },
-          ExpressionAttributeValues: {
-            ":st": "LOADING_COMPLETED",
-            ":t": new Date().toISOString(),
-          },
-        })
-      );
+    await updateOrders(orderIds, {
+      UpdateExpression: "SET #s = :st, loadingEndAt = :t",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: {
+        ":st": "LOADING_COMPLETED",
+        ":t": new Date().toISOString(),
+      },
+    });
 
+    for (const oid of orderIds) {
       await addTimelineEvent({
         orderId: oid,
         event: "LOADING_COMPLETED",
@@ -201,24 +189,19 @@ export const loadingEnd = async (req, res) => {
 
 /* ============================================================
    ✅ 4) Assign Driver (mergeKey supported)
-   body: { flowKey, driverId, vehicleNo }
 ============================================================ */
 export const assignDriverToOrder = async (req, res) => {
   try {
-    const { orderId, mergeKey, flowKey, driverId, vehicleNo } = req.body;
+    const key = req.body.flowKey || req.body.mergeKey || req.body.orderId;
+    const { driverId, vehicleNo } = req.body;
     const user = req.user;
 
-    const key = flowKey || mergeKey || orderId;
-
     if (!key || !driverId) {
-      return res
-        .status(400)
-        .json({ ok: false, message: "flowKey + driverId required" });
+      return res.status(400).json({ ok: false, message: "flowKey + driverId required" });
     }
 
     const driverPk = normalizeUserPk(driverId);
 
-    // ✅ validate driver exists
     const driverRes = await ddb.send(
       new GetCommand({
         TableName: USERS_TABLE,
@@ -226,13 +209,8 @@ export const assignDriverToOrder = async (req, res) => {
       })
     );
 
-    if (
-      !driverRes.Item ||
-      String(driverRes.Item.role || "").toUpperCase() !== "DRIVER"
-    ) {
-      return res
-        .status(400)
-        .json({ ok: false, message: "Invalid driverId (not a DRIVER)" });
+    if (!driverRes.Item || String(driverRes.Item.role || "").toUpperCase() !== "DRIVER") {
+      return res.status(400).json({ ok: false, message: "Invalid driverId (not a DRIVER)" });
     }
 
     const driver = driverRes.Item;
@@ -241,35 +219,31 @@ export const assignDriverToOrder = async (req, res) => {
     if (orderIds.length === 0)
       return res.status(404).json({ ok: false, message: "No orders found" });
 
-    for (const oid of orderIds) {
-      await ddb.send(
-        new UpdateCommand({
-          TableName: ORDERS_TABLE,
-          Key: { pk: `ORDER#${oid}`, sk: "META" },
-          UpdateExpression:
-            "SET #s = :st, driverId = :d, driverName = :n, driverMobile = :m, vehicleNo = :v, driverAssignedAt = :t",
-          ExpressionAttributeNames: { "#s": "status" },
-          ExpressionAttributeValues: {
-            ":st": "DRIVER_ASSIGNED",
-            ":d": driverPk,
-            ":n": driver.name || null,
-            ":m": driver.mobile || null,
-            ":v": vehicleNo || null,
-            ":t": new Date().toISOString(),
-          },
-        })
-      );
+    await updateOrders(orderIds, {
+      UpdateExpression:
+        "SET #s = :st, driverId = :d, driverName = :n, driverMobile = :m, vehicleNo = :v, driverAssignedAt = :t",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: {
+        ":st": "DRIVER_ASSIGNED",
+        ":d": driverPk,
+        ":n": driver.name || null,
+        ":m": driver.mobile || null,
+        ":v": vehicleNo || null,
+        ":t": new Date().toISOString(),
+      },
+    });
 
+    for (const oid of orderIds) {
       await addTimelineEvent({
         orderId: oid,
         event: "DRIVER_ASSIGNED",
         by: user.mobile,
-        data: {
+        extra: {
+          flowKey: key,
           driverId: driverPk,
           driverName: driver.name,
           driverMobile: driver.mobile,
           vehicleNo: vehicleNo || null,
-          flowKey: key,
         },
       });
     }

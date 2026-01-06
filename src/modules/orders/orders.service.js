@@ -24,7 +24,6 @@ export const getSlotConfirmedOrders = async (req, res) => {
   try {
     const { date } = req.query;
 
-    // ✅ date query required for better performance
     if (!date) {
       return res.status(400).json({
         ok: false,
@@ -32,9 +31,9 @@ export const getSlotConfirmedOrders = async (req, res) => {
       });
     }
 
-    // ✅ 1) Query bookings for company + date
     const pk = `COMPANY#VAGR_IT#DATE#${date}`;
 
+    // ✅ 1) Fetch CONFIRMED bookings for given date
     const bookingsRes = await ddb.send(
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
@@ -52,12 +51,11 @@ export const getSlotConfirmedOrders = async (req, res) => {
 
     const bookings = bookingsRes.Items || [];
 
-    // ✅ 2) Unique orderIds from confirmed bookings
+    // ✅ 2) unique orderIds
     const orderIds = [...new Set(bookings.map((b) => b.orderId).filter(Boolean))];
 
-    const orders = [];
-
-    // ✅ 3) Fetch each order meta
+    // ✅ 3) fetch order metas for all orderIds
+    const ordersMeta = [];
     for (const orderId of orderIds) {
       const orderRes = await ddb.send(
         new GetCommand({
@@ -65,49 +63,70 @@ export const getSlotConfirmedOrders = async (req, res) => {
           Key: { pk: `ORDER#${orderId}`, sk: "META" },
         })
       );
+      if (orderRes.Item) ordersMeta.push(orderRes.Item);
+    }
 
-      if (!orderRes.Item) continue;
+    // ✅ 4) group by mergeKey (if exists) else by orderId
+    const grouped = {};
 
-      const order = orderRes.Item;
-
-      // ✅ booking for this order
-      const booking = bookings.find((b) => b.orderId === orderId);
+    for (const order of ordersMeta) {
+      const oid = order.orderId;
+      const booking = bookings.find((b) => b.orderId === oid);
       if (!booking) continue;
 
-      orders.push({
-        orderId,
-        distributorName: booking.distributorName || order.distributorName,
-        distributorId: booking.distributorCode || order.distributorId,
-        status: order.status,
-        items: order.items || [],
-        totalQty: order.totalQty || 0,
-        grandAmount: order.totalAmount || 0,
+      const mk = booking.mergeKey || order.mergeKey || null;
 
-        // ✅ slot booking details
-        slot: {
-          bookingId: booking.bookingId,
-          companyCode: booking.pk?.split("#")[1] || null,
-          date: booking.pk?.split("#")[3] || null,
-          time: booking.slotTime,
+      // ✅ flowKey = mergeKey (preferred) else orderId
+      const flowKey = mk ? mk : oid;
+
+      if (!grouped[flowKey]) {
+        grouped[flowKey] = {
+          flowKey,
+          mergeKey: mk,
+          date,
+          slotTime: booking.slotTime,
           pos: booking.slotPos || booking.pos || null,
           vehicleType: booking.vehicleType,
-          mergeKey: booking.mergeKey || null,
-          bookedBy: booking.userId || null,
-        },
+
+          // ✅ participants orders list
+          orderIds: [],
+          distributors: [],
+          totalQty: 0,
+          grandAmount: 0,
+          status: "CONFIRMED",
+        };
+      }
+
+      grouped[flowKey].orderIds.push(oid);
+
+      grouped[flowKey].distributors.push({
+        orderId: oid,
+        distributorName: booking.distributorName || order.distributorName,
+        distributorId: booking.distributorCode || order.distributorId,
       });
+
+      grouped[flowKey].totalQty += Number(order.totalQty || 0);
+      grouped[flowKey].grandAmount += Number(order.totalAmount || 0);
+
+      // ✅ take latest status if any order progressed
+      const st = String(order.status || "CONFIRMED").toUpperCase();
+      if (st !== "CONFIRMED") grouped[flowKey].status = st;
     }
+
+    const finalOrders = Object.values(grouped);
 
     return res.json({
       ok: true,
-      count: orders.length,
+      count: finalOrders.length,
       date,
-      orders,
+      orders: finalOrders,
     });
   } catch (err) {
     console.error("getSlotConfirmedOrders error:", err);
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
+
 /* ==========================
    ✅ Confirm Draft Order
    DRAFT → PENDING (Salesman)
