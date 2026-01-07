@@ -2,6 +2,19 @@ import { PutCommand, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "../config/dynamo.js";
 
 const TABLE = "VAGR_Attendance";
+ 
+/*** TIME HELPERS ***/
+const nowIST = () =>
+  new Date().toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true
+  });
 
 export const Attendance = {
 
@@ -26,14 +39,14 @@ export const Attendance = {
           PK: `USER#${uid}`,
           SK: `DATE#${date}`,
           userName,
-          checkInAt: new Date().toISOString(),
+          checkInAt: nowIST(),          
           lat,
           lng,
           distance,
           locationId,
           locationName,
           status: "CHECKED_IN",
-          createdAt: new Date().toISOString()
+          createdAt: nowIST()
         },
         ConditionExpression: "attribute_not_exists(PK)"
       })
@@ -56,7 +69,7 @@ export const Attendance = {
           "#s": "status"
         },
         ExpressionAttributeValues: {
-          ":t": new Date().toISOString(),
+          ":t": nowIST(),
           ":lat": lat,
           ":lng": lng,
           ":s": "CHECKED_OUT"
