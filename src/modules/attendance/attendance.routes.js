@@ -1,10 +1,11 @@
 import { Router } from "express";
-import auth from "../../middleware/auth.js";
+import { verifyToken } from "../../middleware/auth.middleware.js";
 import { checkIn, checkOut } from "./attendance.controller.js";
 
 const router = Router();
 
-router.post("/checkin", auth, checkIn);
-router.post("/checkout", auth, checkOut);
+router.post("/check-in", verifyToken, checkIn);
+router.post("/check-out", verifyToken, checkOut);
+
 
 export default router;
