@@ -1,13 +1,20 @@
 import express from "express";
 import { verifyToken } from "../../middleware/auth.middleware.js";
 import { allowRoles } from "../../middleware/role.middleware.js";
+
 import { addTimelineEvent } from "./timeline.helper.js";
 import { getOrderTimeline } from "./timeline.service.js";
+
 import { ddb } from "../../config/dynamo.js";
-import { UpdateCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
+import { UpdateCommand, GetCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 
 const router = express.Router();
+
 const TABLE_ORDERS = process.env.ORDERS_TABLE || "tickin_orders";
+
+// ✅ Slot-level timeline table (optional)
+const TABLE_SLOT_TIMELINE =
+  process.env.TABLE_SLOT_TIMELINE || "tickin_timeline_events";
 
 /* ✅ helper: resolve tracking orderId */
 async function resolveTrackingOrderId(orderId) {
@@ -204,142 +211,46 @@ router.post(
   }
 );
 
-/* ✅ 6) DRIVER STARTED */
-router.post(
-  "/driver-started",
-  verifyToken,
-  allowRoles("DRIVER"),
-  async (req, res) => {
-    try {
-      const user = req.user;
-      const { orderId } = req.body;
-      if (!orderId) return res.status(400).json({ message: "orderId required" });
-
-      const trackingOrderId = await resolveTrackingOrderId(orderId);
-
-      await addTimelineEvent({
-        orderId: trackingOrderId,
-        event: "DRIVER_STARTED",
-        by: user.mobile,
-        role: user.role,
-        data: { originalOrderId: orderId },
-      });
-
-      return res.json({ ok: true, trackingOrderId });
-    } catch (e) {
-      return res.status(500).json({ ok: false, message: e.message });
-    }
-  }
-);
-
-/* ✅ 7) ARRIVED (D1 / D2 / WAREHOUSE) */
-router.post(
-  "/arrived",
-  verifyToken,
-  allowRoles("DRIVER"),
-  async (req, res) => {
-    try {
-      const user = req.user;
-      const { orderId, stage, distributorCode } = req.body;
-
-      if (!orderId) return res.status(400).json({ message: "orderId required" });
-
-      const trackingOrderId = await resolveTrackingOrderId(orderId);
-
-      const s = (stage || "D1").toUpperCase();
-      const event = s === "WAREHOUSE" ? "WAREHOUSE_REACHED" : "DRIVER_REACHED_DISTRIBUTOR";
-
-      await addTimelineEvent({
-        orderId: trackingOrderId,
-        event,
-        by: user.mobile,
-        role: user.role,
-        data: {
-          stage: s,
-          distributorCode: distributorCode || null,
-          originalOrderId: orderId,
-        },
-      });
-
-      return res.json({ ok: true, trackingOrderId });
-    } catch (e) {
-      return res.status(500).json({ ok: false, message: e.message });
-    }
-  }
-);
-
-/* ✅ 8) UNLOAD START */
-router.post(
-  "/unload-start",
-  verifyToken,
-  allowRoles("DRIVER"),
-  async (req, res) => {
-    try {
-      const user = req.user;
-      const { orderId, stage, distributorCode } = req.body;
-
-      if (!orderId) return res.status(400).json({ message: "orderId required" });
-
-      const trackingOrderId = await resolveTrackingOrderId(orderId);
-
-      await addTimelineEvent({
-        orderId: trackingOrderId,
-        event: "UNLOAD_START",
-        by: user.mobile,
-        role: user.role,
-        data: {
-          stage: (stage || "D1").toUpperCase(),
-          distributorCode: distributorCode || null,
-          originalOrderId: orderId,
-        },
-      });
-
-      return res.json({ ok: true, trackingOrderId });
-    } catch (e) {
-      return res.status(500).json({ ok: false, message: e.message });
-    }
-  }
-);
-
-/* ✅ 9) UNLOAD END */
-router.post(
-  "/unload-end",
-  verifyToken,
-  allowRoles("DRIVER"),
-  async (req, res) => {
-    try {
-      const user = req.user;
-      const { orderId, stage, distributorCode } = req.body;
-
-      if (!orderId) return res.status(400).json({ message: "orderId required" });
-
-      const trackingOrderId = await resolveTrackingOrderId(orderId);
-
-      await addTimelineEvent({
-        orderId: trackingOrderId,
-        event: "UNLOAD_END",
-        by: user.mobile,
-        role: user.role,
-        data: {
-          stage: (stage || "D1").toUpperCase(),
-          distributorCode: distributorCode || null,
-          originalOrderId: orderId,
-        },
-      });
-
-      return res.json({ ok: true, trackingOrderId });
-    } catch (e) {
-      return res.status(500).json({ ok: false, message: e.message });
-    }
-  }
-);
-
-/* ✅ GET Timeline */
+/* ✅ GET Order Timeline */
 router.get(
   "/:orderId",
   verifyToken,
-  allowRoles("MASTER", "MANAGER", "DISTRIBUTOR", "SALES OFFICER", "DRIVER"),
+  allowRoles("MASTER", "MANAGER", "DISTRIBUTOR", "SALES OFFICER", "DRIVER", "SALESMAN"),
   getOrderTimeline
+);
+
+/* ✅ GET Slot Timeline (Manager/Master only)
+   GET /api/timeline/slot/:slotId
+*/
+router.get(
+  "/slot/:slotId",
+  verifyToken,
+  allowRoles("MASTER", "MANAGER"),
+  async (req, res) => {
+    try {
+      const { slotId } = req.params;
+      if (!slotId) {
+        return res.status(400).json({ ok: false, message: "slotId required" });
+      }
+
+      const out = await ddb.send(
+        new QueryCommand({
+          TableName: TABLE_SLOT_TIMELINE,
+          KeyConditionExpression: "pk = :pk",
+          ExpressionAttributeValues: { ":pk": `SLOT#${slotId}` },
+          ScanIndexForward: true,
+        })
+      );
+
+      return res.json({
+        ok: true,
+        slotId,
+        timeline: out.Items || [],
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, message: e.message });
+    }
+  }
 );
 
 export default router;

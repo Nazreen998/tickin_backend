@@ -2,14 +2,15 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 
-import { ListTablesCommand } from "@aws-sdk/client-dynamodb";
-import { dynamoClient } from "./src/config/dynamo.js";
-
-// ✅ Load env first
+// ✅ Load env FIRST
 dotenv.config();
 
 // ✅ appInit runs after dotenv
 import "./src/appInit.js";
+
+// ✅ Dynamo imports AFTER env
+import { ListTablesCommand } from "@aws-sdk/client-dynamodb";
+import { dynamoClient } from "./src/config/dynamo.js";
 
 // ✅ modules imports
 import authRoutes from "./src/modules/auth/auth.routes.js";
@@ -82,23 +83,20 @@ app.get("/db-test", async (req, res) => {
 });
 
 /**
- * ✅ API Routes
+ * ✅ API Routes (✅ ALL under /api)
  */
-app.use("/auth", authRoutes);
+app.use("/api/auth", authRoutes);
 app.use("/api/users", usersRoutes);
-app.use("/dashboard", dashboardRoutes);
-
-// ✅ Orders routes ✅ (ONLY THIS)
-app.use("/orders", ordersRoutes);
-
-app.use("/timeline", timelineRoutes);
-app.use("/products", productsRoutes);
+app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/orders", ordersRoutes);
+app.use("/api/timeline", timelineRoutes);
+app.use("/api/products", productsRoutes);
 
 app.use("/api/sales", salesRoutes);
 app.use("/api/driver", driverRoutes);
 
-app.use("/trips", tripsRoutes);
-app.use("/goals", goalsRoutes);
+app.use("/api/trips", tripsRoutes);
+app.use("/api/goals", goalsRoutes);
 
 app.use("/api/distributors", distributorRoutes);
 app.use("/api/vehicles", vehiclesRoutes);
@@ -106,7 +104,7 @@ app.use("/api/vehicles", vehiclesRoutes);
 /**
  * ✅ Manager Orders Flow Route ✅
  */
-app.use("/manager-orders-flow", ManagerOrdersFlowRoutes);
+app.use("/api/manager-orders-flow", ManagerOrdersFlowRoutes);
 
 /**
  * ✅ Slot Routes
@@ -153,7 +151,6 @@ function printRoutes(app) {
         routes.push({ methods, path: layer.route.path });
       }
 
-      // nested router
       if (layer.name === "router" && layer.handle?.stack) {
         layer.handle.stack.forEach((handler) => {
           if (handler.route && handler.route.path) {
