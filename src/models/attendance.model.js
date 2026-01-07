@@ -18,13 +18,14 @@ export const Attendance = {
     return res.Item || null;
   },
 
-  async checkIn({ uid, date, lat, lng, distance, locationId, locationName }) {
+  async checkIn({ uid,userName,date, lat, lng, distance, locationId, locationName }) {
     return ddb.send(
       new PutCommand({
         TableName: TABLE,
         Item: {
           PK: `USER#${uid}`,
           SK: `DATE#${date}`,
+          userName,
           checkInAt: new Date().toISOString(),
           lat,
           lng,

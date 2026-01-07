@@ -13,8 +13,17 @@ const yesterdayIST = () => {
 
 export const checkIn = async (req, res) => {
   const { lat, lng } = req.body;
-  const uid = req.user.uid;
+// ✅ SAFE UID EXTRACTION
+const rawPk = req.user.pk; // "USER#9876543210"
 
+const uid = rawPk?.includes("#")
+  ? rawPk.split("#")[1]
+  : rawPk;
+const userName =
+  req.user.name ||
+  req.user.Name ||
+  req.user.username ||
+  "UNKNOWN";
   if (!lat || !lng) {
     return res.json({ ok: false, error: "location_required" });
   }
@@ -38,6 +47,7 @@ export const checkIn = async (req, res) => {
   try {
     await Attendance.checkIn({
       uid,
+      userName,
       date: todayIST(),
       lat,
       lng,
