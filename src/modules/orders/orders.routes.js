@@ -125,7 +125,7 @@ router.post(
 router.get(
   "/my",
   verifyToken,
-  allowRoles("SALES OFFICER", "SALESMAN", "DISTRIBUTOR", "SALES OFFICER_VNR"),
+  allowRoles("SALES OFFICER", "SALESMAN", "DISTRIBUTOR", "SALES OFFICER_VNR","MANAGER" ),
   async (req, res) => {
     try {
       const user = req.user;
