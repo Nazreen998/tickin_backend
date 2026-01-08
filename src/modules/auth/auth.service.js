@@ -67,6 +67,7 @@ export const login = async (req, res) => {
     // ✅ Token payload base
     const payload = {
       pk: user.pk,
+      name: user.name || "UNKNOWN",                  // 🔥 ADD THIS
       mobile: user.mobile || mobile,
       role,
       companyId: user.companyId,
