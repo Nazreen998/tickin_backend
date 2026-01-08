@@ -1,7 +1,7 @@
 import { ddb } from "../../config/dynamo.js";
 import { PutCommand, GetCommand, UpdateCommand, QueryCommand, DeleteCommand } from "@aws-sdk/lib-dynamodb";
 
-const TABLE = process.env.PALLET_TABLE;
+const TABLE = process.env.PALLET_TABLE || PalletInventory ;
 
 /**
  * PK: PALLET#{palletId}
