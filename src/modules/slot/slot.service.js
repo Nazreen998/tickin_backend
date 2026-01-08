@@ -577,6 +577,7 @@ async function resolveDistributorDetails({
   return { resolvedName, safeLat, safeLng };
 }
 /* ---------------- BOOK SLOT ---------------- */
+/* ---------------- BOOK SLOT ---------------- */
 
 export async function bookSlot({
   companyCode,
@@ -590,7 +591,6 @@ export async function bookSlot({
   orderId,
   lat,
   lng,
-  vehicleType: requestedVehicleType, // ✅ NEW: accept from frontend
 }) {
   validateSlotDate(date);
 
@@ -598,7 +598,16 @@ export async function bookSlot({
     throw new Error("companyCode, date, time, distributorCode required");
   }
 
+  // ✅ VERY IMPORTANT: orderId must be present for duplicate lock
+  if (!orderId || String(orderId).trim() === "") {
+    throw new Error("❌ orderId required to prevent duplicate booking");
+  }
+
   const pk = pkFor(companyCode, date);
+
+  // ✅ Extra safety: quick check
+  const already = await checkOrderAlreadyBooked(pk, orderId);
+  if (already) throw new Error("❌ This Order already booked a slot");
 
   const rules = await getRules(companyCode);
   const threshold = rules.threshold;
@@ -613,82 +622,44 @@ export async function bookSlot({
     lng,
   });
 
-  /* ✅ STRICT VEHICLE TYPE RULE:
-     - amt < threshold => ALWAYS HALF
-     - amt >= threshold => FULL unless frontend explicitly asks HALF (optional)
-  */
-  let finalVehicleType = amt >= threshold ? "FULL" : "HALF";
+  const vehicleType = amt >= threshold ? "FULL" : "HALF";
 
-  const reqVT = String(requestedVehicleType || "").toUpperCase().trim();
-  if (finalVehicleType === "FULL" && reqVT === "HALF") {
-    // ✅ allow manager/testing to force HALF even if amt>=threshold (optional)
-    finalVehicleType = "HALF";
-  }
+  // ✅ LOCK item (Atomic duplicate prevention)
+  const lockSk = `ORDERLOCK#${orderId}`;
 
-  /* ============================================================
-     ✅ DUPLICATE LOCK: ORDER LEVEL ATOMIC CHECK
-     - We create a "booking lock" inside tickin_orders
-     - If lock exists => duplicate booking blocked safely
-  ============================================================ */
-  async function lockOrderOrFail() {
-    if (!orderId) return null;
+  /* ======================================================
+     ✅ FULL BOOKING
+  ====================================================== */
+  if (vehicleType === "FULL") {
+    if (!pos) throw new Error("pos required for FULL booking");
 
-    // ✅ this lock key is unique per order
-    const lockKey = { pk: `ORDER#${orderId}`, sk: "SLOT_LOCK" };
+    if (time === LAST_SLOT_TIME && rules.lastSlotEnabled === false) {
+      throw new Error("❌ Last slot is closed");
+    }
 
-    // ✅ Put lock only if not exists
-    await ddb.send(
-      new PutCommand({
-        TableName: TABLE_ORDERS,
-        Item: {
-          ...lockKey,
-          orderId,
-          companyCode,
-          date,
-          time,
-          createdAt: new Date().toISOString(),
-        },
-        ConditionExpression: "attribute_not_exists(pk)",
-      })
-    );
+    const slotSk = skForSlot(time, "FULL", pos);
+    const bookingSk = skForBooking(time, "FULL", pos, uid);
+    const bookingId = uuidv4();
 
-    return lockKey;
-  }
-
-  async function unlockOrderLockSafe() {
-    if (!orderId) return;
     try {
-      await ddb.send(
-        new DeleteCommand({
-          TableName: TABLE_ORDERS,
-          Key: { pk: `ORDER#${orderId}`, sk: "SLOT_LOCK" },
-        })
-      );
-    } catch (_) {}
-  }
-
-  // ✅ LOCK BEFORE BOOKING (prevents duplicate even for 2 parallel requests)
-  try {
-    await lockOrderOrFail();
-  } catch (e) {
-    throw new Error("❌ This Order already booked a slot");
-  }
-
-  try {
-    /* ✅ FULL BOOKING */
-    if (finalVehicleType === "FULL") {
-      if (!pos) throw new Error("pos required for FULL booking");
-      if (time === LAST_SLOT_TIME && rules.lastSlotEnabled === false) {
-        throw new Error("❌ Last slot is closed");
-      }
-
-      const slotSk = skForSlot(time, "FULL", pos);
-      const bookingSk = skForBooking(time, "FULL", pos, uid);
-      const bookingId = uuidv4();
-
       await ddb.send(
         new TransactWriteCommand({
           TransactItems: [
+            // ✅ ORDER LOCK: stops duplicates even if 2 requests come same time
+            {
+              Put: {
+                TableName: TABLE_BOOKINGS,
+                Item: {
+                  pk,
+                  sk: lockSk,
+                  orderId,
+                  createdAt: new Date().toISOString(),
+                },
+                ConditionExpression: "attribute_not_exists(sk)",
+              },
+            },
+
+            // ✅ CAPACITY UPDATE: book the FULL slot only if available
             {
               Update: {
                 TableName: TABLE_CAPACITY,
@@ -703,11 +674,13 @@ export async function bookSlot({
                   ":uid": uid,
                   ":dn": resolvedName,
                   ":dc": distributorCode,
-                  ":oid": orderId || null,
+                  ":oid": orderId,
                   ":by": uid,
                 },
               },
             },
+
+            // ✅ BOOKING ENTRY
             {
               Put: {
                 TableName: TABLE_BOOKINGS,
@@ -733,119 +706,150 @@ export async function bookSlot({
           ],
         })
       );
-
-      if (orderId) {
-        const slotId = `${companyCode}#${date}#${time}#FULL#${pos}`;
-
-        await addTimelineEvent({
-          orderId,
-          event: "SLOT_BOOKED_FULL",
-          by: uid,
-          role: "BOOKING",
-          data: {
-            vehicleType: "FULL",
-            time,
-            pos,
-            distributorCode,
-            distributorName: resolvedName,
-            lat: safeLat,
-            lng: safeLng,
-            slotId,
-          },
-        });
-
-        await ddb.send(
-          new UpdateCommand({
-            TableName: TABLE_ORDERS,
-            Key: { pk: `ORDER#${orderId}`, sk: "META" },
-            UpdateExpression:
-              "SET slotBooked=:sb, slotId=:sid, slotDate=:d, slotTime=:t, slotVehicleType=:vt, slotPos=:p, updatedAt=:u",
-            ExpressionAttributeValues: {
-              ":sb": true,
-              ":sid": slotId,
-              ":d": date,
-              ":t": time,
-              ":vt": "FULL",
-              ":p": pos,
-              ":u": new Date().toISOString(),
-            },
-          })
-        );
+    } catch (e) {
+      // ✅ Duplicate / lock violation
+      if (
+        String(e.message || "").includes("ConditionalCheckFailed") ||
+        String(e.name || "") === "TransactionCanceledException"
+      ) {
+        throw new Error("❌ This Order already booked a slot (LOCKED)");
       }
+      throw e;
+    }
 
-      return {
-        ok: true,
-        bookingId,
-        type: "FULL",
-        userId: uid,
+    // ✅ Update order + timeline
+    const slotId = `${companyCode}#${date}#${time}#FULL#${pos}`;
+
+    await addTimelineEvent({
+      orderId,
+      event: "SLOT_BOOKED_FULL",
+      by: uid,
+      role: "BOOKING",
+      data: {
+        vehicleType: "FULL",
+        time,
+        pos,
+        distributorCode,
         distributorName: resolvedName,
         lat: safeLat,
         lng: safeLng,
-      };
-    }
+        slotId,
+      },
+    });
 
-    /* ✅ HALF BOOKING */
-    if (safeLat == null || safeLng == null) {
-      throw new Error("❌ lat/lng missing. Distributor final_url not available");
-    }
-
-    const capRes = await ddb.send(
-      new QueryCommand({
-        TableName: TABLE_CAPACITY,
-        KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: { ":pk": pk },
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_ORDERS,
+        Key: { pk: `ORDER#${orderId}`, sk: "META" },
+        UpdateExpression:
+          "SET slotBooked=:sb, slotId=:sid, slotDate=:d, slotTime=:t, slotVehicleType=:vt, slotPos=:p, updatedAt=:u",
+        ExpressionAttributeValues: {
+          ":sb": true,
+          ":sid": slotId,
+          ":d": date,
+          ":t": time,
+          ":vt": "FULL",
+          ":p": pos,
+          ":u": new Date().toISOString(),
+        },
       })
     );
 
-    const existingMergeSlots = (capRes.Items || []).filter((x) =>
-      String(x.sk || "").startsWith(`MERGE_SLOT#${time}#`)
-    );
+    return {
+      ok: true,
+      bookingId,
+      type: "FULL",
+      userId: uid,
+      distributorName: resolvedName,
+      lat: safeLat,
+      lng: safeLng,
+    };
+  }
 
-    const geo = resolveMergeKeyByRadius(
-      existingMergeSlots,
-      safeLat,
-      safeLng,
-      MERGE_RADIUS_KM
-    );
+  /* ======================================================
+     ✅ HALF BOOKING
+  ====================================================== */
 
-    const mergeKey = geo.mergeKey;
-    const mergeSk = skForMergeSlot(time, mergeKey);
+  if (safeLat == null || safeLng == null) {
+    throw new Error("❌ lat/lng missing. Distributor final_url not available");
+  }
 
-    const mergeCap = await ddb.send(
-      new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: mergeSk } })
-    );
+  // ✅ Find mergeKey based on radius
+  const capRes = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_CAPACITY,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
+    })
+  );
 
-    if (
-      mergeCap.Item &&
-      String(mergeCap.Item.tripStatus || "").toUpperCase() === "FULL"
-    ) {
-      throw new Error("❌ This merge is already confirmed. Cancel & rebook.");
-    }
+  const existingMergeSlots = (capRes.Items || []).filter((x) =>
+    String(x.sk || "").startsWith(`MERGE_SLOT#${time}#`)
+  );
 
-    const allBookingsRes = await ddb.send(
-      new QueryCommand({
-        TableName: TABLE_BOOKINGS,
-        KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: { ":pk": pk },
-      })
-    );
+  const geo = resolveMergeKeyByRadius(
+    existingMergeSlots,
+    safeLat,
+    safeLng,
+    MERGE_RADIUS_KM
+  );
 
-    const alreadyBookings = (allBookingsRes.Items || []).filter(
-      (b) =>
-        String(b.mergeKey || "") === String(mergeKey) &&
-        String(b.slotTime || "") === String(time) &&
-        String(b.vehicleType || "").toUpperCase() === "HALF"
-    );
+  const mergeKey = geo.mergeKey;
+  const mergeSk = skForMergeSlot(time, mergeKey);
 
-    const bookingCountBefore = alreadyBookings.length;
-    const blink = bookingCountBefore >= 1;
+  // ✅ If merge already FULL confirmed - block
+  const mergeCap = await ddb.send(
+    new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: mergeSk } })
+  );
 
-    const bookingId = uuidv4();
-    const bookingSk = `BOOKING#${time}#KEY#${mergeKey}#USER#${uid}#${bookingId}`;
+  if (
+    mergeCap.Item &&
+    String(mergeCap.Item.tripStatus || "").toUpperCase() === "FULL"
+  ) {
+    throw new Error("❌ This merge is already confirmed. Cancel & rebook.");
+  }
 
+  // ✅ Determine blink + booking count
+  const allBookingsRes = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_BOOKINGS,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
+    })
+  );
+
+  const alreadyBookings = (allBookingsRes.Items || []).filter(
+    (b) =>
+      String(b.mergeKey || "") === String(mergeKey) &&
+      String(b.slotTime || "") === String(time) &&
+      String(b.vehicleType || "").toUpperCase() === "HALF"
+  );
+
+  const bookingCountBefore = alreadyBookings.length;
+  const blink = bookingCountBefore >= 1;
+
+  const bookingId = uuidv4();
+  const bookingSk = `BOOKING#${time}#KEY#${mergeKey}#USER#${uid}#${bookingId}`;
+
+  try {
     await ddb.send(
       new TransactWriteCommand({
         TransactItems: [
+          // ✅ ORDER LOCK: stop duplicate HALF booking
+          {
+            Put: {
+              TableName: TABLE_BOOKINGS,
+              Item: {
+                pk,
+                sk: lockSk,
+                orderId,
+                createdAt: new Date().toISOString(),
+              },
+              ConditionExpression: "attribute_not_exists(sk)",
+            },
+          },
+
+          // ✅ Merge capacity update
           {
             Update: {
               TableName: TABLE_CAPACITY,
@@ -864,6 +868,8 @@ export async function bookSlot({
               },
             },
           },
+
+          // ✅ Booking entry
           {
             Put: {
               TableName: TABLE_BOOKINGS,
@@ -889,89 +895,93 @@ export async function bookSlot({
         ],
       })
     );
-
-    if (orderId) {
-      const slotId = `${companyCode}#${date}#${time}#HALF#KEY#${mergeKey}`;
-
-      await ddb.send(
-        new UpdateCommand({
-          TableName: TABLE_ORDERS,
-          Key: { pk: `ORDER#${orderId}`, sk: "META" },
-          UpdateExpression:
-            "SET slotBooked=:sb, slotId=:sid, slotDate=:d, slotTime=:t, slotVehicleType=:vt, mergeKey=:mk, updatedAt=:u",
-          ExpressionAttributeValues: {
-            ":sb": false,
-            ":sid": slotId,
-            ":d": date,
-            ":t": time,
-            ":vt": "HALF",
-            ":mk": mergeKey,
-            ":u": new Date().toISOString(),
-          },
-        })
-      );
-
-      await addTimelineEvent({
-        orderId,
-        event: "SLOT_BOOKED_HALF",
-        by: uid,
-        role: "BOOKING",
-        data: {
-          vehicleType: "HALF",
-          time,
-          mergeKey,
-          distributorCode,
-          distributorName: resolvedName,
-          lat: safeLat,
-          lng: safeLng,
-          slotId,
-        },
-      });
-    }
-
-    const updated = await ddb.send(
-      new GetCommand({
-        TableName: TABLE_CAPACITY,
-        Key: { pk, sk: mergeSk },
-      })
-    );
-
-    const finalTotal = Number(updated?.Item?.totalAmount || 0);
-    const bookingCountAfter = bookingCountBefore + 1;
-
-    const tripStatus =
-      bookingCountAfter >= 2 && finalTotal >= threshold
-        ? "READY_FOR_CONFIRM"
-        : "PARTIAL";
-
-    await ddb.send(
-      new UpdateCommand({
-        TableName: TABLE_CAPACITY,
-        Key: { pk, sk: mergeSk },
-        UpdateExpression: "SET tripStatus = :s",
-        ExpressionAttributeValues: { ":s": tripStatus },
-      })
-    );
-
-    return {
-      ok: true,
-      bookingId,
-      type: "HALF",
-      tripStatus,
-      totalAmount: finalTotal,
-      mergeKey,
-      blink,
-      status: "PENDING_MANAGER_CONFIRM",
-      userId: uid,
-      lat: safeLat,
-      lng: safeLng,
-      distributorName: resolvedName,
-    };
   } catch (e) {
-    // ✅ if any error -> unlock lock
-    await unlockOrderLockSafe();
+    if (
+      String(e.message || "").includes("ConditionalCheckFailed") ||
+      String(e.name || "") === "TransactionCanceledException"
+    ) {
+      throw new Error("❌ This Order already booked a slot (LOCKED)");
+    }
     throw e;
   }
+
+  // ✅ update order meta for HALF
+  const slotId = `${companyCode}#${date}#${time}#HALF#KEY#${mergeKey}`;
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_ORDERS,
+      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+      UpdateExpression:
+        "SET slotBooked=:sb, slotId=:sid, slotDate=:d, slotTime=:t, slotVehicleType=:vt, mergeKey=:mk, updatedAt=:u",
+      ExpressionAttributeValues: {
+        ":sb": false,
+        ":sid": slotId,
+        ":d": date,
+        ":t": time,
+        ":vt": "HALF",
+        ":mk": mergeKey,
+        ":u": new Date().toISOString(),
+      },
+    })
+  );
+
+  await addTimelineEvent({
+    orderId,
+    event: "SLOT_BOOKED_HALF",
+    by: uid,
+    role: "BOOKING",
+    data: {
+      vehicleType: "HALF",
+      time,
+      mergeKey,
+      distributorCode,
+      distributorName: resolvedName,
+      lat: safeLat,
+      lng: safeLng,
+      slotId,
+    },
+  });
+
+  // ✅ recompute tripStatus
+  const updated = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: mergeSk },
+    })
+  );
+
+  const finalTotal = Number(updated?.Item?.totalAmount || 0);
+  const bookingCountAfter = bookingCountBefore + 1;
+
+  const tripStatus =
+    bookingCountAfter >= 2 && finalTotal >= threshold
+      ? "READY_FOR_CONFIRM"
+      : "PARTIAL";
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: mergeSk },
+      UpdateExpression: "SET tripStatus = :s",
+      ExpressionAttributeValues: { ":s": tripStatus },
+    })
+  );
+
+  return {
+    ok: true,
+    bookingId,
+    type: "HALF",
+    tripStatus,
+    totalAmount: finalTotal,
+    mergeKey,
+    blink,
+    status: "PENDING_MANAGER_CONFIRM",
+    userId: uid,
+    lat: safeLat,
+    lng: safeLng,
+    distributorName: resolvedName,
+  };
 }
 
 /* ✅ CONFIRM MERGE -> assigns FULL slot + creates FULL master order */
