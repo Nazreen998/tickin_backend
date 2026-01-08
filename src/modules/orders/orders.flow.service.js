@@ -1,5 +1,9 @@
 import { ddb } from "../../config/dynamo.js";
-import { GetCommand, UpdateCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
+import {
+  GetCommand,
+  UpdateCommand,
+  ScanCommand,
+} from "@aws-sdk/lib-dynamodb";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
