@@ -27,6 +27,7 @@ import goalsRoutes from "./src/routes/goals.routes.js";
 import distributorRoutes from "./src/modules/distributors/distributors.routes.js";
 import vehiclesRoutes from "./src/routes/vehicles.routes.js";
 import attendanceRoutes from "./src/modules/attendance/attendance.routes.js";
+import palletRoutes from "./src/modules/fifo/pallet.routes.js";
 // ✅ FIXED ✅
 // Import ManagerOrdersFlow as router
 import ManagerOrdersFlowRoutes from "./src/routes/managerOrdersFlow.routes.js";
@@ -115,6 +116,12 @@ app.use("/api/slots", slotRoutes);
  * ✅ Attendance  Routes
  */
 app.use("/api/attendance", attendanceRoutes);
+
+/**
+ * ✅ FIFO  Routes
+ */
+app.use("/api", palletRoutes);
+
 /**
  * ✅ 404 Handler
  */

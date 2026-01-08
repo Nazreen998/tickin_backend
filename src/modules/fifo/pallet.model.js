@@ -1,4 +1,4 @@
-import { ddb } from "../../utils/dynamo.js";
+import { ddb } from "../../config/dynamo.js";
 import { PutCommand, GetCommand, UpdateCommand, QueryCommand, DeleteCommand } from "@aws-sdk/lib-dynamodb";
 
 const TABLE = process.env.PALLET_TABLE;
