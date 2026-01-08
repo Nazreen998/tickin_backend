@@ -159,6 +159,20 @@ router.post(
     }
   }
 );
+router.post(
+  "/merge/cancel-confirm",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const data = await managerCancelConfirmedMerge(req.body);
+      return res.json(data);
+    } catch (err) {
+      return res.status(400).json({ ok: false, message: err.message });
+    }
+  }
+);
+
 
 /* ✅ MANAGER MOVE MERGE */
 router.post(
