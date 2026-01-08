@@ -1423,6 +1423,7 @@ export async function managerCancelConfirmedMerge({
   const pk = pkFor(companyCode, date);
   const mergeSk = skForMergeSlot(time, mergeKey);
 
+  // ✅ get merge slot
   const capRes = await ddb.send(
     new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: mergeSk } })
   );
@@ -1438,8 +1439,13 @@ export async function managerCancelConfirmedMerge({
   const pos = mergeSlot.pos;
   if (!pos) throw new Error("❌ Confirmed merge missing pos");
 
-  const fullSk = skForSlot(time, "FULL", pos);
+  const fullSlotSk = skForSlot(time, "FULL", pos);
 
+  // ✅ FULL booking SK (who booked full?)
+  const bookedUserId = mergeSlot.userId || "MANAGER";
+  const fullBookingSk = skForBooking(time, "FULL", pos, bookedUserId);
+
+  // ✅ find all HALF bookings under this mergeKey
   const allBookingsRes = await ddb.send(
     new QueryCommand({
       TableName: TABLE_BOOKINGS,
@@ -1456,25 +1462,58 @@ export async function managerCancelConfirmedMerge({
   );
 
   if (bookings.length === 0) {
-    throw new Error("No bookings found for this mergeKey");
+    throw new Error("No HALF bookings found for this mergeKey");
   }
 
+  // ✅ reset FULL slot + delete FULL booking + reset merge slot
+  const threshold = (await getRules(companyCode)).threshold;
+
   await ddb.send(
-    new UpdateCommand({
-      TableName: TABLE_CAPACITY,
-      Key: { pk, sk: fullSk },
-      UpdateExpression:
-        "SET #s = :avail REMOVE userId, distributorName, distributorCode, bookedBy, orderId",
-      ExpressionAttributeNames: { "#s": "status" },
-      ExpressionAttributeValues: { ":avail": "AVAILABLE" },
+    new TransactWriteCommand({
+      TransactItems: [
+        // ✅ FULL slot AVAILABLE
+        {
+          Update: {
+            TableName: TABLE_CAPACITY,
+            Key: { pk, sk: fullSlotSk },
+            UpdateExpression:
+              "SET #s = :avail REMOVE userId, distributorName, distributorCode, bookedBy, orderId",
+            ExpressionAttributeNames: { "#s": "status" },
+            ExpressionAttributeValues: { ":avail": "AVAILABLE" },
+          },
+        },
+
+        // ✅ delete FULL booking record
+        {
+          Delete: {
+            TableName: TABLE_BOOKINGS,
+            Key: { pk, sk: fullBookingSk },
+          },
+        },
+
+        // ✅ reset merge slot (DON'T DELETE)
+        {
+          Update: {
+            TableName: TABLE_CAPACITY,
+            Key: { pk, sk: mergeSk },
+            UpdateExpression:
+              "SET tripStatus=:p, blink=:b, updatedAt=:u, totalAmount=:t REMOVE confirmedBy, confirmedAt, userId, pos",
+            ExpressionAttributeValues: {
+              ":p": "PARTIAL",
+              ":b": false,
+              ":u": new Date().toISOString(),
+              ":t": 0,
+            },
+          },
+        },
+      ],
     })
   );
 
-  await ddb.send(
-    new DeleteCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: mergeSk } })
-  );
-
+  // ✅ reset each HALF booking + order
   for (const b of bookings) {
+    const amt = Number(b.amount || 0);
+
     await ddb.send(
       new UpdateCommand({
         TableName: TABLE_BOOKINGS,
@@ -1486,6 +1525,7 @@ export async function managerCancelConfirmedMerge({
       })
     );
 
+    // ✅ order reset
     if (b.orderId) {
       await ddb.send(
         new UpdateCommand({
@@ -1505,7 +1545,7 @@ export async function managerCancelConfirmedMerge({
 
   return {
     ok: true,
-    message: "✅ Confirmed merge cancelled. Please rebook from start.",
+    message: "✅ Confirmed merge cancelled. Rebook again from start.",
     mergeKey,
     pos,
     affectedBookings: bookings.length,
@@ -1564,7 +1604,7 @@ export async function managerCancelBooking({
       mergeCap.Item &&
       String(mergeCap.Item.tripStatus || "").toUpperCase() === "FULL"
     ) {
-      throw new Error("❌ Already confirmed. Cancel full merge to change.");
+      throw new Error("❌ This merge already confirmed. Use Cancel Confirmed Merge option.");
     }
 
     const bookingRes = await ddb.send(
