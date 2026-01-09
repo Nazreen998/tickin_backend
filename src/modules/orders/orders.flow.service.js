@@ -14,6 +14,16 @@ function normalizeUserPk(id) {
   if (!s) return null;
   return s.startsWith("USER#") ? s : `USER#${s}`;
 }
+export async function assignDriverToOrder(req, res) {
+  try {
+    const { orderId, driverId } = req.body;
+
+    // TODO: your logic here
+    return res.json({ ok: true, message: "Driver assigned", orderId, driverId });
+  } catch (e) {
+    return res.status(500).json({ ok: false, message: e.message });
+  }
+}
 
 /* ============================================================
    ✅ RESOLVER: flowKey -> orderIds
