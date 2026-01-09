@@ -38,6 +38,9 @@ export const Attendance = {
         Item: {
           PK: `USER#${uid}`,
           SK: `DATE#${date}`,
+          // 🔹 GSI for dashboard queries
+          GSI1PK: `DATE#${date}`,
+          GSI1SK: `LOC#${locationId}#USER#${uid}`,
           userName,
           checkInAt: nowIST(),          
           lat,
@@ -45,6 +48,10 @@ export const Attendance = {
           distance,
           locationId,
           locationName,
+          // 🔹 Allowance fields (safe defaults)
+          bataAmount: 0,
+          bataReason: "NOT_APPLICABLE",
+          nightAllowance: 0,
           status: "CHECKED_IN",
           createdAt: nowIST()
         },
@@ -62,7 +69,7 @@ export const Attendance = {
           SK: `DATE#${date}`
         },
         UpdateExpression:
-          "SET checkOutAt = :t, checkOutLat = :lat, checkOutLng = :lng, #s = :s",
+          "SET checkOutAt = :t, checkOutLat = :lat, checkOutLng = :lng, #s = :s, nightAllowance = :n",
         ConditionExpression:
           "attribute_exists(PK) AND attribute_not_exists(checkOutAt)",
         ExpressionAttributeNames: {
@@ -72,6 +79,7 @@ export const Attendance = {
           ":t": nowIST(),
           ":lat": lat,
           ":lng": lng,
+          ":n": 0,
           ":s": "CHECKED_OUT"
         }
       })
