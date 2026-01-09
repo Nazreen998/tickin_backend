@@ -754,20 +754,19 @@ export async function bookSlot({
   /* ======================================================
      ✅ HALF BOOKING (LOCATIONID BASED MERGE)
   ====================================================== */
+let rawLocationId =
+  locationId && String(locationId).trim() !== ""
+    ? String(locationId).trim()
+    : `GEO_${Number(safeLat || 0).toFixed(4)}_${Number(safeLng || 0).toFixed(4)}`;
 
-  let rawLocationId =
-    locationId && String(locationId).trim() !== ""
-      ? String(locationId).trim()
-      : `GEO_${Number(safeLat || 0).toFixed(4)}_${Number(safeLng || 0).toFixed(
-          4
-        )}`;
-rawLocationId = rawLocationId.replace(/^LOC#/i, "").trim();
-rawLocationId = rawLocationId.replace(/^LOC#/i, "").trim(); // ✅ run twice safety
+// ✅ PLACE THIS HERE 👇
+rawLocationId = String(rawLocationId || "").trim();
+rawLocationId = rawLocationId.replace(/^(LOC#)+/i, "").trim();
 
-
-  const mergeKey = rawLocationId.startsWith("GEO_")
-    ? rawLocationId
-    : `LOC#${rawLocationId.trim().toUpperCase()}`;
+// ✅ mergeKey final
+const mergeKey = rawLocationId.startsWith("GEO_")
+  ? rawLocationId
+  : `LOC#${rawLocationId.trim().toUpperCase()}`;
 
   const mergeSk = skForMergeSlot(time, mergeKey);
 
