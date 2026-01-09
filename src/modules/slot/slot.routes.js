@@ -9,6 +9,7 @@ import {
   managerCancelBooking,
   managerDisableSlot,
   managerConfirmMerge,
+  managerCancelConfirmedMerge,
   managerMoveBookingToMerge,
   managerEditSlotTime,
   managerSetSlotMax,

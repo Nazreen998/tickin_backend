@@ -384,43 +384,49 @@ export async function getSlotGrid({ companyCode, date }) {
       });
     }
   }
+const finalSlots = defaultSlots.map((slot) => {
+  const override = overrides.find((o) => o.sk === slot.sk);
+  const merged = override ? { ...slot, ...override } : { ...slot };
 
-  const finalSlots = defaultSlots.map((slot) => {
-    const override = overrides.find((o) => o.sk === slot.sk);
-    const merged = override ? { ...slot, ...override } : slot;
+  // ✅ If capacity shows userId but status AVAILABLE -> force BOOKED
+  if (
+    merged.vehicleType === "FULL" &&
+    String(merged.status || "").toUpperCase() === "AVAILABLE" &&
+    merged.userId
+  ) {
+    merged.status = "BOOKED";
+  }
 
-    if (
-      merged.vehicleType === "FULL" &&
-      String(merged.status || "").toUpperCase() === "AVAILABLE" &&
-      merged.userId
-    ) {
-      merged.status = "BOOKED";
+  // ✅ Attach booking details always when BOOKED
+  if (
+    merged.vehicleType === "FULL" &&
+    String(merged.status || "").toUpperCase() === "BOOKED"
+  ) {
+    const match = allBookings.find(
+      (b) =>
+        String(b.vehicleType || "").toUpperCase() === "FULL" &&
+        String(b.slotTime || "") === String(merged.time) &&
+        String(b.pos || "") === String(merged.pos)
+    );
+
+    if (match) {
+      merged.distributorName = match.distributorName || merged.distributorName || null;
+      merged.distributorCode = match.distributorCode || merged.distributorCode || null;
+      merged.orderId = match.orderId || merged.orderId || null;
+      merged.amount = Number(match.amount || merged.amount || 0); // ✅ FIX
+      merged.bookedBy = match.userId || merged.bookedBy || null;
     }
+  }
 
-    if (
-      merged.vehicleType === "FULL" &&
-      String(merged.status || "").toUpperCase() === "BOOKED" &&
-      !merged.distributorName
-    ) {
-      const match = allBookings.find(
-        (b) =>
-          String(b.vehicleType || "").toUpperCase() === "FULL" &&
-          String(b.slotTime || "") === String(merged.time) &&
-          String(b.pos || "") === String(merged.pos)
-      );
-
-      if (match) {
-        merged.distributorName = match.distributorName || null;
-        merged.distributorCode = match.distributorCode || null;
-        merged.orderId = match.orderId || null;
-      }
-    }
-
-    return merged;
-  });
+  return merged;
+});
 
   const mergeSlots = overrides
-    .filter((o) => String(o.sk || "").startsWith("MERGE_SLOT#"))
+   .filter((o) => {
+    if (!String(o.sk || "").startsWith("MERGE_SLOT#")) return false;
+    const ts = String(o.tripStatus || "").toUpperCase();
+    return ts !== "FULL"; // ✅ hide confirmed merges
+  })
     .map((m) => {
       let time = m.time;
       if (!time) {
@@ -747,7 +753,10 @@ export async function bookSlot({
     locationId ||
     `GEO_${Number(safeLat || 0).toFixed(4)}_${Number(safeLng || 0).toFixed(4)}`;
 
-  const mergeKey = String(fixedLocationId).trim().toUpperCase();
+  const mergeKey = locationId
+  ? `LOC#${String(locationId).trim().toUpperCase()}`
+  : `GEO_${Number(safeLat || 0).toFixed(4)}_${Number(safeLng || 0).toFixed(4)}`;
+
   const mergeSk = skForMergeSlot(time, mergeKey);
 
   const mergeCap = await ddb.send(
@@ -912,6 +921,44 @@ export async function bookSlot({
     userId: uid,
     distributorName: resolvedName,
   };
+}
+/*Date wise merge*/
+export async function getWaitingHalfBookingsByDate(req, res) {
+  try {
+    const { date } = req.query;
+    const companyCode = req.user?.companyCode || "VAGR_IT";
+
+    if (!date) {
+      return res.status(400).json({ ok: false, message: "date required" });
+    }
+
+    const pk = pkFor(companyCode, date);
+
+    const bookingsRes = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE_BOOKINGS,
+        KeyConditionExpression: "pk = :pk",
+        ExpressionAttributeValues: { ":pk": pk },
+      })
+    );
+
+    const all = bookingsRes.Items || [];
+
+    const waiting = all.filter((b) => {
+      const vt = String(b.vehicleType || "").toUpperCase();
+      return vt === "HALF" && isPendingOrWaitingStatus(b.status);
+    });
+
+    return res.json({
+      ok: true,
+      date,
+      count: waiting.length,
+      bookings: waiting,
+    });
+  } catch (e) {
+    console.error("getWaitingHalfBookingsByDate", e);
+    return res.status(500).json({ ok: false, message: e.message });
+  }
 }
 
 /* ✅ CONFIRM MERGE -> assigns FULL slot + creates FULL master order */
@@ -1324,16 +1371,34 @@ export async function managerMergeOrdersToMergeKey({
       },
     })
   );
+  // ✅ Auto confirm after manual merge if READY
+if (newTripStatus === "READY_FOR_CONFIRM") {
+  const confirm = await managerConfirmMerge({
+    companyCode,
+    date,
+    time,
+    mergeKey: toMergeKey,
+    managerId,
+  });
 
   return {
     ok: true,
-    message: "✅ Orders merged into one MergeKey",
-    targetMergeKey: toMergeKey,
-    movedCount: selected.length,
-    movedTotal,
-    finalTotal,
-    tripStatus: newTripStatus,
+    message: "✅ Manual merge + Auto Confirm done",
+    ...confirm,
+    manualMerged: true,
   };
+}
+
+return {
+  ok: true,
+  message: "✅ Orders merged into one MergeKey",
+  targetMergeKey: toMergeKey,
+  movedCount: selected.length,
+  movedTotal,
+  finalTotal,
+  tripStatus: newTripStatus,
+};
+
 }
 
 /* ✅ CANCEL CONFIRMED MERGE */
