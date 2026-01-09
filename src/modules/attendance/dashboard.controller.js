@@ -120,7 +120,7 @@ export const weeklySummary = async (req, res) => {
         users[uid] = {
           uid,
           name: item.userName,
-          role: item.role,
+          role: item.role || "-",
           presentDays: 0,
           totalBata: 0,
           nightAllowance: 0
