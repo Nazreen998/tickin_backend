@@ -56,7 +56,7 @@ export const Attendance = {
           status: "CHECKED_IN",
           createdAt: nowIST()
         },
-        ConditionExpression: "attribute_not_exists(PK)"
+        ConditionExpression: "attribute_not_exists(SK)"
       })
     );
   },
