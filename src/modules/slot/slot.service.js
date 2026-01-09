@@ -750,12 +750,18 @@ export async function bookSlot({
   // ✅ MergeKey based ONLY on locationId or fixed GEO
 
  // ✅ RAW locationId always stored as raw
-const rawLocationId =
+// ✅ RAW locationId always stored clean (NO LOC# inside)
+let rawLocationId =
   locationId && String(locationId).trim() !== ""
     ? String(locationId).trim()
     : `GEO_${Number(safeLat || 0).toFixed(4)}_${Number(safeLng || 0).toFixed(4)}`;
 
-// ✅ mergeKey always LOC#rawLocationId OR GEO...
+// ✅ CLEAN: remove "LOC#" if user already passed it
+if (rawLocationId.toUpperCase().startsWith("LOC#")) {
+  rawLocationId = rawLocationId.substring(4);
+}
+
+// ✅ mergeKey final
 const mergeKey = rawLocationId.startsWith("GEO_")
   ? rawLocationId
   : `LOC#${rawLocationId.trim().toUpperCase()}`;

@@ -11,6 +11,7 @@ import {
   managerConfirmMerge,
   managerCancelConfirmedMerge,
   managerMoveBookingToMerge,
+  getWaitingHalfBookingsByDate,
   managerEditSlotTime,
   managerSetSlotMax,
   managerEnableSlot,
@@ -28,6 +29,12 @@ router.get(
   verifyToken,
   allowRoles("MANAGER"),
   getEligibleHalfBookings
+);
+router.get(
+  "/waiting-half-by-date",
+  verifyToken,
+  allowRoles("MANAGER"),
+  getWaitingHalfBookingsByDate
 );
 
 /* ✅ GET GRID */
