@@ -31,6 +31,7 @@ import attendanceRoutes from "./src/modules/attendance/attendance.routes.js";
 // Import ManagerOrdersFlow as router
 import ManagerOrdersFlowRoutes from "./src/routes/managerOrdersFlow.routes.js";
 import attendanceDashboardRoutes from "./src/modules/attendance/dashboard.routes.js";
+import attendanceConfigRoutes from "./src/modules/attendance/config.routes.js";
 
 const app = express();
 
@@ -116,7 +117,9 @@ app.use("/api/slots", slotRoutes);
  * ✅ Attendance  Routes
  */
 app.use("/api/attendance", attendanceRoutes);
-app.use("/attendance/dashboard", attendanceDashboardRoutes);
+app.use("/api/attendance/dashboard", attendanceDashboardRoutes);
+app.use("/api/attendance/config", attendanceConfigRoutes);
+
 
 
 /**
