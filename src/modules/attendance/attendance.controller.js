@@ -106,6 +106,7 @@ export const checkIn = async (req, res) => {
     await Attendance.checkIn({
       uid,
       userName,
+      role,
       date: todayIST(),
       lat,
       lng,
