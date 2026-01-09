@@ -30,6 +30,7 @@ import attendanceRoutes from "./src/modules/attendance/attendance.routes.js";
 // ✅ FIXED ✅
 // Import ManagerOrdersFlow as router
 import ManagerOrdersFlowRoutes from "./src/routes/managerOrdersFlow.routes.js";
+import attendanceDashboardRoutes from "./src/modules/attendance/dashboard.routes.js";
 
 const app = express();
 
@@ -115,6 +116,8 @@ app.use("/api/slots", slotRoutes);
  * ✅ Attendance  Routes
  */
 app.use("/api/attendance", attendanceRoutes);
+app.use("/attendance/dashboard", attendanceDashboardRoutes);
+
 
 /**
  * ✅ 404 Handler

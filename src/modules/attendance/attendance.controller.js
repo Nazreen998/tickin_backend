@@ -1,3 +1,4 @@
+import { AllowanceConfig } from "../../models/allowanceConfig.model.js";
 import { Attendance } from "../../models/attendance.model.js";
 import { calculateDistance } from "../../utils/distance.js";
 import locations from "../../config/location.js";
@@ -10,6 +11,16 @@ const yesterdayIST = () => {
   d.setDate(d.getDate() - 1);
   return d.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 };
+const toMinutes = (timeStr) => {
+  const [h, m] = timeStr.split(":").map(Number);
+  return h * 60 + m;
+};
+
+const getISTNow = () =>
+  new Date(
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+  );
+
 
 export const checkIn = async (req, res) => {
   const { lat, lng } = req.body;
@@ -24,6 +35,8 @@ const userName =
   req.user.Name ||
   req.user.username ||
   "UNKNOWN";
+const role = req.user.role;
+
   if (!lat || !lng) {
     return res.json({ ok: false, error: "location_required" });
   }
@@ -43,8 +56,49 @@ const userName =
   if (!matchedLocation) {
     return res.json({ ok: false, error: "outside_all_locations" });
   }
+  if (role === "MANAGER" || role === "LOADMAN") {
+  const from = toMinutes(config.managerLoadmanCheckin.from);
+  const to = toMinutes(config.managerLoadmanCheckin.to);
+
+  if (nowMin >= from && nowMin <= to) {
+    bataAmount = config.managerLoadmanBata;
+    bataReason = "MANAGER_LOADMAN_ON_TIME";
+  }
+}
+if (role === "DRIVER") {
+  const yesterday = await Attendance.get(uid, yesterdayIST());
+
+  let window = config.driverCheckinNormal;
+
+  if (yesterday?.checkOutAt) {
+    const checkout = new Date(yesterday.checkOutAt);
+    const checkoutMin =
+      checkout.getHours() * 60 + checkout.getMinutes();
+
+    if (checkoutMin >= 1320) { // after 10 PM
+      window = config.driverCheckinAfterNightDuty;
+    }
+  }
+
+  const from = toMinutes(window.from);
+  const to = toMinutes(window.to);
+
+  if (nowMin >= from && nowMin <= to) {
+    bataAmount = config.driverMorningBata;
+    bataReason = "DRIVER_MORNING_BATA";
+  }
+}
+
 
   try {
+    const config = await AllowanceConfig.get();
+
+    let bataAmount = 0;
+    let bataReason = "NOT_APPLICABLE";
+
+    const now = getISTNow();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+
     await Attendance.checkIn({
       uid,
       userName,
@@ -53,7 +107,10 @@ const userName =
       lng,
       distance,
       locationId: matchedLocation.id,
-      locationName: matchedLocation.name
+      locationName: matchedLocation.name,
+      // ✅ NEW
+      bataAmount,
+      bataReason
     });
     res.json({ ok: true });
   } catch {
@@ -82,6 +139,8 @@ const userName =
   const nowIST = new Date(
     new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
   );
+  const config = await AllowanceConfig.get();
+
 
   const attendance =
     await Attendance.get(uid, todayIST()) ||
@@ -105,13 +164,26 @@ const userName =
   }
 
   const attendanceDate = attendance.SK.replace("DATE#", "");
+  let nightAllowance = 0;
+
+if (role === "DRIVER") {
+  const nowMin =
+    nowIST.getHours() * 60 + nowIST.getMinutes();
+
+  if (nowMin >= 1320) { // 10:00 PM
+    nightAllowance = config.driverNightAllowance;
+  }
+}
+
 
   try {
     await Attendance.checkOut({
       uid,
       date: attendanceDate,
       lat,
-      lng
+      lng,
+      // ✅ NEW
+      nightAllowance
     });
     res.json({ ok: true });
   } catch {
