@@ -23,30 +23,37 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
   const key = String(flowKey || "").trim();
   if (!key) return [];
 
-  // ✅ orderId case
- if (key.startsWith("ORD")) {
-  // ✅ normalize to always match pk format
-  const clean = key.replace("ORDER#", "").trim();
-  return [clean];
-}
+  // ✅ orderId case (ORDxxxx)
+  if (key.startsWith("ORD")) {
+    return [key];
+  }
 
+  // ✅ orderId without prefix
+  if (/^\d+$/.test(key)) {
+    return [`ORD${key}`];
+  }
 
   // ✅ mergeKey case
   const scanRes = await ddb.send(
     new ScanCommand({
       TableName: ORDERS_TABLE,
-      FilterExpression: "mergeKey = :mk",
-      ExpressionAttributeValues: { ":mk": key },
+      FilterExpression: "mergeKey = :m",
+      ExpressionAttributeValues: {
+        ":m": key,
+      },
+      ProjectionExpression: "orderId, pk, mergeKey",
     })
   );
 
-  const items = scanRes.Items || [];
-  const ids = items.map((x) => x.orderId).filter(Boolean);
+  const ids = (scanRes.Items || [])
+    .map((x) => x.orderId || (x.pk ? x.pk.replace("ORDER#", "") : null))
+    .filter(Boolean);
+
   return [...new Set(ids)];
 }
 
 /* ============================================================
-   ✅ COMMON: Update multiple orders helper
+   ✅ Helper: Update multiple orders safely
 ============================================================ */
 async function updateOrders(orderIds, updatePayload) {
   for (const oid of orderIds) {
@@ -83,44 +90,74 @@ async function updateOrders(orderIds, updatePayload) {
 }
 
 /* ============================================================
-   ✅ 1) Vehicle Selected (mergeKey supported)
+   ✅ GUARD: Ensure vehicle selected for all orders
 ============================================================ */
-export const vehicleSelected = async (req, res) => {
+async function ensureVehicleSelected(orderIds) {
+  for (const oid of orderIds) {
+    const g = await ddb.send(
+      new GetCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${oid}`, sk: "META" },
+      })
+    );
+    const item = g.Item;
+    if (!item || !item.vehicleType) return false;
+  }
+  return true;
+}
+
+/* ============================================================
+   ✅ GET FLOW (flowKey = orderId OR mergeKey)
+============================================================ */
+export const getOrderFlowByKey = async (req, res) => {
   try {
-    const flowKey = req.params.flowKey;
-    const { vehicleType } = req.body;
-    const user = req.user;
+    const key = req.params.flowKey;
+    if (!key) return res.status(400).json({ ok: false, message: "flowKey required" });
 
-    if (!vehicleType)
-      return res.status(400).json({ ok: false, message: "vehicleType required" });
-
-    const orderIds = await resolveOrderIdsFromFlowKey(flowKey);
+    const orderIds = await resolveOrderIdsFromFlowKey(key);
     if (orderIds.length === 0)
-      return res.status(404).json({ ok: false, message: "No orders found" });
+      return res.status(404).json({ ok: false, message: "No orders found for this flowKey" });
 
-    await updateOrders(orderIds, {
-      UpdateExpression: "SET vehicleType = :v, vehicleSelectedAt = :t",
-      ExpressionAttributeValues: {
-        ":v": String(vehicleType).toUpperCase(),
-        ":t": new Date().toISOString(),
-      },
+    // fetch all orders meta
+    const orders = [];
+    for (const oid of orderIds) {
+      const g = await ddb.send(
+        new GetCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${oid}`, sk: "META" },
+        })
+      );
+      if (g.Item) orders.push(g.Item);
+    }
+
+    // ✅ Combined response for UI
+    let totalQty = 0;
+    let grandTotal = 0;
+
+    const loadingItems = [];
+
+    orders.forEach((o) => {
+      totalQty += Number(o.totalQty || o.qty || 0);
+      grandTotal += Number(o.grandTotal || o.total || 0);
+
+      const items = o.loadingItems || o.items || [];
+      items.forEach((it) => loadingItems.push(it));
     });
 
-    for (const oid of orderIds) {
-      await addTimelineEvent({
-        orderId: oid,
-        event: "VEHICLE_SELECTED",
-        by: user.mobile,
-        extra: { vehicleType, flowKey },
-      });
-    }
+    const status = orders[0]?.status || "UNKNOWN";
 
     return res.json({
       ok: true,
-      message: "✅ Vehicle selected",
-      flowKey,
-      affectedOrders: orderIds,
-      vehicleType,
+      flowKey: key,
+      mergeKey: orders[0]?.mergeKey || null,
+      orderIds,
+      totalQty,
+      grandTotal,
+      status,
+      vehicleType: orders[0]?.vehicleType || null,
+      vehicleNo: orders[0]?.vehicleNo || null,
+      loadingItems,
+      orders, // ✅ send full orders for D1/D2 separation if needed
     });
   } catch (err) {
     return res.status(500).json({ ok: false, message: err.message });
@@ -128,7 +165,44 @@ export const vehicleSelected = async (req, res) => {
 };
 
 /* ============================================================
-   ✅ 2) Loading Start (mergeKey supported)
+   ✅ VEHICLE SELECTED (Manager selects vehicle)
+============================================================ */
+export const vehicleSelected = async (req, res) => {
+  try {
+    const flowKey = req.params.flowKey;
+    const { vehicleType, vehicleNo } = req.body;
+
+    if (!flowKey) return res.status(400).json({ ok: false, message: "flowKey required" });
+    if (!vehicleType && !vehicleNo)
+      return res.status(400).json({ ok: false, message: "vehicleType or vehicleNo required" });
+
+    const orderIds = await resolveOrderIdsFromFlowKey(flowKey);
+    if (orderIds.length === 0)
+      return res.status(404).json({ ok: false, message: "No orders found" });
+
+    await updateOrders(orderIds, {
+      UpdateExpression: "SET vehicleType = :v, vehicleNo = :vn",
+      ExpressionAttributeValues: {
+        ":v": vehicleType || vehicleNo,
+        ":vn": vehicleNo || null,
+      },
+    });
+
+    return res.json({
+      ok: true,
+      message: "✅ Vehicle selected",
+      flowKey,
+      affectedOrders: orderIds,
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, message: err.message });
+  }
+};
+
+/* ============================================================
+   ✅ LOADING START
+   ✅ Supports mergeKey + orderId (D1/D2 separate)
+   ✅ Requires vehicle selected first
 ============================================================ */
 export const loadingStart = async (req, res) => {
   try {
@@ -137,16 +211,25 @@ export const loadingStart = async (req, res) => {
 
     if (!key) return res.status(400).json({ ok: false, message: "flowKey required" });
 
-    const orderIds = await resolveOrderIdsFromFlowKey(key);
+    // ✅ If orderId provided => only that order gets updated
+    const orderIds = req.body.orderId
+      ? [req.body.orderId]
+      : await resolveOrderIdsFromFlowKey(key);
+
     if (orderIds.length === 0)
-      return res.status(404).json({ ok: false, message: "No orders found" });
+      return res.status(404).json({ ok: false, message: "No orders found for this key" });
+
+    // ✅ Vehicle must be selected
+    const vehicleOk = await ensureVehicleSelected(orderIds);
+    if (!vehicleOk) {
+      return res.status(400).json({
+        ok: false,
+        message: "❌ Vehicle not selected. Select vehicle first.",
+      });
+    }
 
     await updateOrders(orderIds, {
-      UpdateExpression: `
-        SET #s = :st,
-            loadingStarted = :ls,
-            loadingStartedAt = :t
-      `,
+      UpdateExpression: "SET #s = :st, loadingStarted = :ls, loadingStartedAt = :t",
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
         ":st": "LOADING_STARTED",
@@ -155,12 +238,13 @@ export const loadingStart = async (req, res) => {
       },
     });
 
+    // timeline event per order
     for (const oid of orderIds) {
       await addTimelineEvent({
         orderId: oid,
         event: "LOADING_STARTED",
-        by: user.mobile,
-        extra: { role: user.role, flowKey: key },
+        by: user?.mobile || "system",
+        extra: { role: user?.role || "MANAGER", flowKey: key },
       });
     }
 
@@ -176,7 +260,9 @@ export const loadingStart = async (req, res) => {
 };
 
 /* ============================================================
-   ✅ 3) Loading End (mergeKey supported)
+   ✅ LOADING END
+   ✅ Supports mergeKey + orderId (D1/D2 separate)
+   ✅ Requires vehicle selected first
 ============================================================ */
 export const loadingEnd = async (req, res) => {
   try {
@@ -185,9 +271,21 @@ export const loadingEnd = async (req, res) => {
 
     if (!key) return res.status(400).json({ ok: false, message: "flowKey required" });
 
-    const orderIds = await resolveOrderIdsFromFlowKey(key);
+    const orderIds = req.body.orderId
+      ? [req.body.orderId]
+      : await resolveOrderIdsFromFlowKey(key);
+
     if (orderIds.length === 0)
-      return res.status(404).json({ ok: false, message: "No orders found" });
+      return res.status(404).json({ ok: false, message: "No orders found for this key" });
+
+    // ✅ Vehicle must be selected
+    const vehicleOk = await ensureVehicleSelected(orderIds);
+    if (!vehicleOk) {
+      return res.status(400).json({
+        ok: false,
+        message: "❌ Vehicle not selected. Select vehicle first.",
+      });
+    }
 
     await updateOrders(orderIds, {
       UpdateExpression: "SET #s = :st, loadingEndAt = :t",
@@ -198,12 +296,13 @@ export const loadingEnd = async (req, res) => {
       },
     });
 
+    // timeline per order
     for (const oid of orderIds) {
       await addTimelineEvent({
         orderId: oid,
         event: "LOADING_COMPLETED",
-        by: user.mobile,
-        extra: { role: user.role, flowKey: key },
+        by: user?.mobile || "system",
+        extra: { role: user?.role || "MANAGER", flowKey: key },
       });
     }
 
@@ -219,65 +318,52 @@ export const loadingEnd = async (req, res) => {
 };
 
 /* ============================================================
-   ✅ 4) Assign Driver (mergeKey supported)
+   ✅ ASSIGN DRIVER
+   ✅ Vehicle must be selected first
 ============================================================ */
-export const assignDriverToOrder = async (req, res) => {
+export const assignDriver = async (req, res) => {
   try {
     const key = req.body.flowKey || req.body.mergeKey || req.body.orderId;
     const { driverId, vehicleNo } = req.body;
-    const user = req.user;
 
-    if (!key || !driverId) {
-      return res.status(400).json({ ok: false, message: "flowKey + driverId required" });
+    if (!key) return res.status(400).json({ ok: false, message: "flowKey required" });
+    if (!driverId) return res.status(400).json({ ok: false, message: "driverId required" });
+
+    const orderIds = await resolveOrderIdsFromFlowKey(key);
+    if (orderIds.length === 0)
+      return res.status(404).json({ ok: false, message: "No orders found for this key" });
+
+    // ✅ Vehicle must be selected before assigning driver
+    const vehicleOk = await ensureVehicleSelected(orderIds);
+    if (!vehicleOk) {
+      return res.status(400).json({
+        ok: false,
+        message: "❌ Vehicle not selected. Select vehicle first.",
+      });
     }
 
     const driverPk = normalizeUserPk(driverId);
 
-    const driverRes = await ddb.send(
+    const dg = await ddb.send(
       new GetCommand({
         TableName: USERS_TABLE,
         Key: { pk: driverPk, sk: "PROFILE" },
       })
     );
-
-    if (!driverRes.Item || String(driverRes.Item.role || "").toUpperCase() !== "DRIVER") {
-      return res.status(400).json({ ok: false, message: "Invalid driverId (not a DRIVER)" });
-    }
-
-    const driver = driverRes.Item;
-
-    const orderIds = await resolveOrderIdsFromFlowKey(key);
-    if (orderIds.length === 0)
-      return res.status(404).json({ ok: false, message: "No orders found" });
+    const driver = dg.Item;
+    if (!driver)
+      return res.status(404).json({ ok: false, message: "Driver not found" });
 
     await updateOrders(orderIds, {
-      UpdateExpression:
-        "SET #s = :st, driverId = :d, driverName = :n, driverMobile = :m, vehicleNo = :v, driverAssignedAt = :t",
+      UpdateExpression: "SET #s = :st, driverId = :d, driverName = :dn, driverMobile = :dm",
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
         ":st": "DRIVER_ASSIGNED",
         ":d": driverPk,
-        ":n": driver.name || null,
-        ":m": driver.mobile || null,
-        ":v": vehicleNo || null,
-        ":t": new Date().toISOString(),
+        ":dn": driver.name || driver.userName || "Driver",
+        ":dm": driver.mobile || null,
       },
     });
-
-    for (const oid of orderIds) {
-      await addTimelineEvent({
-        orderId: oid,
-        event: "DRIVER_ASSIGNED",
-        by: user.mobile,
-        extra: {
-          flowKey: key,
-          driverId: driverPk,
-          driverName: driver.name,
-          driverMobile: driver.mobile,
-          vehicleNo: vehicleNo || null,
-        },
-      });
-    }
 
     return res.json({
       ok: true,
