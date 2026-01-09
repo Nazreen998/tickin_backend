@@ -42,6 +42,7 @@ export const Attendance = {
           GSI1PK: `DATE#${date}`,
           GSI1SK: `LOC#${locationId}#USER#${uid}`,
           userName,
+          role,
           checkInAt: nowIST(),          
           lat,
           lng,
