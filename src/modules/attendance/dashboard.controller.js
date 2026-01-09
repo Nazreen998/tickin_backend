@@ -4,20 +4,42 @@ import { ddb } from "../../config/dynamo.js";
 const TABLE = "VAGR_Attendance";
 
 /** IST HELPERS */
-const todayIST = () =>
-  new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 
+/**
+ * 👉 DATE KEY FORMAT (FOR DYNAMODB)
+ * Always YYYY-MM-DD
+ * Matches: GSI1PK = DATE#2026-01-09
+ */
+const todayIST = () => {
+  return new Date().toLocaleDateString("en-CA", {
+    timeZone: "Asia/Kolkata",
+  });
+};
+
+/**
+ * 👉 DISPLAY / LOG PURPOSE ONLY
+ * NOT USED FOR DB QUERIES
+ */
 const getISTNow = () =>
-  new Date(
-    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
-  );
+  new Date().toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  });
 
 /**
  * GET /attendance/dashboard/today
- * ?officeId=PERUNGUDI
+ * ?officeId=OFFICE2
  */
 export const todayAttendance = async (req, res) => {
   const { officeId } = req.query;
+
+  // ✅ YYYY-MM-DD
   const date = todayIST();
 
   let params = {
@@ -25,8 +47,8 @@ export const todayAttendance = async (req, res) => {
     IndexName: "GSI1",
     KeyConditionExpression: "GSI1PK = :pk",
     ExpressionAttributeValues: {
-      ":pk": `DATE#${date}`
-    }
+      ":pk": `DATE#${date}`,
+    },
   };
 
   if (officeId) {
@@ -42,7 +64,7 @@ export const todayAttendance = async (req, res) => {
 
 /**
  * GET /attendance/dashboard/by-date
- * ?date=YYYY-MM-DD&officeId=PERUNGUDI
+ * ?date=YYYY-MM-DD&officeId=OFFICE2
  */
 export const attendanceByDate = async (req, res) => {
   const { date, officeId } = req.query;
@@ -56,8 +78,8 @@ export const attendanceByDate = async (req, res) => {
     IndexName: "GSI1",
     KeyConditionExpression: "GSI1PK = :pk",
     ExpressionAttributeValues: {
-      ":pk": `DATE#${date}`
-    }
+      ":pk": `DATE#${date}`,
+    },
   };
 
   if (officeId) {
@@ -73,23 +95,25 @@ export const attendanceByDate = async (req, res) => {
 
 /**
  * GET /attendance/dashboard/weekly-summary
- * ?officeId=PERUNGUDI
+ * ?officeId=OFFICE2
  */
 export const weeklySummary = async (req, res) => {
   const { officeId } = req.query;
 
-  const now = getISTNow();
-  const day = now.getDay() || 7; // Sunday = 7
-
-  const monday = new Date(now);
-  monday.setDate(now.getDate() - day + 1);
-
-  // Working days: Mon–Sat (6 days)
+  /**
+   * 👉 Build last 6 days in YYYY-MM-DD
+   * Matches DynamoDB GSI1PK
+   */
   const dates = [];
   for (let i = 0; i < 6; i++) {
-    const d = new Date(monday);
-    d.setDate(monday.getDate() + i);
-    dates.push(d.toLocaleDateString("en-CA"));
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+
+    const ds = d.toLocaleDateString("en-CA", {
+      timeZone: "Asia/Kolkata",
+    });
+
+    dates.push(ds);
   }
 
   const users = {};
@@ -100,8 +124,8 @@ export const weeklySummary = async (req, res) => {
       IndexName: "GSI1",
       KeyConditionExpression: "GSI1PK = :pk",
       ExpressionAttributeValues: {
-        ":pk": `DATE#${date}`
-      }
+        ":pk": `DATE#${date}`,
+      },
     };
 
     if (officeId) {
@@ -123,7 +147,7 @@ export const weeklySummary = async (req, res) => {
           role: item.role || "-",
           presentDays: 0,
           totalBata: 0,
-          nightAllowance: 0
+          nightAllowance: 0,
         };
       }
 
@@ -133,10 +157,10 @@ export const weeklySummary = async (req, res) => {
     }
   }
 
-  const result = Object.values(users).map(u => ({
+  const result = Object.values(users).map((u) => ({
     ...u,
     absentDays: 6 - u.presentDays,
-    totalAmount: u.totalBata + u.nightAllowance
+    totalAmount: u.totalBata + u.nightAllowance,
   }));
 
   res.json({ ok: true, data: result });
