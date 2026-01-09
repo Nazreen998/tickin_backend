@@ -10,6 +10,6 @@ const router = Router();
 
 // 🔐 MASTER ONLY (verified inside controller)
 router.get("/allowance", verifyToken, getAllowanceConfig);
-router.put("/allowance", verifyToken, updateAllowanceConfig);
+router.post("/allowance", verifyToken, updateAllowanceConfig);
 
 export default router;
