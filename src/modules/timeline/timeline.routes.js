@@ -3,18 +3,19 @@ import { verifyToken } from "../../middleware/auth.middleware.js";
 import { allowRoles } from "../../middleware/role.middleware.js";
 
 import { addTimelineEvent } from "./timeline.helper.js";
-import { getOrderTimeline } from "./timeline.service.js";
+import {
+  getOrderTimeline,
+  getSlotTimeline,
+  getOrderTimelineNeat,
+  getSlotTimelineNeat,
+} from "./timeline.service.js";
 
 import { ddb } from "../../config/dynamo.js";
-import { UpdateCommand, GetCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { UpdateCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 
 const router = express.Router();
 
 const TABLE_ORDERS = process.env.ORDERS_TABLE || "tickin_orders";
-
-// ✅ Slot-level timeline table (optional)
-const TABLE_SLOT_TIMELINE =
-  process.env.TABLE_SLOT_TIMELINE || "tickin_timeline_events";
 
 /* ✅ helper: resolve tracking orderId */
 async function resolveTrackingOrderId(orderId) {
@@ -42,7 +43,8 @@ router.post(
     try {
       const user = req.user;
       const { orderId } = req.body;
-      if (!orderId) return res.status(400).json({ message: "orderId required" });
+      if (!orderId)
+        return res.status(400).json({ message: "orderId required" });
 
       const trackingOrderId = await resolveTrackingOrderId(orderId);
 
@@ -71,8 +73,10 @@ router.post(
       const user = req.user;
       const { orderId, productId, qty, productName } = req.body;
 
-      if (!orderId) return res.status(400).json({ message: "orderId required" });
-      if (!productId) return res.status(400).json({ message: "productId required" });
+      if (!orderId)
+        return res.status(400).json({ message: "orderId required" });
+      if (!productId)
+        return res.status(400).json({ message: "productId required" });
 
       const trackingOrderId = await resolveTrackingOrderId(orderId);
 
@@ -106,8 +110,10 @@ router.post(
       const user = req.user;
       const { orderId, vehicleNo } = req.body;
 
-      if (!orderId) return res.status(400).json({ message: "orderId required" });
-      if (!vehicleNo) return res.status(400).json({ message: "vehicleNo required" });
+      if (!orderId)
+        return res.status(400).json({ message: "orderId required" });
+      if (!vehicleNo)
+        return res.status(400).json({ message: "vehicleNo required" });
 
       const trackingOrderId = await resolveTrackingOrderId(orderId);
 
@@ -147,7 +153,8 @@ router.post(
     try {
       const user = req.user;
       const { orderId } = req.body;
-      if (!orderId) return res.status(400).json({ message: "orderId required" });
+      if (!orderId)
+        return res.status(400).json({ message: "orderId required" });
 
       const trackingOrderId = await resolveTrackingOrderId(orderId);
 
@@ -176,8 +183,10 @@ router.post(
       const user = req.user;
       const { orderId, driverId, vehicleNo } = req.body;
 
-      if (!orderId) return res.status(400).json({ message: "orderId required" });
-      if (!driverId) return res.status(400).json({ message: "driverId required" });
+      if (!orderId)
+        return res.status(400).json({ message: "orderId required" });
+      if (!driverId)
+        return res.status(400).json({ message: "driverId required" });
 
       const trackingOrderId = await resolveTrackingOrderId(orderId);
 
@@ -211,46 +220,50 @@ router.post(
   }
 );
 
-/* ✅ GET Order Timeline */
+/* ✅ GET Order Timeline (raw + neat) */
 router.get(
   "/:orderId",
   verifyToken,
-  allowRoles("MASTER", "MANAGER", "DISTRIBUTOR", "SALES OFFICER", "DRIVER", "SALESMAN"),
+  allowRoles(
+    "MASTER",
+    "MANAGER",
+    "DISTRIBUTOR",
+    "SALES OFFICER",
+    "DRIVER",
+    "SALESMAN"
+  ),
   getOrderTimeline
 );
 
-/* ✅ GET Slot Timeline (Manager/Master only)
-   GET /api/timeline/slot/:slotId
-*/
+/* ✅ GET Order Timeline (NEAT ONLY) */
+router.get(
+  "/:orderId/neat",
+  verifyToken,
+  allowRoles(
+    "MASTER",
+    "MANAGER",
+    "DISTRIBUTOR",
+    "SALES OFFICER",
+    "DRIVER",
+    "SALESMAN"
+  ),
+  getOrderTimelineNeat
+);
+
+/* ✅ GET Slot Timeline (raw + neat) */
 router.get(
   "/slot/:slotId",
   verifyToken,
   allowRoles("MASTER", "MANAGER"),
-  async (req, res) => {
-    try {
-      const { slotId } = req.params;
-      if (!slotId) {
-        return res.status(400).json({ ok: false, message: "slotId required" });
-      }
+  getSlotTimeline
+);
 
-      const out = await ddb.send(
-        new QueryCommand({
-          TableName: TABLE_SLOT_TIMELINE,
-          KeyConditionExpression: "pk = :pk",
-          ExpressionAttributeValues: { ":pk": `SLOT#${slotId}` },
-          ScanIndexForward: true,
-        })
-      );
-
-      return res.json({
-        ok: true,
-        slotId,
-        timeline: out.Items || [],
-      });
-    } catch (e) {
-      return res.status(500).json({ ok: false, message: e.message });
-    }
-  }
+/* ✅ GET Slot Timeline (NEAT ONLY) */
+router.get(
+  "/slot/:slotId/neat",
+  verifyToken,
+  allowRoles("MASTER", "MANAGER"),
+  getSlotTimelineNeat
 );
 
 export default router;
