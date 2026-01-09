@@ -420,81 +420,82 @@ const finalSlots = defaultSlots.map((slot) => {
 
   return merged;
 });
-
-  const mergeSlots = overrides
-   .filter((o) => {
+    const mergeSlots = overrides
+  .filter((o) => {
     if (!String(o.sk || "").startsWith("MERGE_SLOT#")) return false;
     const ts = String(o.tripStatus || "").toUpperCase();
     return ts !== "FULL"; // ✅ hide confirmed merges
   })
-    .map((m) => {
-      let time = m.time;
-      if (!time) {
-        try {
-          const parts = String(m.sk).split("#");
-          if (parts.length > 1) time = parts[1];
-        } catch (_) {}
+  .map((m) => {
+    let time = m.time;
+    if (!time) {
+      try {
+        const parts = String(m.sk).split("#");
+        if (parts.length > 1) time = parts[1];
+      } catch (_) {}
+    }
+
+    let mergeKey = m.mergeKey;
+    if (!mergeKey) {
+      try {
+        const sk = String(m.sk || "");
+        const parts = sk.split("#KEY#");
+        if (parts.length > 1) mergeKey = parts[1];
+      } catch (_) {}
+    }
+
+    const participants = allBookings
+      .filter(
+        (b) =>
+          String(b.vehicleType || "").toUpperCase() === "HALF" &&
+          String(b.slotTime || "") === String(time) &&
+          String(b.mergeKey || "") === String(mergeKey)
+      )
+      .map((b) => ({
+        distributorCode: b.distributorCode,
+        distributorName: b.distributorName,
+        amount: Number(b.amount || 0),
+        orderId: b.orderId || null,
+        bookingSk: b.sk,
+        status: b.status,
+        slotTime: b.slotTime,
+        mergeKey: b.mergeKey,
+        lat: b.lat,
+        lng: b.lng,
+      }));
+
+    let distanceKm = null;
+    if (participants.length >= 2) {
+      const a = participants[0];
+      const b = participants[1];
+      if (a.lat && a.lng && b.lat && b.lng) {
+        distanceKm = haversineKm(
+          Number(a.lat),
+          Number(a.lng),
+          Number(b.lat),
+          Number(b.lng)
+        );
+        distanceKm = Number(distanceKm.toFixed(2));
       }
+    }
 
-      let mergeKey = m.mergeKey;
-      if (!mergeKey) {
-        try {
-          const sk = String(m.sk || "");
-          const parts = sk.split("#KEY#");
-          if (parts.length > 1) mergeKey = parts[1];
-        } catch (_) {}
-      }
+    const tripStatus = m.tripStatus || "PARTIAL";
+    const blink = m.blink === true;
 
-      const participants = allBookings
-        .filter(
-          (b) =>
-            String(b.vehicleType || "").toUpperCase() === "HALF" &&
-            String(b.slotTime || "") === String(time) &&
-            String(b.mergeKey || "") === String(mergeKey)
-        )
-        .map((b) => ({
-          distributorCode: b.distributorCode,
-          distributorName: b.distributorName,
-          amount: Number(b.amount || 0),
-          orderId: b.orderId || null,
-          bookingSk: b.sk,
-          status: b.status,
-          slotTime: b.slotTime,
-          mergeKey: b.mergeKey,
-          lat: b.lat,
-          lng: b.lng,
-        }));
-
-      let distanceKm = null;
-      if (participants.length >= 2) {
-        const a = participants[0];
-        const b = participants[1];
-        if (a.lat && a.lng && b.lat && b.lng) {
-          distanceKm = haversineKm(
-            Number(a.lat),
-            Number(a.lng),
-            Number(b.lat),
-            Number(b.lng)
-          );
-          distanceKm = Number(distanceKm.toFixed(2));
-        }
-      }
-
-      const tripStatus = m.tripStatus || "PARTIAL";
-      const blink = m.blink === true;
-
-      return {
-        ...m,
-        time,
-        blink,
-        tripStatus,
-        vehicleType: "HALF",
-        mergeKey,
-        participants,
-        bookingCount: participants.length,
-        distanceKm,
-      };
-    });
+    return {
+      ...m,
+      time,
+      blink,
+      tripStatus,
+      vehicleType: "HALF",
+      mergeKey,
+      participants,
+      bookingCount: participants.length,
+      distanceKm,
+    };
+  })
+  // ✅ ✅ ✅ THIS LINE REMOVES EMPTY OR ₹0 MERGE TILES
+  .filter((m) => (m.bookingCount || 0) > 0 || Number(m.totalAmount || 0) > 0);
 
   const waitingHalfBookings = allBookings
     .filter((b) => {
@@ -663,13 +664,14 @@ export async function bookSlot({
                 Key: { pk, sk: slotSk },
                 ConditionExpression: "attribute_not_exists(#s) OR #s = :avail",
                 UpdateExpression:
-                  "SET #s = :booked, userId = :uid, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:by",
+                  "SET #s = :booked, userId = :uid, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:by,amount=:amt",
                 ExpressionAttributeNames: { "#s": "status" },
                 ExpressionAttributeValues: {
                   ":avail": "AVAILABLE",
                   ":booked": "BOOKED",
                   ":uid": uid,
                   ":dn": resolvedName,
+                  ":amt": amt,
                   ":dc": distributorCode,
                   ":oid": orderId,
                   ":by": uid,
