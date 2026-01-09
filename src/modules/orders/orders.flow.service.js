@@ -87,7 +87,7 @@ async function updateOrders(orderIds, updatePayload) {
 ============================================================ */
 export const vehicleSelected = async (req, res) => {
   try {
-    const flowKey = req.params.orderId;
+    const flowKey = req.params.flowKey;
     const { vehicleType } = req.body;
     const user = req.user;
 
