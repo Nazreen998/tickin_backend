@@ -31,7 +31,7 @@ export const Attendance = {
     return res.Item || null;
   },
 
-  async checkIn({ uid,userName,date, lat, lng, distance, locationId, locationName }) {
+  async checkIn({ uid,userName,role,date, lat, lng, distance, locationId, locationName }) {
     return ddb.send(
       new PutCommand({
         TableName: TABLE,
@@ -56,7 +56,7 @@ export const Attendance = {
           status: "CHECKED_IN",
           createdAt: nowIST()
         },
-        ConditionExpression: "attribute_not_exists(SK)"
+        ConditionExpression: "attribute_not_exists(PK)"
       })
     );
   },
