@@ -4,13 +4,13 @@ export default [
     name: "ChinthamaniOffice",
     lat: 9.8846830,
     lng: 78.1432800,
-    radius: 30
+    radius: 50
   },
   {
     id: "OFFICE2",
     name: "PerungudiOffice",
     lat: 9.848738,
     lng: 78.086800,
-    radius: 50
+    radius: 100
   }
 ];
