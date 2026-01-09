@@ -413,7 +413,13 @@ const finalSlots = defaultSlots.map((slot) => {
       merged.distributorName = match.distributorName || merged.distributorName || null;
       merged.distributorCode = match.distributorCode || merged.distributorCode || null;
       merged.orderId = match.orderId || merged.orderId || null;
-      merged.amount = Number(match.amount || merged.amount || 0); // ✅ FIX
+      merged.amount = Number(
+  match?.amount ??
+  merged?.amount ??
+  merged?.totalAmount ??
+  0
+);
+
       merged.bookedBy = match.userId || merged.bookedBy || null;
     }
   }
@@ -755,10 +761,9 @@ export async function bookSlot({
       : `GEO_${Number(safeLat || 0).toFixed(4)}_${Number(safeLng || 0).toFixed(
           4
         )}`;
+rawLocationId = rawLocationId.replace(/^LOC#/i, "").trim();
+rawLocationId = rawLocationId.replace(/^LOC#/i, "").trim(); // ✅ run twice safety
 
-  if (rawLocationId.toUpperCase().startsWith("LOC#")) {
-    rawLocationId = rawLocationId.substring(4);
-  }
 
   const mergeKey = rawLocationId.startsWith("GEO_")
     ? rawLocationId
@@ -862,11 +867,13 @@ export async function bookSlot({
       })
     );
   } catch (e) {
+    console.log("❌ AUTO CONFIRM FAILED:", e.message);
     if (
       String(e.message || "").includes("ConditionalCheckFailed") ||
       String(e.name || "") === "TransactionCanceledException"
     ) {
       throw new Error("❌ This Order already booked a slot (LOCKED)");
+      
     }
     throw e;
   }
@@ -1081,14 +1088,14 @@ export async function managerConfirmMerge({
 
   // ✅ Display distributor name: "A + B"
   const mergedNames = bookings
-    .map((b) => String(b.distributorName || "").trim())
-    .filter(Boolean)
-    .slice(0, 2);
+  .map((b) => String(b.distributorName || "").trim())
+  .filter(Boolean);
 
-  const displayName =
-    mergedNames.length >= 2
-      ? `${mergedNames[0]} + ${mergedNames[1]}`
-      : mergedNames[0] || "MERGE";
+const displayName =
+  mergedNames.length > 1
+    ? mergedNames.join(" + ")
+    : mergedNames[0] || "MERGE";
+
 
   const displayCode =
     bookings
