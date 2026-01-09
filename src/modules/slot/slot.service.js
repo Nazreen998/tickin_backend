@@ -749,13 +749,17 @@ export async function bookSlot({
   // ✅ IMPORTANT: lat/lng missing error REMOVED ✅
   // ✅ MergeKey based ONLY on locationId or fixed GEO
 
-  const fixedLocationId =
-    locationId ||
-    `GEO_${Number(safeLat || 0).toFixed(4)}_${Number(safeLng || 0).toFixed(4)}`;
+ // ✅ RAW locationId always stored as raw
+const rawLocationId =
+  locationId && String(locationId).trim() !== ""
+    ? String(locationId).trim()
+    : `GEO_${Number(safeLat || 0).toFixed(4)}_${Number(safeLng || 0).toFixed(4)}`;
 
-  const mergeKey = locationId
-  ? `LOC#${String(locationId).trim().toUpperCase()}`
-  : `GEO_${Number(safeLat || 0).toFixed(4)}_${Number(safeLng || 0).toFixed(4)}`;
+// ✅ mergeKey always LOC#rawLocationId OR GEO...
+const mergeKey = rawLocationId.startsWith("GEO_")
+  ? rawLocationId
+  : `LOC#${rawLocationId.trim().toUpperCase()}`;
+
 
   const mergeSk = skForMergeSlot(time, mergeKey);
 
@@ -819,7 +823,7 @@ export async function bookSlot({
                 ":z": 0,
                 ":a": amt,
                 ":mk": mergeKey,
-                ":lid": mergeKey,
+                ":lid": rawLocationId,
                 ":lat": safeLat,
                 ":lng": safeLng,
                 ":b": blink,
@@ -841,7 +845,7 @@ export async function bookSlot({
                 distributorCode,
                 distributorName: resolvedName,
                 mergeKey,
-                locationId: mergeKey,
+                locationId: rawLocationId,
                 amount: amt,
                 lat: safeLat,
                 lng: safeLng,
@@ -879,7 +883,7 @@ export async function bookSlot({
         ":t": time,
         ":vt": "HALF",
         ":mk": mergeKey,
-        ":lid": mergeKey,
+        ":lid": rawLocationId,
         ":u": new Date().toISOString(),
       },
     })
