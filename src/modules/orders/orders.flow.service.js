@@ -24,7 +24,12 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
   if (!key) return [];
 
   // ✅ orderId case
-  if (key.startsWith("ORD")) return [key];
+ if (key.startsWith("ORD")) {
+  // ✅ normalize to always match pk format
+  const clean = key.replace("ORDER#", "").trim();
+  return [clean];
+}
+
 
   // ✅ mergeKey case
   const scanRes = await ddb.send(
@@ -45,10 +50,32 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
 ============================================================ */
 async function updateOrders(orderIds, updatePayload) {
   for (const oid of orderIds) {
+    const tryIds = [
+      oid,
+      oid.startsWith("ORD") ? oid.replace("ORD", "") : "ORD" + oid,
+    ];
+
+    let found = null;
+
+    for (const t of tryIds) {
+      const g = await ddb.send(
+        new GetCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${t}`, sk: "META" },
+        })
+      );
+      if (g.Item) {
+        found = t;
+        break;
+      }
+    }
+
+    if (!found) continue;
+
     await ddb.send(
       new UpdateCommand({
         TableName: ORDERS_TABLE,
-        Key: { pk: `ORDER#${oid}`, sk: "META" },
+        Key: { pk: `ORDER#${found}`, sk: "META" },
         ...updatePayload,
       })
     );

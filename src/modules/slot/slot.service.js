@@ -522,7 +522,7 @@ const finalSlots = defaultSlots.map((slot) => {
     }));
 
   return {
-    slots: [...finalSlots, ...mergeSlots],
+    slots: [finalSlots, mergeSlots],
     waitingHalfBookings,
     rules: {
       maxAmount: rules.threshold,
@@ -761,12 +761,19 @@ let rawLocationId =
 
 // ✅ PLACE THIS HERE 👇
 rawLocationId = String(rawLocationId || "").trim();
+
+// ✅ if purely numeric -> normalize (01 -> 1)
+if (/^\d+$/.test(rawLocationId)) {
+  rawLocationId = String(parseInt(rawLocationId, 10));
+}
+
+// ✅ remove LOC# prefix if present
 rawLocationId = rawLocationId.replace(/^(LOC#)+/i, "").trim();
 
-// ✅ mergeKey final
 const mergeKey = rawLocationId.startsWith("GEO_")
   ? rawLocationId
-  : `LOC#${rawLocationId.trim().toUpperCase()}`;
+  : `LOC#${rawLocationId.toUpperCase()}`;
+
 
   const mergeSk = skForMergeSlot(time, mergeKey);
 
@@ -1448,7 +1455,7 @@ if (newTripStatus === "READY_FOR_CONFIRM") {
   return {
     ok: true,
     message: "✅ Manual merge + Auto Confirm done",
-    ...confirm,
+    confirm,
     manualMerged: true,
   };
 }
