@@ -34,7 +34,6 @@ const getISTNow = () =>
 
 /**
  * GET /attendance/dashboard/today
- * ?officeId=OFFICE2
  */
 export const todayAttendance = async (req, res) => {
   const date = todayIST();
@@ -46,19 +45,23 @@ export const todayAttendance = async (req, res) => {
     ExpressionAttributeValues: {
       ":pk": `DATE#${date}`,
     },
+
+    // ❗ FIX: reserved keywords handled
     ProjectionExpression:
-      "PK, userName, role, attendanceRole, locationId, bataAmount, nightAllowance, checkInAt, checkOutAt",
+      "PK, userName, #r, attendanceRole, locationId, bataAmount, nightAllowance, checkInAt, checkOutAt, #s",
+    ExpressionAttributeNames: {
+      "#r": "role",
+      "#s": "status",
+    },
   };
 
   const data = await ddb.send(new QueryCommand(params));
-
   res.json({ ok: true, data: data.Items || [] });
 };
 
-
 /**
  * GET /attendance/dashboard/by-date
- * ?date=YYYY-MM-DD&officeId=OFFICE2
+ * ?date=YYYY-MM-DD
  */
 export const attendanceByDate = async (req, res) => {
   const { date } = req.query;
@@ -74,18 +77,22 @@ export const attendanceByDate = async (req, res) => {
     ExpressionAttributeValues: {
       ":pk": `DATE#${date}`,
     },
+
+    // ❗ FIX: reserved keywords handled
     ProjectionExpression:
-      "PK, userName, role, attendanceRole, locationId, bataAmount, nightAllowance, checkInAt, checkOutAt",
+      "PK, userName, #r, attendanceRole, locationId, bataAmount, nightAllowance, checkInAt, checkOutAt, #s",
+    ExpressionAttributeNames: {
+      "#r": "role",
+      "#s": "status",
+    },
   };
 
   const data = await ddb.send(new QueryCommand(params));
   res.json({ ok: true, data: data.Items || [] });
 };
 
-
 /**
  * GET /attendance/dashboard/weekly-summary
- * ?officeId=OFFICE2
  */
 export const weeklySummary = async (req, res) => {
   const dates = [];
@@ -108,8 +115,13 @@ export const weeklySummary = async (req, res) => {
       ExpressionAttributeValues: {
         ":pk": `DATE#${date}`,
       },
+
+      // ❗ FIX: role handled safely
       ProjectionExpression:
-    "PK, userName, role, attendanceRole, bataAmount, nightAllowance, locationId",
+        "PK, userName, #r, attendanceRole, bataAmount, nightAllowance, locationId",
+      ExpressionAttributeNames: {
+        "#r": "role",
+      },
     };
 
     const data = await ddb.send(new QueryCommand(params));
@@ -125,7 +137,7 @@ export const weeklySummary = async (req, res) => {
           presentDays: 0,
           totalBata: 0,
           nightAllowance: 0,
-          office2Visits: 0, // 👈 IMPORTANT
+          office2Visits: 0,
         };
       }
 
@@ -140,7 +152,7 @@ export const weeklySummary = async (req, res) => {
     }
   }
 
-  const result = Object.values(users).map(u => ({
+  const result = Object.values(users).map((u) => ({
     ...u,
     absentDays: 6 - u.presentDays,
     totalAmount: u.totalBata + u.nightAllowance,
@@ -149,4 +161,3 @@ export const weeklySummary = async (req, res) => {
 
   res.json({ ok: true, data: result });
 };
-

@@ -6,8 +6,7 @@ import { validateTransition } from "../utils/driverTransitions.js";
 import { addTimelineEvent } from "../modules/timeline/timeline.helper.js";
 
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
-const DRIVER_GSI = process.env.DRIVER_GSI || "driverId-index";
-
+const DRIVER_GSI = "GSI_DRIVER_ASSIGNED";
 // 30 meters
 const REACH_RADIUS_METERS = 30;
 
@@ -75,15 +74,16 @@ export async function getOrder(orderId) {
 // ✅ Driver active orders fetch (for card list)
 export async function getDriverOrders(driverId) {
   const res = await ddb.send(
-    new QueryCommand({
-      TableName: ORDERS_TABLE,
-      IndexName: DRIVER_GSI,
-      KeyConditionExpression: "driverId = :d",
-      ExpressionAttributeValues: {
-        ":d": String(driverId),
-      },
-    })
-  );
+  new QueryCommand({
+    TableName: ORDERS_TABLE,
+    IndexName: "GSI_DRIVER_ASSIGNED", // 🔥 must match exactly
+    KeyConditionExpression: "driverId = :d",
+    ExpressionAttributeValues: {
+      ":d": String(driverId),
+    },
+    ScanIndexForward: false, // latest first (optional)
+  })
+);
 
   const allowed = new Set([
     "DRIVER_ASSIGNED",
