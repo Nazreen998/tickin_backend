@@ -5,8 +5,6 @@ const TABLE_TIMELINE = process.env.TABLE_TIMELINE || "tickin_timeline";
 const TABLE_ORDERS = process.env.ORDERS_TABLE || "tickin_orders";
 const TABLE_SLOT_TIMELINE =
   process.env.TABLE_SLOT_TIMELINE || "tickin_timeline_events";
-
-// ✅ Driver table
 const TABLE_USERS = process.env.USERS_TABLE || "tickin_users";
 
 /* ✅ Resolve FULL OrderId if HALF merged */
@@ -21,7 +19,6 @@ async function resolveTargetOrderId(orderId) {
   );
 
   if (!res.Item) return orderId;
-
   if (res.Item.mergedIntoOrderId) return String(res.Item.mergedIntoOrderId);
 
   return orderId;
@@ -79,7 +76,7 @@ async function getDriverName(driverId) {
   }
 }
 
-/* ✅ Build Neat Timeline (YOUR FINAL FLOW) */
+/* ✅ Build Neat Timeline with ALIAS support */
 function buildNeatTimeline(events = []) {
   const STEPS = [
     { key: "ORDER_CREATED", label: "Order Created" },
@@ -101,11 +98,25 @@ function buildNeatTimeline(events = []) {
     { key: "DELIVERY_COMPLETED", label: "Delivery Completed" },
   ];
 
-  // ✅ keep latest event per key
+  // ✅ alias map fix for mismatch events
+  const ALIAS = {
+    "LOAD_START": "LOADING_START",
+    "LOAD_END": "LOADING_COMPLETED",
+
+    "LOADING_STARTED": "LOADING_START",
+    "LOADING_END": "LOADING_COMPLETED",
+
+    "WAREHOUSE_REACHED": "WAREHOUSE_REACHED",
+  };
+
   const map = {};
   for (const e of events) {
     if (!e?.event) continue;
-    const key = String(e.event).toUpperCase();
+
+    let key = String(e.event).toUpperCase();
+
+    // ✅ apply alias mapping
+    key = ALIAS[key] || key;
 
     if (!map[key]) {
       map[key] = e;
@@ -116,7 +127,6 @@ function buildNeatTimeline(events = []) {
     }
   }
 
-  // ✅ find last done step
   let lastDoneIdx = -1;
   STEPS.forEach((s, idx) => {
     if (map[s.key]) lastDoneIdx = idx;
@@ -172,7 +182,7 @@ async function buildMeta(meta) {
   };
 }
 
-/* ✅ GET Order Timeline (RAW + NEAT + META) */
+/* ✅ GET Order Timeline */
 export async function getOrderTimeline(req, res) {
   try {
     const { orderId } = req.params;
@@ -181,7 +191,6 @@ export async function getOrderTimeline(req, res) {
 
     const targetOrderId = await resolveTargetOrderId(orderId);
 
-    // ✅ fetch order meta
     const orderMetaRes = await ddb.send(
       new GetCommand({
         TableName: TABLE_ORDERS,
@@ -196,9 +205,7 @@ export async function getOrderTimeline(req, res) {
     const user = req.user || {};
     const role = String(user.role || "").toUpperCase();
 
-    // ✅ MASTER / MANAGER can access all
     if (role !== "MASTER" && role !== "MANAGER") {
-      // ✅ Distributor / Sales => own OR allocated
       if (
         role === "DISTRIBUTOR" ||
         role === "SALESMAN" ||
@@ -215,7 +222,6 @@ export async function getOrderTimeline(req, res) {
         }
       }
 
-      // ✅ Driver => assigned orders only
       if (role === "DRIVER") {
         const loggedDriverId = String(user.userId || user.id || user.mobile || "");
         const orderDriverId = String(meta.driverId || "");
@@ -226,7 +232,6 @@ export async function getOrderTimeline(req, res) {
       }
     }
 
-    // ✅ query timeline
     const out = await ddb.send(
       new QueryCommand({
         TableName: TABLE_TIMELINE,
@@ -254,33 +259,7 @@ export async function getOrderTimeline(req, res) {
   }
 }
 
-/* ✅ GET Slot Timeline */
-export async function getSlotTimeline(req, res) {
-  try {
-    const { slotId } = req.params;
-    if (!slotId)
-      return res.status(400).json({ ok: false, message: "slotId required" });
-
-    const out = await ddb.send(
-      new QueryCommand({
-        TableName: TABLE_SLOT_TIMELINE,
-        KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: { ":pk": `SLOT#${slotId}` },
-        ScanIndexForward: true,
-      })
-    );
-
-    const rawTimeline = out.Items || [];
-    const neatTimeline = buildNeatTimeline(rawTimeline);
-
-    return res.json({ ok: true, slotId, timeline: rawTimeline, neatTimeline });
-  } catch (e) {
-    console.error("getSlotTimeline error:", e);
-    return res.status(500).json({ ok: false, message: e.message });
-  }
-}
-
-/* ✅ ONLY neat response (WITH META) */
+/* ✅ ONLY neat response */
 export async function getOrderTimelineNeat(req, res) {
   try {
     const { orderId } = req.params;
@@ -295,6 +274,7 @@ export async function getOrderTimelineNeat(req, res) {
         Key: { pk: `ORDER#${targetOrderId}`, sk: "META" },
       })
     );
+
     const meta = orderMetaRes.Item || {};
 
     const out = await ddb.send(
@@ -319,32 +299,6 @@ export async function getOrderTimelineNeat(req, res) {
     });
   } catch (e) {
     console.error("getOrderTimelineNeat error:", e);
-    return res.status(500).json({ ok: false, message: e.message });
-  }
-}
-
-/* ✅ ONLY slot neat response */
-export async function getSlotTimelineNeat(req, res) {
-  try {
-    const { slotId } = req.params;
-    if (!slotId)
-      return res.status(400).json({ ok: false, message: "slotId required" });
-
-    const out = await ddb.send(
-      new QueryCommand({
-        TableName: TABLE_SLOT_TIMELINE,
-        KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: { ":pk": `SLOT#${slotId}` },
-        ScanIndexForward: true,
-      })
-    );
-
-    const rawTimeline = out.Items || [];
-    const neatTimeline = buildNeatTimeline(rawTimeline);
-
-    return res.json({ ok: true, slotId, neatTimeline });
-  } catch (e) {
-    console.error("getSlotTimelineNeat error:", e);
     return res.status(500).json({ ok: false, message: e.message });
   }
 }

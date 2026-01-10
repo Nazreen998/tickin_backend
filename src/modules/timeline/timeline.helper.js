@@ -1,6 +1,13 @@
 import dayjs from "dayjs";
 import { PutCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "../../config/dynamo.js";
+import utc from "dayjs/plugin/utc.js";
+import timezone from "dayjs/plugin/timezone.js";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const IST = "Asia/Kolkata";
 
 const TABLE_ORDERS = process.env.ORDERS_TABLE || "tickin_orders";
 const TABLE_ORDER_TIMELINE = process.env.TABLE_TIMELINE || "tickin_timeline";

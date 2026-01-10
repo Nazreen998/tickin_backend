@@ -1,6 +1,7 @@
 import express from "express";
 import { verifyToken } from "../../middleware/auth.middleware.js";
 import { allowRoles } from "../../middleware/role.middleware.js";
+import { addOrderTimelineEvent } from "../timeline/timeline.helper.js";
 
 import {
   getSlotGrid,
@@ -115,13 +116,13 @@ router.post(
       const user = req.user || {};
       const out = await bookSlot(req.body);
 
-      // ✅ write slot timeline event (only if slotId exists)
       const slotId = extractSlotId(out);
       const orderId = extractOrderId(out, req.body);
 
+      // ✅ 1) SLOT timeline
       if (slotId) {
         await addSlotTimelineEvent({
-          slotId,
+          slotId, // ✅ MUST PASS HERE (FIX)
           orderId,
           event: "SLOT_BOOKING",
           by: user.mobile || user.userId || "SYSTEM",
@@ -135,6 +136,24 @@ router.post(
             date: req.body?.date || null,
             time: req.body?.time || null,
             originalBody: req.body || {},
+          },
+        });
+      }
+
+      // ✅ 2) ORDER timeline (important for neatTimeline DONE)
+      if (orderId) {
+        await addTimelineEvent({
+          orderId,
+          event: "SLOT_BOOKING",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          data: {
+            slotId,
+            bookingType: req.body?.slotType || req.body?.type || null,
+            companyCode: req.body?.companyCode || null,
+            date: req.body?.date || null,
+            time: req.body?.time || null,
           },
         });
       }
@@ -297,6 +316,7 @@ router.post(
 
       const slotId = extractSlotId(out) || req.body?.slotId || req.body?.slotID;
 
+      // ✅ slot timeline
       if (slotId) {
         await addSlotTimelineEvent({
           slotId,
@@ -309,6 +329,45 @@ router.post(
             originalBody: req.body || {},
           },
         });
+      }
+
+      // ✅ IMPORTANT: orderIds from response (best)
+      const orderIds =
+        out?.orderIds ||
+        out?.orders ||
+        out?.data?.orderIds ||
+        req.body?.orderIds ||
+        [];
+
+      // ✅ write SLOT_BOOKING_COMPLETED for each order
+      if (Array.isArray(orderIds)) {
+        for (const oid of orderIds) {
+          if (!oid) continue;
+
+          await addTimelineEvent({
+            orderId: String(oid),
+            event: "SLOT_BOOKING_COMPLETED",
+            by: user.mobile || user.userId || "SYSTEM",
+            byUserName: user.name || user.userName || null,
+            role: user.role || null,
+            data: {
+              slotId,
+              mergeKey: out?.mergeKey || out?.flowKey || null,
+            },
+          });
+
+          // ✅ optional: some projects want ORDER_CONFIRMED also at merge time
+          await addTimelineEvent({
+            orderId: String(oid),
+            event: "ORDER_CONFIRMED",
+            by: user.mobile || user.userId || "SYSTEM",
+            byUserName: user.name || user.userName || null,
+            role: user.role || null,
+            data: {
+              slotId,
+            },
+          });
+        }
       }
 
       return res.json(out);
