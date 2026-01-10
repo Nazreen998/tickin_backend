@@ -2,6 +2,7 @@ import { AllowanceConfig } from "../../models/allowanceConfig.model.js";
 import { Attendance } from "../../models/attendance.model.js";
 import { calculateDistance } from "../../utils/distance.js";
 import locations from "../../config/location.js";
+import { LOADMAN_MOBILES } from "../../config/loadman.js";
 
 const todayIST = () =>
   new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
@@ -36,6 +37,12 @@ export const checkIn = async (req, res) => {
 
   const role = req.user.role;
 
+  // 🔑 DERIVED ATTENDANCE ROLE (ROLE TOUCH PANNA MAATTOM)
+  let attendanceRole = role;
+  if (role === "DRIVER" && LOADMAN_MOBILES.includes(uid)) {
+    attendanceRole = "LOADMAN";
+  }
+
   if (!lat || !lng) {
     return res.json({ ok: false, error: "location_required" });
   }
@@ -68,7 +75,7 @@ export const checkIn = async (req, res) => {
     const nowMin = now.getHours() * 60 + now.getMinutes();
 
     // ✅ 3. ROLE BASED LOGIC
-    if (role === "MANAGER" || role === "LOADMAN") {
+    if (attendanceRole === "MANAGER" || attendanceRole === "LOADMAN") {
       const from = toMinutes(config.managerLoadmanCheckin.from);
       const to = toMinutes(config.managerLoadmanCheckin.to);
 
@@ -78,7 +85,7 @@ export const checkIn = async (req, res) => {
       }
     }
 
-    if (role === "DRIVER") {
+    if (attendanceRole === "DRIVER") {
       const yesterday = await Attendance.get(uid, yesterdayIST());
 
       let window = config.driverCheckinNormal;
@@ -107,6 +114,7 @@ export const checkIn = async (req, res) => {
       uid,
       userName,
       role,
+      attendanceRole,   
       date: todayIST(),
       lat,
       lng,
@@ -161,7 +169,7 @@ const userName =
   let deadline = new Date(checkInTime);
   deadline.setHours(23, 59, 59, 999);
 
-  if (role === "DRIVER") {
+  if (attendance.attendanceRole === "DRIVER"){
     deadline.setDate(deadline.getDate() + 1);
     deadline.setHours(4, 0, 0, 0);
   }
@@ -173,14 +181,16 @@ const userName =
   const attendanceDate = attendance.SK.replace("DATE#", "");
   let nightAllowance = 0;
 
-if (role === "DRIVER") {
-  const nowMin =
-    nowIST.getHours() * 60 + nowIST.getMinutes();
+// 🔥 USE attendanceRole HERE
+  if (attendance.attendanceRole === "DRIVER") {
+    const nowMin =
+      nowIST.getHours() * 60 + nowIST.getMinutes();
 
-  if (nowMin >= 1320) { // 10:00 PM
-    nightAllowance = config.driverNightAllowance;
+    if (nowMin >= 1320) {
+      nightAllowance = config.driverNightAllowance;
+    }
   }
-}
+
 
 
   try {

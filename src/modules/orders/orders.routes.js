@@ -17,7 +17,8 @@ import {
   deleteOrder,
   getOrdersByMergeKey,
   getOrderFlowByKey,
-  getSlotConfirmedOrders
+  getSlotConfirmedOrders,
+  getAssignedOrdersByDriver
 } from "./orders.service.js";
 
 import {
@@ -236,5 +237,49 @@ router.get(
   allowRoles("MANAGER", "MASTER"),
   getOrderFlowByKey
 );
+/* ===========================
+   DRIVER ORDERS 
+=========================== */
+const getDriverAssignedOrders = async (req, res) => {
+  try {
+    const user = req.user;
 
+    if (!user || String(user.role).toUpperCase() !== "DRIVER") {
+      return res.status(403).json({
+        ok: false,
+        message: "Only drivers can access this",
+      });
+    }
+
+    const driverId =
+      user.pk ||
+      (user.mobile ? `USER#${user.mobile}` : null);
+
+    if (!driverId) {
+      return res.status(400).json({
+        ok: false,
+        message: "Driver identity not found",
+      });
+    }
+
+    const orders = await getAssignedOrdersByDriver(driverId);
+
+    return res.json({
+      ok: true,
+      count: orders.length,
+      orders,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      message: err.message,
+    });
+  }
+};
+
+router.get(
+  "/driver/assigned",
+  verifyToken,
+  getDriverAssignedOrders
+);
 export default router;

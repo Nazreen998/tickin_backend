@@ -1052,3 +1052,19 @@ export const getOrdersByMergeKey = async (req, res) => {
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
+export async function getAssignedOrdersByDriver(driverId) {
+  if (!driverId) return [];
+
+  const params = {
+    TableName: ORDERS_TABLE,
+    IndexName: "GSI_DRIVER_ASSIGNED",
+    KeyConditionExpression: "driverId = :d",
+    ExpressionAttributeValues: {
+      ":d": driverId,
+    },
+    ScanIndexForward: false, // latest first
+  };
+
+  const result = await ddb.send(new QueryCommand(params));
+  return result.Items || [];
+}

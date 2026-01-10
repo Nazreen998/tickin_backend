@@ -49,6 +49,8 @@ export const todayAttendance = async (req, res) => {
     ExpressionAttributeValues: {
       ":pk": `DATE#${date}`,
     },
+    ProjectionExpression:
+    "PK, userName, role, attendanceRole, bataAmount, nightAllowance, checkInAt, checkOutAt",
   };
 
   if (officeId) {
@@ -80,6 +82,8 @@ export const attendanceByDate = async (req, res) => {
     ExpressionAttributeValues: {
       ":pk": `DATE#${date}`,
     },
+    ProjectionExpression:
+    "PK, userName, role, attendanceRole, bataAmount, nightAllowance, checkInAt, checkOutAt",
   };
 
   if (officeId) {
@@ -126,6 +130,8 @@ export const weeklySummary = async (req, res) => {
       ExpressionAttributeValues: {
         ":pk": `DATE#${date}`,
       },
+      ProjectionExpression:
+    "PK, userName, role, attendanceRole, bataAmount, nightAllowance, checkInAt, checkOutAt",
     };
 
     if (officeId) {
@@ -144,7 +150,7 @@ export const weeklySummary = async (req, res) => {
         users[uid] = {
           uid,
           name: item.userName,
-          role: item.role || "-",
+          role: item.attendanceRole || item.role || "-",
           presentDays: 0,
           totalBata: 0,
           nightAllowance: 0,
