@@ -25,7 +25,7 @@ import {
   vehicleSelected,
   loadingStart,
   loadingEnd,
-  assignDriverToOrder,
+  assignDriver
 } from "./orders.flow.service.js";
 
 const router = express.Router();
@@ -229,7 +229,7 @@ router.post(
   "/assign-driver",
   verifyToken,
   allowRoles("MANAGER", "MASTER"),
-  assignDriverToOrder
+  assignDriver
 );
 router.get(
   "/flow/:flowKey",

@@ -14,15 +14,9 @@ function normalizeUserPk(id) {
   if (!s) return null;
   return s.startsWith("USER#") ? s : `USER#${s}`;
 }
-export async function assignDriverToOrder(req, res) {
-  try {
-    const { orderId, driverId } = req.body;
 
-    // TODO: your logic here
-    return res.json({ ok: true, message: "Driver assigned", orderId, driverId });
-  } catch (e) {
-    return res.status(500).json({ ok: false, message: e.message });
-  }
+export async function assignDriverToOrder(req, res) {
+  return assignDriver(req, res);
 }
 
 /* ============================================================
@@ -365,13 +359,14 @@ export const assignDriver = async (req, res) => {
       return res.status(404).json({ ok: false, message: "Driver not found" });
 
     await updateOrders(orderIds, {
-      UpdateExpression: "SET #s = :st, driverId = :d, driverName = :dn, driverMobile = :dm",
+      UpdateExpression: "SET #s = :st, driverId = :d, driverName = :dn, driverMobile = :dm,vehicleNo = :vn",
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
         ":st": "DRIVER_ASSIGNED",
         ":d": driverPk,
         ":dn": driver.name || driver.userName || "Driver",
         ":dm": driver.mobile || null,
+        ":vn": vehicleNo || null,
       },
     });
 
