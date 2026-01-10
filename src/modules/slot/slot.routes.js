@@ -21,7 +21,32 @@ import {
   getEligibleHalfBookings,
 } from "../slot/slot.service.js";
 
+// ✅ NEW: Slot Timeline writer
+import { addSlotTimelineEvent } from "../timeline/timeline.helper.js";
+
 const router = express.Router();
+
+/* ✅ helper: extract slotId safely from any response */
+function extractSlotId(out) {
+  if (!out) return null;
+  return (
+    out.slotId ||
+    out.slotID ||
+    out?.data?.slotId ||
+    out?.data?.slotID ||
+    out?.booking?.slotId ||
+    out?.booking?.slotID ||
+    out?.result?.slotId ||
+    out?.result?.slotID ||
+    null
+  );
+}
+
+/* ✅ helper: extract orderId safely */
+function extractOrderId(out, body) {
+  if (!out && !body) return null;
+  return out?.orderId || out?.data?.orderId || body?.orderId || null;
+}
 
 /* ✅ Eligible HALF bookings (Manager only) */
 router.get(
@@ -30,6 +55,7 @@ router.get(
   allowRoles("MANAGER"),
   getEligibleHalfBookings
 );
+
 router.get(
   "/waiting-half-by-date",
   verifyToken,
@@ -47,12 +73,13 @@ router.get(
       const { companyCode, date } = req.query;
 
       if (!companyCode || !date) {
-        return res.status(400).json({ ok: false, message: "companyCode & date required" });
+        return res
+          .status(400)
+          .json({ ok: false, message: "companyCode & date required" });
       }
 
       const data = await getSlotGrid({ companyCode, date });
 
-      // ✅ IMPORTANT: return data directly (not wrapped again)
       return res.json({
         ok: true,
         ...data,
@@ -78,15 +105,41 @@ router.post(
   }
 );
 
-/* ✅ BOOK */
+/* ✅ BOOK SLOT */
 router.post(
   "/book",
   verifyToken,
   allowRoles("MASTER", "MANAGER", "SALES OFFICER", "DISTRIBUTOR", "SALESMAN"),
   async (req, res) => {
     try {
-      const data = await bookSlot(req.body);
-      return res.json(data);
+      const user = req.user || {};
+      const out = await bookSlot(req.body);
+
+      // ✅ write slot timeline event (only if slotId exists)
+      const slotId = extractSlotId(out);
+      const orderId = extractOrderId(out, req.body);
+
+      if (slotId) {
+        await addSlotTimelineEvent({
+          slotId,
+          orderId,
+          event: "SLOT_BOOKING",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          distributorName: req.body?.distributorName || null,
+          amount: Number(req.body?.amount || req.body?.totalAmount || 0),
+          data: {
+            bookingType: req.body?.slotType || req.body?.type || null,
+            companyCode: req.body?.companyCode || null,
+            date: req.body?.date || null,
+            time: req.body?.time || null,
+            originalBody: req.body || {},
+          },
+        });
+      }
+
+      return res.json(out);
     } catch (err) {
       return res.status(400).json({ ok: false, message: err.message });
     }
@@ -100,23 +153,66 @@ router.post(
   allowRoles("MASTER", "MANAGER", "SALES OFFICER", "DISTRIBUTOR", "SALESMAN"),
   async (req, res) => {
     try {
-      const data = await joinWaiting(req.body);
-      return res.json(data);
+      const user = req.user || {};
+      const out = await joinWaiting(req.body);
+
+      const slotId = extractSlotId(out);
+      const orderId = extractOrderId(out, req.body);
+
+      if (slotId) {
+        await addSlotTimelineEvent({
+          slotId,
+          orderId,
+          event: "WAITING_JOINED",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          distributorName: req.body?.distributorName || null,
+          amount: Number(req.body?.amount || req.body?.totalAmount || 0),
+          data: {
+            originalBody: req.body || {},
+          },
+        });
+      }
+
+      return res.json(out);
     } catch (err) {
       return res.status(400).json({ ok: false, message: err.message });
     }
   }
 );
 
-/* ✅ MANAGER CANCEL */
+/* ✅ MANAGER CANCEL BOOKING */
 router.post(
   "/manager/cancel-booking",
   verifyToken,
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
-      const data = await managerCancelBooking(req.body);
-      return res.json(data);
+      const user = req.user || {};
+      const out = await managerCancelBooking(req.body);
+
+      const slotId = extractSlotId(out) || req.body?.slotId || req.body?.slotID;
+      const orderId = extractOrderId(out, req.body);
+
+      if (slotId) {
+        await addSlotTimelineEvent({
+          slotId,
+          orderId,
+          event: "BOOKING_CANCELLED",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          distributorName: req.body?.distributorName || null,
+          amount: Number(req.body?.amount || req.body?.totalAmount || 0),
+          data: {
+            reason: req.body?.reason || null,
+            originalBody: req.body || {},
+          },
+        });
+      }
+
+      return res.json(out);
     } catch (err) {
       return res.status(400).json({ ok: false, message: err.message });
     }
@@ -130,8 +226,26 @@ router.post(
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
-      const data = await managerDisableSlot(req.body);
-      return res.json(data);
+      const user = req.user || {};
+      const out = await managerDisableSlot(req.body);
+
+      const slotId = extractSlotId(out) || req.body?.slotId || req.body?.slotID;
+
+      if (slotId) {
+        await addSlotTimelineEvent({
+          slotId,
+          event: "SLOT_DISABLED",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          distributorName: req.body?.distributorName || null,
+          data: {
+            originalBody: req.body || {},
+          },
+        });
+      }
+
+      return res.json(out);
     } catch (err) {
       return res.status(400).json({ ok: false, message: err.message });
     }
@@ -145,8 +259,26 @@ router.post(
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
-      const data = await managerEnableSlot(req.body);
-      return res.json(data);
+      const user = req.user || {};
+      const out = await managerEnableSlot(req.body);
+
+      const slotId = extractSlotId(out) || req.body?.slotId || req.body?.slotID;
+
+      if (slotId) {
+        await addSlotTimelineEvent({
+          slotId,
+          event: "SLOT_ENABLED",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          distributorName: req.body?.distributorName || null,
+          data: {
+            originalBody: req.body || {},
+          },
+        });
+      }
+
+      return res.json(out);
     } catch (err) {
       return res.status(400).json({ ok: false, message: err.message });
     }
@@ -160,27 +292,64 @@ router.post(
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
-      const data = await managerConfirmMerge(req.body);
-      return res.json(data);
-    } catch (err) {
-      return res.status(400).json({ ok: false, message: err.message });
-    }
-  }
-);
-router.post(
-  "/merge/cancel-confirm",
-  verifyToken,
-  allowRoles("MANAGER"),
-  async (req, res) => {
-    try {
-      const data = await managerCancelConfirmedMerge(req.body);
-      return res.json(data);
+      const user = req.user || {};
+      const out = await managerConfirmMerge(req.body);
+
+      const slotId = extractSlotId(out) || req.body?.slotId || req.body?.slotID;
+
+      if (slotId) {
+        await addSlotTimelineEvent({
+          slotId,
+          event: "MERGE_CONFIRMED",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          distributorName: req.body?.distributorName || null,
+          data: {
+            originalBody: req.body || {},
+          },
+        });
+      }
+
+      return res.json(out);
     } catch (err) {
       return res.status(400).json({ ok: false, message: err.message });
     }
   }
 );
 
+/* ✅ MANAGER CANCEL CONFIRMED MERGE */
+router.post(
+  "/merge/cancel-confirm",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const user = req.user || {};
+      const out = await managerCancelConfirmedMerge(req.body);
+
+      const slotId = extractSlotId(out) || req.body?.slotId || req.body?.slotID;
+
+      if (slotId) {
+        await addSlotTimelineEvent({
+          slotId,
+          event: "MERGE_CANCELLED",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          distributorName: req.body?.distributorName || null,
+          data: {
+            originalBody: req.body || {},
+          },
+        });
+      }
+
+      return res.json(out);
+    } catch (err) {
+      return res.status(400).json({ ok: false, message: err.message });
+    }
+  }
+);
 
 /* ✅ MANAGER MOVE MERGE */
 router.post(
@@ -189,8 +358,26 @@ router.post(
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
-      const data = await managerMoveBookingToMerge(req.body);
-      return res.json(data);
+      const user = req.user || {};
+      const out = await managerMoveBookingToMerge(req.body);
+
+      const slotId = extractSlotId(out) || req.body?.slotId || req.body?.slotID;
+
+      if (slotId) {
+        await addSlotTimelineEvent({
+          slotId,
+          event: "MERGE_MOVED",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          distributorName: req.body?.distributorName || null,
+          data: {
+            originalBody: req.body || {},
+          },
+        });
+      }
+
+      return res.json(out);
     } catch (err) {
       return res.status(400).json({ ok: false, message: err.message });
     }
@@ -204,8 +391,26 @@ router.post(
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
-      const data = await managerEditSlotTime(req.body);
-      return res.json(data);
+      const user = req.user || {};
+      const out = await managerEditSlotTime(req.body);
+
+      const slotId = extractSlotId(out) || req.body?.slotId || req.body?.slotID;
+
+      if (slotId) {
+        await addSlotTimelineEvent({
+          slotId,
+          event: "SLOT_TIME_EDITED",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          distributorName: req.body?.distributorName || null,
+          data: {
+            originalBody: req.body || {},
+          },
+        });
+      }
+
+      return res.json(out);
     } catch (err) {
       return res.status(400).json({ ok: false, message: err.message });
     }
@@ -219,8 +424,26 @@ router.post(
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
-      const data = await managerSetSlotMax(req.body);
-      return res.json(data);
+      const user = req.user || {};
+      const out = await managerSetSlotMax(req.body);
+
+      const slotId = extractSlotId(out) || req.body?.slotId || req.body?.slotID;
+
+      if (slotId) {
+        await addSlotTimelineEvent({
+          slotId,
+          event: "SLOT_MAX_CHANGED",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          distributorName: req.body?.distributorName || null,
+          data: {
+            originalBody: req.body || {},
+          },
+        });
+      }
+
+      return res.json(out);
     } catch (err) {
       return res.status(400).json({ ok: false, message: err.message });
     }
@@ -234,8 +457,26 @@ router.post(
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
-      const data = await managerSetGlobalMax(req.body);
-      return res.json(data);
+      const user = req.user || {};
+      const out = await managerSetGlobalMax(req.body);
+
+      const slotId = extractSlotId(out) || req.body?.slotId || req.body?.slotID;
+
+      if (slotId) {
+        await addSlotTimelineEvent({
+          slotId,
+          event: "GLOBAL_MAX_CHANGED",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          distributorName: req.body?.distributorName || null,
+          data: {
+            originalBody: req.body || {},
+          },
+        });
+      }
+
+      return res.json(out);
     } catch (err) {
       return res.status(400).json({ ok: false, message: err.message });
     }
@@ -249,8 +490,26 @@ router.post(
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
-      const data = await managerToggleLastSlot(req.body);
-      return res.json(data);
+      const user = req.user || {};
+      const out = await managerToggleLastSlot(req.body);
+
+      const slotId = extractSlotId(out) || req.body?.slotId || req.body?.slotID;
+
+      if (slotId) {
+        await addSlotTimelineEvent({
+          slotId,
+          event: "LAST_SLOT_TOGGLED",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          distributorName: req.body?.distributorName || null,
+          data: {
+            originalBody: req.body || {},
+          },
+        });
+      }
+
+      return res.json(out);
     } catch (err) {
       return res.status(400).json({ ok: false, message: err.message });
     }

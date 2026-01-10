@@ -24,7 +24,35 @@ async function resolveTargetOrderId(orderId) {
   return orderId;
 }
 
-/* ✅ Build Neat Timeline (Fixed Steps + DONE/CURRENT/UPCOMING) */
+/* ✅ Allocation check (own OR allocated) */
+function isAllocatedToUser(meta, user) {
+  const uid = String(user.userId || user.id || user.mobile || "");
+
+  const direct = [
+    meta.salesOfficerId,
+    meta.allocatedTo,
+    meta.assignedTo,
+    meta.assignedUserId,
+    meta.distributorId,
+  ]
+    .filter(Boolean)
+    .map(String);
+
+  if (direct.includes(uid)) return true;
+
+  const arr =
+    meta.allocatedOrderIds ||
+    meta.assignedOrderIds ||
+    meta.allocatedOrders ||
+    [];
+
+  if (Array.isArray(arr) && arr.map(String).includes(String(meta.orderId || "")))
+    return true;
+
+  return false;
+}
+
+/* ✅ Build Neat Timeline */
 function buildNeatTimeline(events = []) {
   const STEPS = [
     { key: "ORDER_CREATED", label: "Order Created" },
@@ -33,7 +61,7 @@ function buildNeatTimeline(events = []) {
     { key: "SLOT_BOOKING_COMPLETED", label: "Slot Booking Completed" },
     { key: "VEHICLE_SELECTED", label: "Vehicle Selected" },
     { key: "LOAD_START", label: "Loading Start" },
-    { key: "LOADING_ITEM", label: "Loading Item" }, // optional
+    { key: "LOADING_ITEM", label: "Loading Item" },
     { key: "LOAD_END", label: "Loading End" },
     { key: "DRIVER_ASSIGNED", label: "Driver Assigned" },
     { key: "DRIVE_STARTED", label: "Drive Started" },
@@ -46,11 +74,11 @@ function buildNeatTimeline(events = []) {
     { key: "WAREHOUSE_REACHED", label: "Warehouse Reached" },
   ];
 
-  // ✅ keep latest event per key
   const map = {};
   for (const e of events) {
     if (!e?.event) continue;
     const key = String(e.event).toUpperCase();
+
     if (!map[key]) {
       map[key] = e;
     } else {
@@ -60,13 +88,11 @@ function buildNeatTimeline(events = []) {
     }
   }
 
-  // ✅ find last done step index
   let lastDoneIdx = -1;
   STEPS.forEach((s, idx) => {
     if (map[s.key]) lastDoneIdx = idx;
   });
 
-  // ✅ build neat step list
   return STEPS.map((s, idx) => {
     const ev = map[s.key] || null;
 
@@ -78,7 +104,7 @@ function buildNeatTimeline(events = []) {
       step: idx + 1,
       key: s.key,
       title: s.label,
-      status, // DONE / CURRENT / UPCOMING
+      status,
       time: ev?.displayTime || ev?.createdAt || ev?.timestamp || null,
       data: ev?.data || null,
       raw: ev,
@@ -86,18 +112,13 @@ function buildNeatTimeline(events = []) {
   });
 }
 
-/* ✅ GET Order Timeline Controller
-   GET /api/timeline/:orderId
-*/
+/* ✅ GET Order Timeline */
 export async function getOrderTimeline(req, res) {
   try {
     const { orderId } = req.params;
-
-    if (!orderId) {
+    if (!orderId)
       return res.status(400).json({ ok: false, message: "orderId required" });
-    }
 
-    // ✅ resolve merged FULL orderId
     const targetOrderId = await resolveTargetOrderId(orderId);
 
     // ✅ fetch order meta for auth check
@@ -109,28 +130,39 @@ export async function getOrderTimeline(req, res) {
     );
 
     const meta = orderMetaRes.Item;
-    if (!meta) {
+    if (!meta)
       return res.status(404).json({ ok: false, message: "Order not found" });
-    }
 
     const user = req.user || {};
     const role = String(user.role || "").toUpperCase();
 
-    // ✅ Restrict distributor/sales to only own order
-    if (
-      role === "DISTRIBUTOR" ||
-      role === "SALESMAN" ||
-      role === "SALES OFFICER"
-    ) {
-      const metaUserId = String(meta.userId || meta.createdBy || "");
-      const loggedUserId = String(user.userId || user.id || user.mobile || "");
+    // ✅ MASTER / MANAGER can access all
+    if (role !== "MASTER" && role !== "MANAGER") {
+      // ✅ Distributor / Sales Officer / Salesman => own OR allocated
+      if (role === "DISTRIBUTOR" || role === "SALESMAN" || role === "SALES OFFICER") {
+        const metaUserId = String(meta.userId || meta.createdBy || "");
+        const loggedUserId = String(user.userId || user.id || user.mobile || "");
 
-      if (metaUserId !== loggedUserId) {
-        return res.status(403).json({ ok: false, message: "Not allowed" });
+        const isOwn = metaUserId === loggedUserId;
+        const isAllocated = isAllocatedToUser(meta, user);
+
+        if (!isOwn && !isAllocated) {
+          return res.status(403).json({ ok: false, message: "Not allowed" });
+        }
+      }
+
+      // ✅ Driver => assigned orders only
+      if (role === "DRIVER") {
+        const loggedDriverId = String(user.userId || user.id || user.mobile || "");
+        const orderDriverId = String(meta.driverId || "");
+
+        if (orderDriverId && orderDriverId !== loggedDriverId) {
+          return res.status(403).json({ ok: false, message: "Not allowed" });
+        }
       }
     }
 
-    // ✅ query timeline (oldest -> latest)
+    // ✅ query timeline
     const out = await ddb.send(
       new QueryCommand({
         TableName: TABLE_TIMELINE,
@@ -152,23 +184,16 @@ export async function getOrderTimeline(req, res) {
     });
   } catch (e) {
     console.error("getOrderTimeline error:", e);
-    return res.status(500).json({
-      ok: false,
-      message: e.message || String(e),
-    });
+    return res.status(500).json({ ok: false, message: e.message || String(e) });
   }
 }
 
-/* ✅ GET Slot Timeline Controller
-   GET /api/timeline/slot/:slotId
-*/
+/* ✅ GET Slot Timeline */
 export async function getSlotTimeline(req, res) {
   try {
     const { slotId } = req.params;
-
-    if (!slotId) {
+    if (!slotId)
       return res.status(400).json({ ok: false, message: "slotId required" });
-    }
 
     const out = await ddb.send(
       new QueryCommand({
@@ -182,27 +207,19 @@ export async function getSlotTimeline(req, res) {
     const rawTimeline = out.Items || [];
     const neatTimeline = buildNeatTimeline(rawTimeline);
 
-    return res.json({
-      ok: true,
-      slotId,
-      timeline: rawTimeline,
-      neatTimeline,
-    });
+    return res.json({ ok: true, slotId, timeline: rawTimeline, neatTimeline });
   } catch (e) {
     console.error("getSlotTimeline error:", e);
     return res.status(500).json({ ok: false, message: e.message });
   }
 }
 
-/* ✅ ONLY neat response (optional)
-   GET /api/timeline/:orderId/neat
-*/
+/* ✅ ONLY neat response */
 export async function getOrderTimelineNeat(req, res) {
   try {
     const { orderId } = req.params;
-    if (!orderId) {
+    if (!orderId)
       return res.status(400).json({ ok: false, message: "orderId required" });
-    }
 
     const targetOrderId = await resolveTargetOrderId(orderId);
 
@@ -230,15 +247,12 @@ export async function getOrderTimelineNeat(req, res) {
   }
 }
 
-/* ✅ ONLY slot neat response
-   GET /api/timeline/slot/:slotId/neat
-*/
+/* ✅ ONLY slot neat response */
 export async function getSlotTimelineNeat(req, res) {
   try {
     const { slotId } = req.params;
-    if (!slotId) {
+    if (!slotId)
       return res.status(400).json({ ok: false, message: "slotId required" });
-    }
 
     const out = await ddb.send(
       new QueryCommand({
@@ -252,11 +266,7 @@ export async function getSlotTimelineNeat(req, res) {
     const rawTimeline = out.Items || [];
     const neatTimeline = buildNeatTimeline(rawTimeline);
 
-    return res.json({
-      ok: true,
-      slotId,
-      neatTimeline,
-    });
+    return res.json({ ok: true, slotId, neatTimeline });
   } catch (e) {
     console.error("getSlotTimelineNeat error:", e);
     return res.status(500).json({ ok: false, message: e.message });

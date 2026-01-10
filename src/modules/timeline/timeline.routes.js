@@ -202,7 +202,8 @@ router.post(
         new UpdateCommand({
           TableName: TABLE_ORDERS,
           Key: { pk: `ORDER#${trackingOrderId}`, sk: "META" },
-          UpdateExpression: "SET driverId=:d, vehicleNo=:v, #st=:s, updatedAt=:t",
+          UpdateExpression:
+            "SET driverId=:d, vehicleNo=:v, #st=:s, updatedAt=:t",
           ExpressionAttributeNames: { "#st": "status" },
           ExpressionAttributeValues: {
             ":d": String(driverId),
@@ -218,6 +219,24 @@ router.post(
       return res.status(500).json({ ok: false, message: e.message });
     }
   }
+);
+
+/* ✅ IMPORTANT: SLOT routes must come BEFORE /:orderId routes */
+
+/* ✅ GET Slot Timeline (raw + neat) */
+router.get(
+  "/slot/:slotId",
+  verifyToken,
+  allowRoles("MASTER", "MANAGER"),
+  getSlotTimeline
+);
+
+/* ✅ GET Slot Timeline (NEAT ONLY) */
+router.get(
+  "/slot/:slotId/neat",
+  verifyToken,
+  allowRoles("MASTER", "MANAGER"),
+  getSlotTimelineNeat
 );
 
 /* ✅ GET Order Timeline (raw + neat) */
@@ -248,22 +267,6 @@ router.get(
     "SALESMAN"
   ),
   getOrderTimelineNeat
-);
-
-/* ✅ GET Slot Timeline (raw + neat) */
-router.get(
-  "/slot/:slotId",
-  verifyToken,
-  allowRoles("MASTER", "MANAGER"),
-  getSlotTimeline
-);
-
-/* ✅ GET Slot Timeline (NEAT ONLY) */
-router.get(
-  "/slot/:slotId/neat",
-  verifyToken,
-  allowRoles("MASTER", "MANAGER"),
-  getSlotTimelineNeat
 );
 
 export default router;

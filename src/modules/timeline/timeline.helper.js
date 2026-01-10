@@ -34,8 +34,7 @@ async function resolveTimelineOrderId(orderId) {
 }
 
 /**
- * ✅ (Existing) ORDER Timeline Event Writer
- * - Keeps old working logic
+ * ✅ ORDER Timeline Event Writer
  */
 export const addTimelineEvent = async ({
   orderId,
@@ -91,13 +90,12 @@ export const addTimelineEvent = async ({
 };
 
 /**
- * ✅ NEW: SLOT Timeline Event Writer (Single-line append)
- * - Every event saved as a new row
- * - slotId + orderId both reference (for monthly review)
+ * ✅ SLOT Timeline Event Writer
+ * - slotId + orderId both reference
  */
 export const addSlotTimelineEvent = async ({
   slotId,
-  orderId = null, // optional
+  orderId = null,
   event,
   by,
   byUserName = null,
@@ -139,7 +137,6 @@ export const addSlotTimelineEvent = async ({
 
     eventId: eventId ? String(eventId) : null,
     data: data || {},
-
     createdAt: timestamp,
   };
 
