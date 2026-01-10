@@ -413,88 +413,95 @@ const finalSlots = defaultSlots.map((slot) => {
       merged.distributorName = match.distributorName || merged.distributorName || null;
       merged.distributorCode = match.distributorCode || merged.distributorCode || null;
       merged.orderId = match.orderId || merged.orderId || null;
-      merged.amount = Number(match.amount || merged.amount || 0); // ✅ FIX
+      merged.amount = Number(
+  match?.amount ??
+  merged?.amount ??
+  merged?.totalAmount ??
+  0
+);
+
       merged.bookedBy = match.userId || merged.bookedBy || null;
     }
   }
 
   return merged;
 });
-
-  const mergeSlots = overrides
-   .filter((o) => {
+    const mergeSlots = overrides
+  .filter((o) => {
     if (!String(o.sk || "").startsWith("MERGE_SLOT#")) return false;
     const ts = String(o.tripStatus || "").toUpperCase();
     return ts !== "FULL"; // ✅ hide confirmed merges
   })
-    .map((m) => {
-      let time = m.time;
-      if (!time) {
-        try {
-          const parts = String(m.sk).split("#");
-          if (parts.length > 1) time = parts[1];
-        } catch (_) {}
+  .map((m) => {
+    let time = m.time;
+    if (!time) {
+      try {
+        const parts = String(m.sk).split("#");
+        if (parts.length > 1) time = parts[1];
+      } catch (_) {}
+    }
+
+    let mergeKey = m.mergeKey;
+    if (!mergeKey) {
+      try {
+        const sk = String(m.sk || "");
+        const parts = sk.split("#KEY#");
+        if (parts.length > 1) mergeKey = parts[1];
+      } catch (_) {}
+    }
+
+    const participants = allBookings
+      .filter(
+        (b) =>
+          String(b.vehicleType || "").toUpperCase() === "HALF" &&
+          String(b.slotTime || "") === String(time) &&
+          String(b.mergeKey || "") === String(mergeKey)
+      )
+      .map((b) => ({
+        distributorCode: b.distributorCode,
+        distributorName: b.distributorName,
+        amount: Number(b.amount || 0),
+        orderId: b.orderId || null,
+        bookingSk: b.sk,
+        status: b.status,
+        slotTime: b.slotTime,
+        mergeKey: b.mergeKey,
+        lat: b.lat,
+        lng: b.lng,
+      }));
+
+    let distanceKm = null;
+    if (participants.length >= 2) {
+      const a = participants[0];
+      const b = participants[1];
+      if (a.lat && a.lng && b.lat && b.lng) {
+        distanceKm = haversineKm(
+          Number(a.lat),
+          Number(a.lng),
+          Number(b.lat),
+          Number(b.lng)
+        );
+        distanceKm = Number(distanceKm.toFixed(2));
       }
+    }
 
-      let mergeKey = m.mergeKey;
-      if (!mergeKey) {
-        try {
-          const sk = String(m.sk || "");
-          const parts = sk.split("#KEY#");
-          if (parts.length > 1) mergeKey = parts[1];
-        } catch (_) {}
-      }
+    const tripStatus = m.tripStatus || "PARTIAL";
+    const blink = m.blink === true;
 
-      const participants = allBookings
-        .filter(
-          (b) =>
-            String(b.vehicleType || "").toUpperCase() === "HALF" &&
-            String(b.slotTime || "") === String(time) &&
-            String(b.mergeKey || "") === String(mergeKey)
-        )
-        .map((b) => ({
-          distributorCode: b.distributorCode,
-          distributorName: b.distributorName,
-          amount: Number(b.amount || 0),
-          orderId: b.orderId || null,
-          bookingSk: b.sk,
-          status: b.status,
-          slotTime: b.slotTime,
-          mergeKey: b.mergeKey,
-          lat: b.lat,
-          lng: b.lng,
-        }));
-
-      let distanceKm = null;
-      if (participants.length >= 2) {
-        const a = participants[0];
-        const b = participants[1];
-        if (a.lat && a.lng && b.lat && b.lng) {
-          distanceKm = haversineKm(
-            Number(a.lat),
-            Number(a.lng),
-            Number(b.lat),
-            Number(b.lng)
-          );
-          distanceKm = Number(distanceKm.toFixed(2));
-        }
-      }
-
-      const tripStatus = m.tripStatus || "PARTIAL";
-      const blink = m.blink === true;
-
-      return {
-        ...m,
-        time,
-        blink,
-        tripStatus,
-        vehicleType: "HALF",
-        mergeKey,
-        participants,
-        bookingCount: participants.length,
-        distanceKm,
-      };
-    });
+    return {
+      ...m,
+      time,
+      blink,
+      tripStatus,
+      vehicleType: "HALF",
+      mergeKey,
+      participants,
+      bookingCount: participants.length,
+      distanceKm,
+    };
+  })
+  // ✅ ✅ ✅ THIS LINE REMOVES EMPTY OR ₹0 MERGE TILES
+  .filter((m) => (m.bookingCount || 0) > 0 || Number(m.totalAmount || 0) > 0);
 
   const waitingHalfBookings = allBookings
     .filter((b) => {
@@ -515,7 +522,7 @@ const finalSlots = defaultSlots.map((slot) => {
     }));
 
   return {
-    slots: [...finalSlots, ...mergeSlots],
+    slots: [finalSlots, mergeSlots],
     waitingHalfBookings,
     rules: {
       maxAmount: rules.threshold,
@@ -595,7 +602,7 @@ export async function bookSlot({
   orderId,
   lat,
   lng,
-  locationId, // ✅ NEW
+  locationId,
 }) {
   validateSlotDate(date);
 
@@ -663,13 +670,14 @@ export async function bookSlot({
                 Key: { pk, sk: slotSk },
                 ConditionExpression: "attribute_not_exists(#s) OR #s = :avail",
                 UpdateExpression:
-                  "SET #s = :booked, userId = :uid, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:by",
+                  "SET #s = :booked, userId = :uid, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:by, amount=:amt",
                 ExpressionAttributeNames: { "#s": "status" },
                 ExpressionAttributeValues: {
                   ":avail": "AVAILABLE",
                   ":booked": "BOOKED",
                   ":uid": uid,
                   ":dn": resolvedName,
+                  ":amt": amt,
                   ":dc": distributorCode,
                   ":oid": orderId,
                   ":by": uid,
@@ -737,6 +745,7 @@ export async function bookSlot({
       type: "FULL",
       userId: uid,
       distributorName: resolvedName,
+      amount: amt,
       lat: safeLat,
       lng: safeLng,
     };
@@ -745,20 +754,25 @@ export async function bookSlot({
   /* ======================================================
      ✅ HALF BOOKING (LOCATIONID BASED MERGE)
   ====================================================== */
-
-  // ✅ IMPORTANT: lat/lng missing error REMOVED ✅
-  // ✅ MergeKey based ONLY on locationId or fixed GEO
-
- // ✅ RAW locationId always stored as raw
-const rawLocationId =
+let rawLocationId =
   locationId && String(locationId).trim() !== ""
     ? String(locationId).trim()
     : `GEO_${Number(safeLat || 0).toFixed(4)}_${Number(safeLng || 0).toFixed(4)}`;
 
-// ✅ mergeKey always LOC#rawLocationId OR GEO...
+// ✅ PLACE THIS HERE 👇
+rawLocationId = String(rawLocationId || "").trim();
+
+// ✅ if purely numeric -> normalize (01 -> 1)
+if (/^\d+$/.test(rawLocationId)) {
+  rawLocationId = String(parseInt(rawLocationId, 10));
+}
+
+// ✅ remove LOC# prefix if present
+rawLocationId = rawLocationId.replace(/^(LOC#)+/i, "").trim();
+
 const mergeKey = rawLocationId.startsWith("GEO_")
   ? rawLocationId
-  : `LOC#${rawLocationId.trim().toUpperCase()}`;
+  : `LOC#${rawLocationId.toUpperCase()}`;
 
 
   const mergeSk = skForMergeSlot(time, mergeKey);
@@ -859,11 +873,13 @@ const mergeKey = rawLocationId.startsWith("GEO_")
       })
     );
   } catch (e) {
+    console.log("❌ AUTO CONFIRM FAILED:", e.message);
     if (
       String(e.message || "").includes("ConditionalCheckFailed") ||
       String(e.name || "") === "TransactionCanceledException"
     ) {
       throw new Error("❌ This Order already booked a slot (LOCKED)");
+      
     }
     throw e;
   }
@@ -913,6 +929,34 @@ const mergeKey = rawLocationId.startsWith("GEO_")
     })
   );
 
+  // ✅ AUTO CONFIRM if READY
+  if (tripStatus === "READY_FOR_CONFIRM") {
+    try {
+      await managerConfirmMerge({
+        companyCode,
+        date,
+        time,
+        mergeKey,
+        managerId: "AUTO",
+      });
+
+      return {
+        ok: true,
+        bookingId,
+        type: "HALF",
+        tripStatus: "FULL",
+        totalAmount: finalTotal,
+        mergeKey,
+        blink,
+        status: "AUTO_CONFIRMED",
+        userId: uid,
+        distributorName: resolvedName,
+      };
+    } catch (e) {
+      console.log("AUTO CONFIRM skipped:", e.message);
+    }
+  }
+
   return {
     ok: true,
     bookingId,
@@ -926,6 +970,7 @@ const mergeKey = rawLocationId.startsWith("GEO_")
     distributorName: resolvedName,
   };
 }
+
 /*Date wise merge*/
 export async function getWaitingHalfBookingsByDate(req, res) {
   try {
@@ -1047,30 +1092,49 @@ export async function managerConfirmMerge({
   const fullSk = skForSlot(time, "FULL", chosenPos);
   const finalSlotId = `${companyCode}#${date}#${time}#FULL#${chosenPos}`;
 
-  // ✅ Book FULL slot
-  const sampleName = bookings?.[0]?.distributorName || "MERGE";
-  const sampleCode = bookings?.[0]?.distributorCode || "MERGE";
+  // ✅ Display distributor name: "A + B"
+  const mergedNames = bookings
+  .map((b) => String(b.distributorName || "").trim())
+  .filter(Boolean);
 
+const displayName =
+  mergedNames.length > 1
+    ? mergedNames.join(" + ")
+    : mergedNames[0] || "MERGE";
+
+
+  const displayCode =
+    bookings
+      .map((b) => String(b.distributorCode || "").trim())
+      .filter(Boolean)[0] || "MERGE";
+
+  // ✅ Create FULL master OrderId
+  const fullOrderId = `ORD_FULL_${uuidv4().slice(0, 8)}`;
+  const mergedOrderIds = bookings.map((b) => String(b.orderId)).filter(Boolean);
+
+  // ✅ Book FULL slot (include amount + orderId also)
   await ddb.send(
     new UpdateCommand({
       TableName: TABLE_CAPACITY,
       Key: { pk, sk: fullSk },
       ConditionExpression: "attribute_not_exists(#s) OR #s = :avail",
       UpdateExpression:
-        "SET #s = :b, userId = :uid, distributorName=:dn, distributorCode=:dc, bookedBy=:m",
+        "SET #s = :b, userId = :uid, distributorName=:dn, distributorCode=:dc, bookedBy=:m, amount=:amt, orderId=:oid",
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
         ":avail": "AVAILABLE",
         ":b": "BOOKED",
         ":uid": mergeKey,
-        ":dn": sampleName,
-        ":dc": sampleCode,
+        ":dn": displayName,
+        ":dc": displayCode,
         ":m": String(managerId || "MANAGER"),
+        ":amt": total,
+        ":oid": fullOrderId,
       },
     })
   );
 
-  // ✅ Confirm mergeSlot (LOCK)
+  // ✅ Confirm mergeSlot
   await ddb.send(
     new UpdateCommand({
       TableName: TABLE_CAPACITY,
@@ -1087,9 +1151,29 @@ export async function managerConfirmMerge({
     })
   );
 
-  // ✅ Create FULL master OrderId
-  const fullOrderId = `ORD_FULL_${uuidv4().slice(0, 8)}`;
-  const mergedOrderIds = bookings.map((b) => String(b.orderId)).filter(Boolean);
+  // ✅ Create FULL booking record (IMPORTANT FIX for UI)
+  const fullBookingSk = skForBooking(time, "FULL", chosenPos, mergeKey);
+
+  await ddb.send(
+    new PutCommand({
+      TableName: TABLE_BOOKINGS,
+      Item: {
+        pk,
+        sk: fullBookingSk,
+        bookingId: uuidv4(),
+        slotTime: time,
+        vehicleType: "FULL",
+        pos: chosenPos,
+        userId: mergeKey,
+        distributorCode: displayCode,
+        distributorName: displayName,
+        amount: total,
+        orderId: fullOrderId,
+        status: "CONFIRMED",
+        createdAt: new Date().toISOString(),
+      },
+    })
+  );
 
   // ✅ create FULL order META
   await ddb.send(
@@ -1157,23 +1241,6 @@ export async function managerConfirmMerge({
       );
     }
   }
-
-  // ✅ Timeline event on FULL order
-  await addTimelineEvent({
-    orderId: fullOrderId,
-    event: "SLOT_CONFIRMED_FULL",
-    by: String(managerId || "MANAGER"),
-    role: "MANAGER",
-    data: {
-      mergeKey,
-      slotId: finalSlotId,
-      time,
-      pos: chosenPos,
-      mergedOrderIds,
-      totalAmount: total,
-    },
-    eventId: `MERGE_CONFIRM#${mergeKey}#${date}#${time}`,
-  });
 
   return {
     ok: true,
@@ -1388,7 +1455,7 @@ if (newTripStatus === "READY_FOR_CONFIRM") {
   return {
     ok: true,
     message: "✅ Manual merge + Auto Confirm done",
-    ...confirm,
+    confirm,
     manualMerged: true,
   };
 }

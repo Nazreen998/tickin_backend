@@ -1,19 +1,8 @@
 import express from "express";
-import { assignCompany, getDrivers } from "./users.service.js";
-import { verifyToken } from "../../middleware/auth.middleware.js";
-import { allowRoles } from "../../middleware/role.middleware.js";
+import { getDrivers } from "./users.service.js";
 
 const router = express.Router();
 
-// ✅ GET /users/drivers
-router.get(
-  "/drivers",
-  verifyToken,
-  allowRoles("MANAGER", "MASTER"),
-  getDrivers
-);
-
-// ✅ existing route
-router.post("/assign-company", assignCompany);
+router.get("/drivers", getDrivers);
 
 export default router;

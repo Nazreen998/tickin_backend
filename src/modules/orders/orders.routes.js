@@ -52,7 +52,12 @@ router.get(
 
 // ✅ delete order
 router.delete("/:orderId", verifyToken, deleteOrder);
-router.post("/vehicle-selected/:flowKey", vehicleSelected)
+router.post(
+  "/vehicle-selected/:flowKey",
+  verifyToken,
+  allowRoles("MANAGER", "MASTER"),
+  vehicleSelected
+);
 
 router.get(
   "/merge/:mergeKey",
