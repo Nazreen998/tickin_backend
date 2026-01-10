@@ -1,4 +1,4 @@
 // 🔒 LOADMAN MOBILE NUMBERS
-const LOADMAN_MOBILES = [
+export const LOADMAN_MOBILES = [
   "8825656201",
 ];
