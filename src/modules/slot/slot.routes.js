@@ -1,8 +1,6 @@
 import express from "express";
 import { verifyToken } from "../../middleware/auth.middleware.js";
 import { allowRoles } from "../../middleware/role.middleware.js";
-import { addOrderTimelineEvent } from "../timeline/timeline.helper.js";
-
 import {
   getSlotGrid,
   bookSlot,
@@ -23,7 +21,7 @@ import {
 } from "../slot/slot.service.js";
 
 // ✅ NEW: Slot Timeline writer
-import { addSlotTimelineEvent } from "../timeline/timeline.helper.js";
+import { addTimelineEvent, addSlotTimelineEvent } from "../timeline/timeline.helper.js";
 
 const router = express.Router();
 

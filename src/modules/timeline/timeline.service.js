@@ -1,5 +1,6 @@
 import { ddb } from "../../config/dynamo.js";
 import { QueryCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
+import dayjs from "dayjs";
 
 const TABLE_TIMELINE = process.env.TABLE_TIMELINE || "tickin_timeline";
 const TABLE_ORDERS = process.env.ORDERS_TABLE || "tickin_orders";
@@ -55,7 +56,7 @@ function isAllocatedToUser(meta, user) {
   return false;
 }
 
-/* ✅ Get Driver Name from tickin_users */
+/* ✅ Get Driver Name */
 async function getDriverName(driverId) {
   if (!driverId) return null;
 
@@ -76,7 +77,22 @@ async function getDriverName(driverId) {
   }
 }
 
-/* ✅ Build Neat Timeline with ALIAS support */
+/* ✅ Force display time (IST-like readable) */
+function prettyTime(ev) {
+  const t = ev?.displayTime || ev?.createdAt || ev?.timestamp || null;
+  if (!t) return null;
+
+  // if already formatted string like "10 Jan 2026, 10:30 AM" keep it
+  if (typeof t === "string" && /[A-Za-z]{3}/.test(t) && /AM|PM/i.test(t)) return t;
+
+  // else format ISO
+  const dt = dayjs(t);
+  if (!dt.isValid()) return String(t);
+
+  return dt.format("DD MMM YYYY, hh:mm A");
+}
+
+/* ✅ Build Neat Timeline (with alias mapping fix) */
 function buildNeatTimeline(events = []) {
   const STEPS = [
     { key: "ORDER_CREATED", label: "Order Created" },
@@ -98,25 +114,19 @@ function buildNeatTimeline(events = []) {
     { key: "DELIVERY_COMPLETED", label: "Delivery Completed" },
   ];
 
-  // ✅ alias map fix for mismatch events
+  // ✅ ALIAS FIX (because routes write LOAD_START/LOAD_END)
   const ALIAS = {
-    "LOAD_START": "LOADING_START",
-    "LOAD_END": "LOADING_COMPLETED",
-
-    "LOADING_STARTED": "LOADING_START",
-    "LOADING_END": "LOADING_COMPLETED",
-
-    "WAREHOUSE_REACHED": "WAREHOUSE_REACHED",
+    LOAD_START: "LOADING_START",
+    LOAD_END: "LOADING_COMPLETED",
   };
 
+  // ✅ keep latest event per key
   const map = {};
   for (const e of events) {
     if (!e?.event) continue;
 
-    let key = String(e.event).toUpperCase();
-
-    // ✅ apply alias mapping
-    key = ALIAS[key] || key;
+    let key = String(e.event).trim().toUpperCase();
+    if (ALIAS[key]) key = ALIAS[key];
 
     if (!map[key]) {
       map[key] = e;
@@ -127,6 +137,7 @@ function buildNeatTimeline(events = []) {
     }
   }
 
+  // ✅ find last done step
   let lastDoneIdx = -1;
   STEPS.forEach((s, idx) => {
     if (map[s.key]) lastDoneIdx = idx;
@@ -144,14 +155,14 @@ function buildNeatTimeline(events = []) {
       key: s.key,
       title: s.label,
       status,
-      time: ev?.displayTime || ev?.createdAt || ev?.timestamp || null,
+      time: ev ? prettyTime(ev) : null,
       data: ev?.data || null,
       raw: ev,
     };
   });
 }
 
-/* ✅ Build Meta for UI */
+/* ✅ Build Meta */
 async function buildMeta(meta) {
   const driverId =
     meta.driverId || meta.driverUserId || meta.driverMobile || null;
@@ -182,7 +193,7 @@ async function buildMeta(meta) {
   };
 }
 
-/* ✅ GET Order Timeline */
+/* ✅ GET Order Timeline (RAW + NEAT + META) */
 export async function getOrderTimeline(req, res) {
   try {
     const { orderId } = req.params;
@@ -259,7 +270,7 @@ export async function getOrderTimeline(req, res) {
   }
 }
 
-/* ✅ ONLY neat response */
+/* ✅ GET Order Timeline (NEAT ONLY) */
 export async function getOrderTimelineNeat(req, res) {
   try {
     const { orderId } = req.params;
@@ -274,7 +285,6 @@ export async function getOrderTimelineNeat(req, res) {
         Key: { pk: `ORDER#${targetOrderId}`, sk: "META" },
       })
     );
-
     const meta = orderMetaRes.Item || {};
 
     const out = await ddb.send(
@@ -299,6 +309,58 @@ export async function getOrderTimelineNeat(req, res) {
     });
   } catch (e) {
     console.error("getOrderTimelineNeat error:", e);
-    return res.status(500).json({ ok: false, message: e.message });
+    return res.status(500).json({ ok: false, message: e.message || String(e) });
+  }
+}
+
+/* ✅ GET Slot Timeline (RAW + NEAT) */
+export async function getSlotTimeline(req, res) {
+  try {
+    const { slotId } = req.params;
+    if (!slotId)
+      return res.status(400).json({ ok: false, message: "slotId required" });
+
+    const out = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE_SLOT_TIMELINE,
+        KeyConditionExpression: "pk = :pk",
+        ExpressionAttributeValues: { ":pk": `SLOT#${slotId}` },
+        ScanIndexForward: true,
+      })
+    );
+
+    const rawTimeline = out.Items || [];
+    const neatTimeline = buildNeatTimeline(rawTimeline);
+
+    return res.json({ ok: true, slotId, timeline: rawTimeline, neatTimeline });
+  } catch (e) {
+    console.error("getSlotTimeline error:", e);
+    return res.status(500).json({ ok: false, message: e.message || String(e) });
+  }
+}
+
+/* ✅ GET Slot Timeline (NEAT ONLY) */
+export async function getSlotTimelineNeat(req, res) {
+  try {
+    const { slotId } = req.params;
+    if (!slotId)
+      return res.status(400).json({ ok: false, message: "slotId required" });
+
+    const out = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE_SLOT_TIMELINE,
+        KeyConditionExpression: "pk = :pk",
+        ExpressionAttributeValues: { ":pk": `SLOT#${slotId}` },
+        ScanIndexForward: true,
+      })
+    );
+
+    const rawTimeline = out.Items || [];
+    const neatTimeline = buildNeatTimeline(rawTimeline);
+
+    return res.json({ ok: true, slotId, neatTimeline });
+  } catch (e) {
+    console.error("getSlotTimelineNeat error:", e);
+    return res.status(500).json({ ok: false, message: e.message || String(e) });
   }
 }
