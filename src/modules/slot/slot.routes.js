@@ -117,10 +117,10 @@ router.post(
       const slotId = extractSlotId(out);
       const orderId = extractOrderId(out, req.body);
 
-      // ✅ 1) SLOT timeline
+      // ✅ 1) SLOT TIMELINE TABLE (tickin_timeline_events)
       if (slotId) {
         await addSlotTimelineEvent({
-          slotId, // ✅ MUST PASS HERE (FIX)
+          slotId,
           orderId,
           event: "SLOT_BOOKING",
           by: user.mobile || user.userId || "SYSTEM",
@@ -129,16 +129,16 @@ router.post(
           distributorName: req.body?.distributorName || null,
           amount: Number(req.body?.amount || req.body?.totalAmount || 0),
           data: {
-            bookingType: req.body?.slotType || req.body?.type || null,
+            slotId,
             companyCode: req.body?.companyCode || null,
             date: req.body?.date || null,
             time: req.body?.time || null,
-            originalBody: req.body || {},
+            bookingType: req.body?.slotType || req.body?.type || null,
           },
         });
       }
 
-      // ✅ 2) ORDER timeline (important for neatTimeline DONE)
+      // ✅ 2) ORDER TIMELINE TABLE (tickin_timeline)  ==> IMPORTANT for neatTimeline DONE
       if (orderId) {
         await addTimelineEvent({
           orderId,
@@ -148,10 +148,10 @@ router.post(
           role: user.role || null,
           data: {
             slotId,
-            bookingType: req.body?.slotType || req.body?.type || null,
             companyCode: req.body?.companyCode || null,
             date: req.body?.date || null,
             time: req.body?.time || null,
+            bookingType: req.body?.slotType || req.body?.type || null,
           },
         });
       }
@@ -354,16 +354,14 @@ router.post(
             },
           });
 
-          // ✅ optional: some projects want ORDER_CONFIRMED also at merge time
+          // ✅ optional: ORDER_CONFIRMED also at merge time
           await addTimelineEvent({
             orderId: String(oid),
             event: "ORDER_CONFIRMED",
             by: user.mobile || user.userId || "SYSTEM",
             byUserName: user.name || user.userName || null,
             role: user.role || null,
-            data: {
-              slotId,
-            },
+            data: { slotId },
           });
         }
       }
@@ -374,7 +372,6 @@ router.post(
     }
   }
 );
-
 /* ✅ MANAGER CANCEL CONFIRMED MERGE */
 router.post(
   "/merge/cancel-confirm",
