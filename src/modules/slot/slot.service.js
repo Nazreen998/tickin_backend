@@ -739,16 +739,22 @@ export async function bookSlot({
       })
     );
 
-    return {
-      ok: true,
-      bookingId,
-      type: "FULL",
-      userId: uid,
-      distributorName: resolvedName,
-      amount: amt,
-      lat: safeLat,
-      lng: safeLng,
-    };
+   return {
+  ok: true,
+  bookingId,
+  slotId,          // ✅ MUST return
+  orderId,         // ✅ MUST return
+  type: "FULL",
+  userId: uid,
+  distributorName: resolvedName,
+  amount: amt,
+  lat: safeLat,
+  lng: safeLng,
+  slotTime: time,
+  date,
+  companyCode,
+};
+
   }
 
   /* ======================================================

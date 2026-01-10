@@ -134,9 +134,10 @@ router.post(
       await addTimelineEvent({
         orderId: trackingOrderId,
         event: "VEHICLE_SELECTED",
-        by: user.mobile,
-        role: user.role,
-        data: { vehicleNo, originalOrderId: orderId },
+        by: req.user?.mobile || "system",
+    byUserName: req.user?.name || req.user?.userName || null,
+    role: req.user?.role || "MANAGER",
+    data: { vehicleNo: vehicleNo || null, vehicleType: vehicleType || null },
       });
 
       await ddb.send(
@@ -223,9 +224,10 @@ router.post(
       await addTimelineEvent({
         orderId: trackingOrderId,
         event: "DRIVER_ASSIGNED",
-        by: user.mobile,
-        role: user.role,
-        data: { driverId, vehicleNo, originalOrderId: orderId },
+        by: req.user?.mobile || "system",
+    byUserName: req.user?.name || req.user?.userName || null,
+    role: req.user?.role || "MANAGER",
+    data: { driverId: driverPk, driverName: driver.name, vehicleNo },
       });
 
       await ddb.send(

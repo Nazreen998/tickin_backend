@@ -248,7 +248,9 @@ export const loadingStart = async (req, res) => {
         orderId: oid,
         event: "LOADING_STARTED",
         by: user?.mobile || "system",
-        extra: { role: user?.role || "MANAGER", flowKey: key },
+  byUserName: user?.name || user?.userName || null,
+  role: user?.role || "MANAGER",
+  data: { flowKey: key },  // ✅ use data
       });
     }
 
@@ -306,7 +308,9 @@ export const loadingEnd = async (req, res) => {
         orderId: oid,
         event: "LOADING_COMPLETED",
         by: user?.mobile || "system",
-        extra: { role: user?.role || "MANAGER", flowKey: key },
+  byUserName: user?.name || user?.userName || null,
+  role: user?.role || "MANAGER",
+  data: { flowKey: key },
       });
     }
 
