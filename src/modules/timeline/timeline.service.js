@@ -37,6 +37,8 @@ function isAllocatedToUser(meta, user) {
     meta.assignedTo,
     meta.assignedUserId,
     meta.distributorId,
+    meta.userId,
+    meta.createdBy,
   ]
     .filter(Boolean)
     .map(String);
@@ -47,9 +49,9 @@ function isAllocatedToUser(meta, user) {
     meta.allocatedOrderIds ||
     meta.assignedOrderIds ||
     meta.allocatedOrders ||
+    meta.orders ||
     [];
 
-  // ✅ if meta contains allocatedOrderIds list
   if (Array.isArray(arr) && arr.map(String).includes(String(meta.orderId || "")))
     return true;
 
@@ -77,7 +79,7 @@ async function getDriverName(driverId) {
   }
 }
 
-/* ✅ Build Neat Timeline */
+/* ✅ Build Neat Timeline (YOUR FINAL FLOW) */
 function buildNeatTimeline(events = []) {
   const STEPS = [
     { key: "ORDER_CREATED", label: "Order Created" },
@@ -85,9 +87,8 @@ function buildNeatTimeline(events = []) {
     { key: "SLOT_BOOKING", label: "Slot Booking" },
     { key: "SLOT_BOOKING_COMPLETED", label: "Slot Booking Completed" },
     { key: "VEHICLE_SELECTED", label: "Vehicle Selected" },
-    { key: "LOAD_START", label: "Loading Start" },
-    { key: "LOADING_ITEM", label: "Loading Item" },
-    { key: "LOAD_END", label: "Loading End" },
+    { key: "LOADING_START", label: "Loading Start" },
+    { key: "LOADING_COMPLETED", label: "Loading Completed" },
     { key: "DRIVER_ASSIGNED", label: "Driver Assigned" },
     { key: "DRIVE_STARTED", label: "Drive Started" },
     { key: "REACHED_D1", label: "Reached D1" },
@@ -97,8 +98,10 @@ function buildNeatTimeline(events = []) {
     { key: "UNLOADING_START_D2", label: "Unloading Start D2" },
     { key: "UNLOADING_END_D2", label: "Unloading End D2" },
     { key: "WAREHOUSE_REACHED", label: "Warehouse Reached" },
+    { key: "DELIVERY_COMPLETED", label: "Delivery Completed" },
   ];
 
+  // ✅ keep latest event per key
   const map = {};
   for (const e of events) {
     if (!e?.event) continue;
@@ -113,6 +116,7 @@ function buildNeatTimeline(events = []) {
     }
   }
 
+  // ✅ find last done step
   let lastDoneIdx = -1;
   STEPS.forEach((s, idx) => {
     if (map[s.key]) lastDoneIdx = idx;
@@ -137,6 +141,37 @@ function buildNeatTimeline(events = []) {
   });
 }
 
+/* ✅ Build Meta for UI */
+async function buildMeta(meta) {
+  const driverId =
+    meta.driverId || meta.driverUserId || meta.driverMobile || null;
+
+  const driverName = await getDriverName(driverId);
+
+  return {
+    distributorName:
+      meta.distributorName ||
+      meta.distributor ||
+      meta.agencyName ||
+      meta.customerName ||
+      meta.companyName ||
+      null,
+
+    vehicleNo:
+      meta.vehicleNo ||
+      meta.vehicleNumber ||
+      meta.vehicle ||
+      meta.vehicleId ||
+      null,
+
+    driverId,
+    driverName: driverName || meta.driverName || meta.driverMobile || null,
+
+    status: meta.status || null,
+    slotId: meta.slotId || meta.slotPk || null,
+  };
+}
+
 /* ✅ GET Order Timeline (RAW + NEAT + META) */
 export async function getOrderTimeline(req, res) {
   try {
@@ -146,7 +181,7 @@ export async function getOrderTimeline(req, res) {
 
     const targetOrderId = await resolveTargetOrderId(orderId);
 
-    // ✅ fetch order meta for auth check
+    // ✅ fetch order meta
     const orderMetaRes = await ddb.send(
       new GetCommand({
         TableName: TABLE_ORDERS,
@@ -163,7 +198,7 @@ export async function getOrderTimeline(req, res) {
 
     // ✅ MASTER / MANAGER can access all
     if (role !== "MASTER" && role !== "MANAGER") {
-      // ✅ Distributor / Sales Officer / Salesman => own OR allocated
+      // ✅ Distributor / Sales => own OR allocated
       if (
         role === "DISTRIBUTOR" ||
         role === "SALESMAN" ||
@@ -203,25 +238,13 @@ export async function getOrderTimeline(req, res) {
 
     const rawTimeline = out.Items || [];
     const neatTimeline = buildNeatTimeline(rawTimeline);
-
-    // ✅ resolve driver name
-    const driverName = await getDriverName(meta.driverId);
+    const uiMeta = await buildMeta(meta);
 
     return res.json({
       ok: true,
       requestedOrderId: orderId,
       orderId: targetOrderId,
-
-      // ✅ NEW: META (for tracking UI)
-      meta: {
-        distributorName: meta.distributorName || meta.distributor || null,
-        vehicleNo: meta.vehicleNo || null,
-        driverId: meta.driverId || null,
-        driverName: driverName || null,
-        status: meta.status || null,
-        slotId: meta.slotId || null,
-      },
-
+      meta: uiMeta,
       timeline: rawTimeline,
       neatTimeline,
     });
@@ -266,7 +289,6 @@ export async function getOrderTimelineNeat(req, res) {
 
     const targetOrderId = await resolveTargetOrderId(orderId);
 
-    // ✅ fetch meta
     const orderMetaRes = await ddb.send(
       new GetCommand({
         TableName: TABLE_ORDERS,
@@ -286,23 +308,13 @@ export async function getOrderTimelineNeat(req, res) {
 
     const rawTimeline = out.Items || [];
     const neatTimeline = buildNeatTimeline(rawTimeline);
-
-    const driverName = await getDriverName(meta.driverId);
+    const uiMeta = await buildMeta(meta);
 
     return res.json({
       ok: true,
       requestedOrderId: orderId,
       orderId: targetOrderId,
-
-      meta: {
-        distributorName: meta.distributorName || meta.distributor || null,
-        vehicleNo: meta.vehicleNo || null,
-        driverId: meta.driverId || null,
-        driverName: driverName || null,
-        status: meta.status || null,
-        slotId: meta.slotId || null,
-      },
-
+      meta: uiMeta,
       neatTimeline,
     });
   } catch (e) {
