@@ -6,6 +6,9 @@ const TABLE_ORDERS = process.env.ORDERS_TABLE || "tickin_orders";
 const TABLE_SLOT_TIMELINE =
   process.env.TABLE_SLOT_TIMELINE || "tickin_timeline_events";
 
+// ✅ Driver table
+const TABLE_USERS = process.env.USERS_TABLE || "tickin_users";
+
 /* ✅ Resolve FULL OrderId if HALF merged */
 async function resolveTargetOrderId(orderId) {
   if (!orderId) return null;
@@ -46,10 +49,32 @@ function isAllocatedToUser(meta, user) {
     meta.allocatedOrders ||
     [];
 
+  // ✅ if meta contains allocatedOrderIds list
   if (Array.isArray(arr) && arr.map(String).includes(String(meta.orderId || "")))
     return true;
 
   return false;
+}
+
+/* ✅ Get Driver Name from tickin_users */
+async function getDriverName(driverId) {
+  if (!driverId) return null;
+
+  try {
+    const res = await ddb.send(
+      new GetCommand({
+        TableName: TABLE_USERS,
+        Key: { pk: `USER#${driverId}`, sk: "META" },
+      })
+    );
+
+    const d = res.Item;
+    if (!d) return null;
+
+    return d.name || d.userName || d.fullName || d.mobile || null;
+  } catch (e) {
+    return null;
+  }
 }
 
 /* ✅ Build Neat Timeline */
@@ -112,7 +137,7 @@ function buildNeatTimeline(events = []) {
   });
 }
 
-/* ✅ GET Order Timeline */
+/* ✅ GET Order Timeline (RAW + NEAT + META) */
 export async function getOrderTimeline(req, res) {
   try {
     const { orderId } = req.params;
@@ -139,7 +164,11 @@ export async function getOrderTimeline(req, res) {
     // ✅ MASTER / MANAGER can access all
     if (role !== "MASTER" && role !== "MANAGER") {
       // ✅ Distributor / Sales Officer / Salesman => own OR allocated
-      if (role === "DISTRIBUTOR" || role === "SALESMAN" || role === "SALES OFFICER") {
+      if (
+        role === "DISTRIBUTOR" ||
+        role === "SALESMAN" ||
+        role === "SALES OFFICER"
+      ) {
         const metaUserId = String(meta.userId || meta.createdBy || "");
         const loggedUserId = String(user.userId || user.id || user.mobile || "");
 
@@ -175,10 +204,24 @@ export async function getOrderTimeline(req, res) {
     const rawTimeline = out.Items || [];
     const neatTimeline = buildNeatTimeline(rawTimeline);
 
+    // ✅ resolve driver name
+    const driverName = await getDriverName(meta.driverId);
+
     return res.json({
       ok: true,
       requestedOrderId: orderId,
       orderId: targetOrderId,
+
+      // ✅ NEW: META (for tracking UI)
+      meta: {
+        distributorName: meta.distributorName || meta.distributor || null,
+        vehicleNo: meta.vehicleNo || null,
+        driverId: meta.driverId || null,
+        driverName: driverName || null,
+        status: meta.status || null,
+        slotId: meta.slotId || null,
+      },
+
       timeline: rawTimeline,
       neatTimeline,
     });
@@ -214,7 +257,7 @@ export async function getSlotTimeline(req, res) {
   }
 }
 
-/* ✅ ONLY neat response */
+/* ✅ ONLY neat response (WITH META) */
 export async function getOrderTimelineNeat(req, res) {
   try {
     const { orderId } = req.params;
@@ -222,6 +265,15 @@ export async function getOrderTimelineNeat(req, res) {
       return res.status(400).json({ ok: false, message: "orderId required" });
 
     const targetOrderId = await resolveTargetOrderId(orderId);
+
+    // ✅ fetch meta
+    const orderMetaRes = await ddb.send(
+      new GetCommand({
+        TableName: TABLE_ORDERS,
+        Key: { pk: `ORDER#${targetOrderId}`, sk: "META" },
+      })
+    );
+    const meta = orderMetaRes.Item || {};
 
     const out = await ddb.send(
       new QueryCommand({
@@ -235,10 +287,22 @@ export async function getOrderTimelineNeat(req, res) {
     const rawTimeline = out.Items || [];
     const neatTimeline = buildNeatTimeline(rawTimeline);
 
+    const driverName = await getDriverName(meta.driverId);
+
     return res.json({
       ok: true,
       requestedOrderId: orderId,
       orderId: targetOrderId,
+
+      meta: {
+        distributorName: meta.distributorName || meta.distributor || null,
+        vehicleNo: meta.vehicleNo || null,
+        driverId: meta.driverId || null,
+        driverName: driverName || null,
+        status: meta.status || null,
+        slotId: meta.slotId || null,
+      },
+
       neatTimeline,
     });
   } catch (e) {
