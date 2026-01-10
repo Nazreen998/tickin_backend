@@ -31,7 +31,7 @@ export const Attendance = {
     return res.Item || null;
   },
 
-  async checkIn({ uid,userName,role,date, lat, lng, distance, locationId, locationName }) {
+  async checkIn({ uid,userName,role,attendanceRole,date, lat, lng, distance, locationId, locationName,bataAmount,bataReason }) {
     return ddb.send(
       new PutCommand({
         TableName: TABLE,
@@ -43,6 +43,7 @@ export const Attendance = {
           GSI1SK: `LOC#${locationId}#USER#${uid}`,
           userName,
           role,
+          attendanceRole,
           checkInAt: nowIST(),          
           lat,
           lng,
@@ -50,18 +51,18 @@ export const Attendance = {
           locationId,
           locationName,
           // 🔹 Allowance fields (safe defaults)
-          bataAmount: 0,
-          bataReason: "NOT_APPLICABLE",
+          bataAmount,
+          bataReason,
           nightAllowance: 0,
           status: "CHECKED_IN",
           createdAt: nowIST()
         },
-        ConditionExpression: "attribute_not_exists(PK)"
+        ConditionExpression: "attribute_not_exists(SK)"
       })
     );
   },
 
-  async checkOut({ uid, date, lat, lng }) {
+  async checkOut({ uid, date, lat, lng,nightAllowance}) {
     return ddb.send(
       new UpdateCommand({
         TableName: TABLE,
@@ -80,7 +81,7 @@ export const Attendance = {
           ":t": nowIST(),
           ":lat": lat,
           ":lng": lng,
-          ":n": 0,
+          ":n": nightAllowance,
           ":s": "CHECKED_OUT"
         }
       })
