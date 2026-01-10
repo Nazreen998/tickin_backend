@@ -35,6 +35,7 @@ async function resolveTrackingOrderId(orderId) {
 }
 
 /* ✅ 1) LOADING START */
+/* ✅ 1) LOADING START */
 router.post(
   "/loading-start",
   verifyToken,
@@ -56,13 +57,26 @@ router.post(
         data: { originalOrderId: orderId },
       });
 
+      // ✅ UPDATE ORDER STATUS ALSO
+      await ddb.send(
+        new UpdateCommand({
+          TableName: TABLE_ORDERS,
+          Key: { pk: `ORDER#${trackingOrderId}`, sk: "META" },
+          UpdateExpression: "SET #st=:s, updatedAt=:t",
+          ExpressionAttributeNames: { "#st": "status" },
+          ExpressionAttributeValues: {
+            ":s": "LOADING_STARTED",
+            ":t": new Date().toISOString(),
+          },
+        })
+      );
+
       return res.json({ ok: true, trackingOrderId });
     } catch (e) {
       return res.status(500).json({ ok: false, message: e.message });
     }
   }
 );
-
 /* ✅ 2) LOADING ITEM */
 router.post(
   "/loading-item",
@@ -145,6 +159,7 @@ router.post(
 );
 
 /* ✅ 4) LOADING END */
+/* ✅ 4) LOADING END */
 router.post(
   "/loading-end",
   verifyToken,
@@ -166,12 +181,27 @@ router.post(
         data: { originalOrderId: orderId },
       });
 
+      // ✅ UPDATE ORDER STATUS ALSO
+      await ddb.send(
+        new UpdateCommand({
+          TableName: TABLE_ORDERS,
+          Key: { pk: `ORDER#${trackingOrderId}`, sk: "META" },
+          UpdateExpression: "SET #st=:s, updatedAt=:t",
+          ExpressionAttributeNames: { "#st": "status" },
+          ExpressionAttributeValues: {
+            ":s": "LOADING_COMPLETED",
+            ":t": new Date().toISOString(),
+          },
+        })
+      );
+
       return res.json({ ok: true, trackingOrderId });
     } catch (e) {
       return res.status(500).json({ ok: false, message: e.message });
     }
   }
 );
+
 
 /* ✅ 5) ASSIGN DRIVER */
 router.post(
