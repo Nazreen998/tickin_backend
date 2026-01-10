@@ -37,12 +37,9 @@ const getISTNow = () =>
  * ?officeId=OFFICE2
  */
 export const todayAttendance = async (req, res) => {
-  const { officeId } = req.query;
-
-  // ✅ YYYY-MM-DD
   const date = todayIST();
 
-  let params = {
+  const params = {
     TableName: TABLE,
     IndexName: "GSI1",
     KeyConditionExpression: "GSI1PK = :pk",
@@ -50,32 +47,27 @@ export const todayAttendance = async (req, res) => {
       ":pk": `DATE#${date}`,
     },
     ProjectionExpression:
-    "PK, userName, role, attendanceRole, bataAmount, nightAllowance, checkInAt, checkOutAt",
+      "PK, userName, role, attendanceRole, locationId, bataAmount, nightAllowance, checkInAt, checkOutAt",
   };
 
-  if (officeId) {
-    params.KeyConditionExpression +=
-      " AND begins_with(GSI1SK, :sk)";
-    params.ExpressionAttributeValues[":sk"] =
-      `LOC#${officeId}`;
-  }
-
   const data = await ddb.send(new QueryCommand(params));
+
   res.json({ ok: true, data: data.Items || [] });
 };
+
 
 /**
  * GET /attendance/dashboard/by-date
  * ?date=YYYY-MM-DD&officeId=OFFICE2
  */
 export const attendanceByDate = async (req, res) => {
-  const { date, officeId } = req.query;
+  const { date } = req.query;
 
   if (!date) {
     return res.json({ ok: false, error: "date_required" });
   }
 
-  let params = {
+  const params = {
     TableName: TABLE,
     IndexName: "GSI1",
     KeyConditionExpression: "GSI1PK = :pk",
@@ -83,47 +75,33 @@ export const attendanceByDate = async (req, res) => {
       ":pk": `DATE#${date}`,
     },
     ProjectionExpression:
-    "PK, userName, role, attendanceRole, bataAmount, nightAllowance, checkInAt, checkOutAt",
+      "PK, userName, role, attendanceRole, locationId, bataAmount, nightAllowance, checkInAt, checkOutAt",
   };
-
-  if (officeId) {
-    params.KeyConditionExpression +=
-      " AND begins_with(GSI1SK, :sk)";
-    params.ExpressionAttributeValues[":sk"] =
-      `LOC#${officeId}`;
-  }
 
   const data = await ddb.send(new QueryCommand(params));
   res.json({ ok: true, data: data.Items || [] });
 };
+
 
 /**
  * GET /attendance/dashboard/weekly-summary
  * ?officeId=OFFICE2
  */
 export const weeklySummary = async (req, res) => {
-  const { officeId } = req.query;
-
-  /**
-   * 👉 Build last 6 days in YYYY-MM-DD
-   * Matches DynamoDB GSI1PK
-   */
   const dates = [];
+
   for (let i = 0; i < 6; i++) {
     const d = new Date();
     d.setDate(d.getDate() - i);
-
-    const ds = d.toLocaleDateString("en-CA", {
-      timeZone: "Asia/Kolkata",
-    });
-
-    dates.push(ds);
+    dates.push(
+      d.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" })
+    );
   }
 
   const users = {};
 
   for (const date of dates) {
-    let params = {
+    const params = {
       TableName: TABLE,
       IndexName: "GSI1",
       KeyConditionExpression: "GSI1PK = :pk",
@@ -131,15 +109,8 @@ export const weeklySummary = async (req, res) => {
         ":pk": `DATE#${date}`,
       },
       ProjectionExpression:
-    "PK, userName, role, attendanceRole, bataAmount, nightAllowance, checkInAt, checkOutAt",
+    "PK, userName, role, attendanceRole, bataAmount, nightAllowance, locationId",
     };
-
-    if (officeId) {
-      params.KeyConditionExpression +=
-        " AND begins_with(GSI1SK, :sk)";
-      params.ExpressionAttributeValues[":sk"] =
-        `LOC#${officeId}`;
-    }
 
     const data = await ddb.send(new QueryCommand(params));
 
@@ -150,24 +121,32 @@ export const weeklySummary = async (req, res) => {
         users[uid] = {
           uid,
           name: item.userName,
-          role: item.attendanceRole || item.role || "-",
+          role: item.attendanceRole || item.role,
           presentDays: 0,
           totalBata: 0,
           nightAllowance: 0,
+          office2Visits: 0, // 👈 IMPORTANT
         };
       }
 
-      users[uid].presentDays += 1;
+      users[uid].presentDays++;
       users[uid].totalBata += item.bataAmount || 0;
       users[uid].nightAllowance += item.nightAllowance || 0;
+
+      // 👇 OFFICE2 visit tracking
+      if (item.locationId === "OFFICE2") {
+        users[uid].office2Visits++;
+      }
     }
   }
 
-  const result = Object.values(users).map((u) => ({
+  const result = Object.values(users).map(u => ({
     ...u,
     absentDays: 6 - u.presentDays,
     totalAmount: u.totalBata + u.nightAllowance,
+    visitedOffice2: u.office2Visits > 0 ? "YES" : "NO",
   }));
 
   res.json({ ok: true, data: result });
 };
+
