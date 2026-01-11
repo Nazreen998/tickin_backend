@@ -203,7 +203,41 @@ async function buildMeta(meta) {
 
     status: meta.status || null,
     slotId: meta.slotId || meta.slotPk || null,
+
+    // ✅ merge info for option-1
+    isMerged: Boolean(
+      meta.isMerged ||
+          meta.mergedAt ||
+          (Array.isArray(meta.childOrderIds) && meta.childOrderIds.length > 0)
+    ),
+    childOrderIds: Array.isArray(meta.childOrderIds) ? meta.childOrderIds : [],
+    mergedAt: meta.mergedAt || null,
   };
+}
+async function fetchRawTimeline(orderId) {
+  const out = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_TIMELINE,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": `ORDER#${orderId}` },
+      ScanIndexForward: true,
+    })
+  );
+  return out.Items || [];
+}
+function trimPreMerge(neatList = []) {
+  // keep steps from start until SLOT_BOOKING (inclusive)
+  const idx = neatList.indexWhere?.((e) => false); // not needed in JS, ignore
+
+  const cutoffKeys = new Set(["SLOT_BOOKING", "SLOT_BOOKING_COMPLETED"]);
+
+  const out = [];
+  for (const step of neatList) {
+    out.push(step);
+    const key = String(step?.key || "").toUpperCase();
+    if (cutoffKeys.has(key)) break;
+  }
+  return out;
 }
 
 /* ✅ GET Order Timeline (RAW + NEAT + META) */
@@ -300,25 +334,38 @@ export async function getOrderTimelineNeat(req, res) {
     );
     const meta = orderMetaRes.Item || {};
 
-    const out = await ddb.send(
-      new QueryCommand({
-        TableName: TABLE_TIMELINE,
-        KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: { ":pk": `ORDER#${targetOrderId}` },
-        ScanIndexForward: true,
-      })
-    );
-
-    const rawTimeline = out.Items || [];
+    // ✅ FULL timeline (common)
+    const rawTimeline = await fetchRawTimeline(targetOrderId);
     const neatTimeline = buildNeatTimeline(rawTimeline);
+
+    // ✅ meta includes isMerged + childOrderIds
     const uiMeta = await buildMeta(meta);
+
+    // ✅ preMerge block (D1 + D2)
+    let preMerge = null;
+
+    if (uiMeta.isMerged && Array.isArray(uiMeta.childOrderIds) && uiMeta.childOrderIds.length) {
+      const kids = uiMeta.childOrderIds.map(String);
+
+      const pre = {};
+
+      // fetch each child order neat timeline and trim upto SLOT_BOOKING
+      for (const kidId of kids) {
+        const childRaw = await fetchRawTimeline(kidId);
+        const childNeat = buildNeatTimeline(childRaw);
+        pre[kidId] = trimPreMerge(childNeat);
+      }
+
+      preMerge = pre;
+    }
 
     return res.json({
       ok: true,
       requestedOrderId: orderId,
       orderId: targetOrderId,
       meta: uiMeta,
-      neatTimeline,
+      preMerge,      // ✅ NEW
+      neatTimeline,  // ✅ common
     });
   } catch (e) {
     console.error("getOrderTimelineNeat error:", e);

@@ -1,5 +1,5 @@
 import dayjs from "dayjs";
-import { PutCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
+import { PutCommand, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "../../config/dynamo.js";
 import utc from "dayjs/plugin/utc.js";
 import timezone from "dayjs/plugin/timezone.js";
@@ -159,3 +159,28 @@ export const addSlotTimelineEvent = async ({
 
   return true;
 };
+// ✅ Mark master order as merged and store child orderIds
+export async function markOrderAsMerged({ fullOrderId, childOrderIds = [] }) {
+  if (!fullOrderId) throw new Error("fullOrderId required");
+
+  const now = new Date().toISOString();
+  const kids = Array.from(
+    new Set((childOrderIds || []).filter(Boolean).map((x) => String(x)))
+  );
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_ORDERS,
+      Key: { pk: `ORDER#${String(fullOrderId)}`, sk: "META" },
+      UpdateExpression:
+        "SET isMerged=:m, childOrderIds=:c, mergedAt=:t, updatedAt=:t",
+      ExpressionAttributeValues: {
+        ":m": true,
+        ":c": kids,
+        ":t": now,
+      },
+    })
+  );
+
+  return true;
+}

@@ -5,6 +5,7 @@ import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { resolveMergeKeyByRadius, haversineKm } from "./geoMerge.helper.js";
 import { pairingMap } from "../../appInit.js";
 import { getDistributorByCode } from "../distributors/distributors.service.js";
+import { markOrderAsMerged } from "../timeline/timeline.helper.js";
 
 import {
   GetCommand,
@@ -1247,6 +1248,11 @@ const displayName =
       );
     }
   }
+ // ✅ PASTE THIS HERE
+  await markOrderAsMerged({
+    fullOrderId,
+    childOrderIds: mergedOrderIds,
+  });
 
   return {
     ok: true,
@@ -1259,7 +1265,6 @@ const displayName =
     mergedOrderIds,
   };
 }
-
 /* ✅ Manual merge */
 export async function managerMergeOrdersToMergeKey({
   companyCode,
@@ -1475,7 +1480,6 @@ return {
   finalTotal,
   tripStatus: newTripStatus,
 };
-
 }
 
 /* ✅ CANCEL CONFIRMED MERGE */
