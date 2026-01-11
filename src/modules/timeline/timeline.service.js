@@ -1,6 +1,13 @@
 import { ddb } from "../../config/dynamo.js";
 import { QueryCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
+import timezone from "dayjs/plugin/timezone.js";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const IST = "Asia/Kolkata";
 
 const TABLE_TIMELINE = process.env.TABLE_TIMELINE || "tickin_timeline";
 const TABLE_ORDERS = process.env.ORDERS_TABLE || "tickin_orders";
@@ -77,22 +84,23 @@ async function getDriverName(driverId) {
   }
 }
 
-/* ✅ Force display time (IST-like readable) */
+/* ✅ Force display time (IST) */
 function prettyTime(ev) {
   const t = ev?.displayTime || ev?.createdAt || ev?.timestamp || null;
   if (!t) return null;
 
   // if already formatted string like "10 Jan 2026, 10:30 AM" keep it
-  if (typeof t === "string" && /[A-Za-z]{3}/.test(t) && /AM|PM/i.test(t)) return t;
+  if (typeof t === "string" && /[A-Za-z]{3}/.test(t) && /AM|PM/i.test(t))
+    return t;
 
-  // else format ISO
+  // else format ISO -> IST
   const dt = dayjs(t);
   if (!dt.isValid()) return String(t);
 
-  return dt.format("DD MMM YYYY, hh:mm A");
+  return dt.tz(IST).format("DD MMM YYYY, hh:mm A");
 }
 
-/* ✅ Build Neat Timeline (with alias mapping fix) */
+/* ✅ Build Neat Timeline (GAP FIX + alias mapping) */
 function buildNeatTimeline(events = []) {
   const STEPS = [
     { key: "ORDER_CREATED", label: "Order Created" },
@@ -114,10 +122,11 @@ function buildNeatTimeline(events = []) {
     { key: "DELIVERY_COMPLETED", label: "Delivery Completed" },
   ];
 
-  // ✅ ALIAS FIX (because routes write LOAD_START/LOAD_END)
+  // ✅ ALIAS FIX (routes write LOAD_START/LOAD_END)
   const ALIAS = {
     LOAD_START: "LOADING_START",
     LOAD_END: "LOADING_COMPLETED",
+    LOADING_STARTED: "LOADING_START",
   };
 
   // ✅ keep latest event per key
@@ -137,18 +146,22 @@ function buildNeatTimeline(events = []) {
     }
   }
 
-  // ✅ find last done step
-  let lastDoneIdx = -1;
+  // ✅ farthest DONE step index => removes GAP
+  let maxDoneIdx = -1;
   STEPS.forEach((s, idx) => {
-    if (map[s.key]) lastDoneIdx = idx;
+    if (map[s.key]) maxDoneIdx = Math.max(maxDoneIdx, idx);
   });
 
   return STEPS.map((s, idx) => {
     const ev = map[s.key] || null;
 
     let status = "UPCOMING";
+
+    // ✅ GAP FIX:
+    // If a later step is DONE, previous steps are also DONE
+    if (idx < maxDoneIdx) status = "DONE";
     if (ev) status = "DONE";
-    else if (idx === lastDoneIdx + 1) status = "CURRENT";
+    if (!ev && idx === maxDoneIdx + 1) status = "CURRENT";
 
     return {
       step: idx + 1,

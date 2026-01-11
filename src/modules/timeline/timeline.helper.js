@@ -74,7 +74,8 @@ export const addTimelineEvent = async ({
     status: "DONE",
 
     timestamp,
-    displayTime: dayjs(timestamp).format("DD MMM YYYY, hh:mm A"),
+    // ✅ IST display time
+    displayTime: dayjs(timestamp).tz(IST).format("DD MMM YYYY, hh:mm A"),
 
     by: String(by || ""),
     byUserName: byUserName ? String(byUserName) : null,
@@ -133,7 +134,8 @@ export const addSlotTimelineEvent = async ({
     status: "DONE",
 
     timestamp,
-    displayTime: dayjs(timestamp).format("DD MMM YYYY, hh:mm A"),
+    // ✅ IST display time
+    displayTime: dayjs(timestamp).tz(IST).format("DD MMM YYYY, hh:mm A"),
 
     distributorName: distributorName ? String(distributorName) : null,
     amount: Number(amount || 0),
