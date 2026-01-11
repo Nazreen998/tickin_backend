@@ -1192,7 +1192,7 @@ const displayName =
         orderId: fullOrderId,
         companyCode,
         distributorId: bookings[0].distributorCode,
-        distributorName: bookings[0].distributorName,
+        distributorName: displayName,
         mergeKey,
         mergedOrderIds,
         slotId: finalSlotId,

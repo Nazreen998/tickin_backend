@@ -105,6 +105,28 @@ export const getSlotConfirmedOrders = async (req, res) => {
         distributorName: booking.distributorName || order.distributorName,
         distributorId: booking.distributorCode || order.distributorId,
       });
+const finalOrders = Object.values(grouped).map((g) => {
+  // ✅ D1/D2 format string (same as manager flow expectation)
+  const names = (g.distributors || [])
+    .map((d, i) => `D${i + 1}: ${d.distributorName || "-"}`)
+    .join(" | ");
+
+  // ✅ for old UI fields (no frontend change)
+  return {
+    ...g,
+
+    // UI reads this line mostly:
+    distributorName: names || (g.distributors?.[0]?.distributorName ?? "-"),
+
+    // aliases (some screens use Amount/Qty keys)
+    totalAmount: g.grandAmount,
+    amount: g.grandAmount,
+    qty: g.totalQty,
+
+    // ensure status always latest
+    status: g.status,
+  };
+});
 
       grouped[flowKey].totalQty += Number(order.totalQty || 0);
       grouped[flowKey].grandAmount += Number(order.totalAmount || 0);
