@@ -8,6 +8,7 @@ import { addTimelineEvent } from "../timeline/timeline.helper.js";
 
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const USERS_TABLE = process.env.USERS_TABLE || "tickin_users";
+const BOOKINGS_TABLE = process.env.BOOKINGS_TABLE || "tickin_slot_bookings";
 
 function normalizeUserPk(id) {
   const s = String(id || "").trim();
@@ -27,24 +28,29 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
   const key = String(flowKey || "").trim();
   if (!key) return [];
 
-  // ✅ orderId case (ORDxxxx)
-  if (key.startsWith("ORD")) {
-    return [key];
-  }
+  // ✅ orderId direct
+  if (key.startsWith("ORD")) return [key];
+  if (/^\d+$/.test(key)) return [`ORD${key}`];
 
-  // ✅ orderId without prefix
-  if (/^\d+$/.test(key)) {
-    return [`ORD${key}`];
-  }
+  // ✅ 1) First try BOOKINGS table (because GEO_* comes from slot booking flow)
+  const bRes = await ddb.send(
+    new ScanCommand({
+      TableName: BOOKINGS_TABLE,
+      FilterExpression: "mergeKey = :m OR flowKey = :m",
+      ExpressionAttributeValues: { ":m": key },
+      ProjectionExpression: "orderId, mergeKey, flowKey",
+    })
+  );
 
-  // ✅ mergeKey case
+  const bIds = (bRes.Items || []).map(x => x.orderId).filter(Boolean);
+  if (bIds.length > 0) return [...new Set(bIds)];
+
+  // ✅ 2) Fallback to ORDERS table mergeKey
   const scanRes = await ddb.send(
     new ScanCommand({
       TableName: ORDERS_TABLE,
       FilterExpression: "mergeKey = :m",
-      ExpressionAttributeValues: {
-        ":m": key,
-      },
+      ExpressionAttributeValues: { ":m": key },
       ProjectionExpression: "orderId, pk, mergeKey",
     })
   );
@@ -142,7 +148,7 @@ export const getOrderFlowByKey = async (req, res) => {
 
     orders.forEach((o) => {
       totalQty += Number(o.totalQty || o.qty || 0);
-      grandTotal += Number(o.grandTotal || o.total || 0);
+      grandTotal += Number(o.totalAmount || o.grandTotal || o.total || 0);
 
       const items = o.loadingItems || o.items || [];
       items.forEach((it) => loadingItems.push(it));

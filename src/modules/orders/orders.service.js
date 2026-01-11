@@ -115,6 +115,15 @@ export const getSlotConfirmedOrders = async (req, res) => {
     }
 
     const finalOrders = Object.values(grouped);
+   for (const g of Object.values(grouped)) {
+  // D1/D2 string
+  const names = g.distributors.map((d, i) => `D${i + 1}: ${d.distributorName}`).join(" | ");
+  g.distributorName = names;            // ✅ UI-friendly single string
+
+  // also aliases for UI if it expects Qty/Amount fields
+  g.qty = g.totalQty;
+  g.amount = g.grandAmount;
+}
 
     return res.json({
       ok: true,
