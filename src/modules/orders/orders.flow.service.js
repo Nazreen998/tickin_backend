@@ -149,6 +149,19 @@ export const getOrderFlowByKey = async (req, res) => {
     });
 
     const status = orders[0]?.status || "UNKNOWN";
+    const distributors = orders.map((o, idx) => ({
+  label: `D${idx + 1}`,
+  distributorId: o.distributorId || null,
+  distributorName: o.distributorName || null,
+  orderId: o.orderId || null,
+  amount: Number(o.totalAmount || o.grandTotal || o.total || 0),
+  qty: Number(o.totalQty || o.qty || 0),
+}));
+
+const distributorDisplay =
+  distributors.length <= 1
+    ? (distributors[0]?.distributorName || "-")
+    : distributors.map(d => `${d.label}: ${d.distributorName || "-"}`).join(" | ");
 
     return res.json({
       ok: true,
@@ -161,6 +174,8 @@ export const getOrderFlowByKey = async (req, res) => {
       vehicleType: orders[0]?.vehicleType || null,
       vehicleNo: orders[0]?.vehicleNo || null,
       loadingItems,
+      distributors,          // ✅ structured
+      distributorDisplay,    // ✅ string for card title
       orders, // ✅ send full orders for D1/D2 separation if needed
     });
   } catch (err) {

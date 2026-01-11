@@ -16,7 +16,6 @@ import {
   confirmDraftOrder,
   deleteOrder,
   getOrdersByMergeKey,
-  getOrderFlowByKey,
   getSlotConfirmedOrders,
   getAssignedOrdersByDriver
 } from "./orders.service.js";
@@ -25,6 +24,7 @@ import {
   vehicleSelected,
   loadingStart,
   loadingEnd,
+  getOrderFlowByKey,
   assignDriver
 } from "./orders.flow.service.js";
 
