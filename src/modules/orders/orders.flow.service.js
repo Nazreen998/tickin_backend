@@ -24,11 +24,6 @@ function normalizeOrderId(id) {
   // otherwise keep as-is (safety)
   return s;
 }
-
-export async function assignDriverToOrder(req, res) {
-  return assignDriver(req, res);
-}
-
 /* ============================================================
    ✅ RESOLVER: flowKey -> orderIds
    flowKey = mergeKey OR orderId
@@ -244,6 +239,34 @@ export const getOrderFlowByKey = async (req, res) => {
       amount: Number(o.totalAmount || o.grandTotal || o.total || 0),
       qty: Number(o.totalQty || o.qty || 0),
     }));
+    // ✅ FIX: For GEO/slot flows, compute amount from BOOKINGS table (prevents double)
+let fixedGrandTotal = grandTotal;
+
+const looksLikeGeo = String(key || "").startsWith("GEO_") || String(key || "").includes("GEO_");
+
+if (looksLikeGeo) {
+  const bRes = await ddb.send(
+    new ScanCommand({
+      TableName: BOOKINGS_TABLE,
+      FilterExpression: "mergeKey = :m OR flowKey = :m",
+      ExpressionAttributeValues: { ":m": key },
+      ProjectionExpression: "orderId, amount",
+    })
+  );
+
+  // dedupe by orderId
+  const seen = new Set();
+  let sum = 0;
+  for (const b of (bRes.Items || [])) {
+    const oid = normalizeOrderId(b.orderId);
+    if (!oid || seen.has(oid)) continue;
+    seen.add(oid);
+    sum += Number(b.amount || 0);
+  }
+
+  if (sum > 0) fixedGrandTotal = sum;
+}
+
 
     const distributorDisplay =
       distributors.length <= 1
@@ -268,11 +291,11 @@ export const getOrderFlowByKey = async (req, res) => {
       vehicleType: calcOrders[0]?.vehicleType || null,
       vehicleNo: calcOrders[0]?.vehicleNo || null,
       loadingItems,
-
       distributors,       // ✅ structured
       distributorDisplay, // ✅ string for UI
       orders: calcOrders, // ✅ full orders (child orders only)
     });
+    
   } catch (err) {
     return res.status(500).json({ ok: false, message: err.message });
   }
@@ -501,6 +524,30 @@ export const assignDriver = async (req, res) => {
         vehicleNo: vehicleNo || null,
       },
     });
+  } catch (err) {
+    return res.status(500).json({ ok: false, message: err.message });
+  }
+};
+// ✅ NEW: List drivers for dropdown (Manager/Master)
+export const getDriversForDropdown = async (req, res) => {
+  try {
+    const result = await ddb.send(
+      new ScanCommand({
+        TableName: USERS_TABLE,
+        FilterExpression: "#r = :d",
+        ExpressionAttributeNames: { "#r": "role" },
+        ExpressionAttributeValues: { ":d": "DRIVER" },
+        ProjectionExpression: "pk, name, userName, mobile, role",
+      })
+    );
+
+    const drivers = (result.Items || []).map((u) => ({
+      driverId: u.pk,
+      name: u.name || u.userName || "Driver",
+      mobile: u.mobile || null,
+    }));
+
+    return res.json({ ok: true, count: drivers.length, drivers });
   } catch (err) {
     return res.status(500).json({ ok: false, message: err.message });
   }
