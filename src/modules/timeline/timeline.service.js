@@ -1,12 +1,18 @@
 import { ddb } from "../../config/dynamo.js";
 import { QueryCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
+import timezone from "dayjs/plugin/timezone.js";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const IST = "Asia/Kolkata";
 
 const TABLE_TIMELINE = process.env.TABLE_TIMELINE || "tickin_timeline";
 const TABLE_ORDERS = process.env.ORDERS_TABLE || "tickin_orders";
 const TABLE_SLOT_TIMELINE =
   process.env.TABLE_SLOT_TIMELINE || "tickin_timeline_events";
-
-// ✅ Driver table
 const TABLE_USERS = process.env.USERS_TABLE || "tickin_users";
 
 /* ✅ Resolve FULL OrderId if HALF merged */
@@ -21,7 +27,6 @@ async function resolveTargetOrderId(orderId) {
   );
 
   if (!res.Item) return orderId;
-
   if (res.Item.mergedIntoOrderId) return String(res.Item.mergedIntoOrderId);
 
   return orderId;
@@ -58,7 +63,7 @@ function isAllocatedToUser(meta, user) {
   return false;
 }
 
-/* ✅ Get Driver Name from tickin_users */
+/* ✅ Get Driver Name */
 async function getDriverName(driverId) {
   if (!driverId) return null;
 
@@ -79,7 +84,23 @@ async function getDriverName(driverId) {
   }
 }
 
-/* ✅ Build Neat Timeline (YOUR FINAL FLOW) */
+/* ✅ Force display time (IST) */
+function prettyTime(ev) {
+  const t = ev?.displayTime || ev?.createdAt || ev?.timestamp || null;
+  if (!t) return null;
+
+  // if already formatted string like "10 Jan 2026, 10:30 AM" keep it
+  if (typeof t === "string" && /[A-Za-z]{3}/.test(t) && /AM|PM/i.test(t))
+    return t;
+
+  // else format ISO -> IST
+  const dt = dayjs(t);
+  if (!dt.isValid()) return String(t);
+
+  return dt.tz(IST).format("DD MMM YYYY, hh:mm A");
+}
+
+/* ✅ Build Neat Timeline (GAP FIX + alias mapping) */
 function buildNeatTimeline(events = []) {
   const STEPS = [
     { key: "ORDER_CREATED", label: "Order Created" },
@@ -101,11 +122,20 @@ function buildNeatTimeline(events = []) {
     { key: "DELIVERY_COMPLETED", label: "Delivery Completed" },
   ];
 
+  // ✅ ALIAS FIX (routes write LOAD_START/LOAD_END)
+  const ALIAS = {
+    LOAD_START: "LOADING_START",
+    LOAD_END: "LOADING_COMPLETED",
+    LOADING_STARTED: "LOADING_START",
+  };
+
   // ✅ keep latest event per key
   const map = {};
   for (const e of events) {
     if (!e?.event) continue;
-    const key = String(e.event).toUpperCase();
+
+    let key = String(e.event).trim().toUpperCase();
+    if (ALIAS[key]) key = ALIAS[key];
 
     if (!map[key]) {
       map[key] = e;
@@ -116,32 +146,36 @@ function buildNeatTimeline(events = []) {
     }
   }
 
-  // ✅ find last done step
-  let lastDoneIdx = -1;
+  // ✅ farthest DONE step index => removes GAP
+  let maxDoneIdx = -1;
   STEPS.forEach((s, idx) => {
-    if (map[s.key]) lastDoneIdx = idx;
+    if (map[s.key]) maxDoneIdx = Math.max(maxDoneIdx, idx);
   });
 
   return STEPS.map((s, idx) => {
     const ev = map[s.key] || null;
 
     let status = "UPCOMING";
+
+    // ✅ GAP FIX:
+    // If a later step is DONE, previous steps are also DONE
+    if (idx < maxDoneIdx) status = "DONE";
     if (ev) status = "DONE";
-    else if (idx === lastDoneIdx + 1) status = "CURRENT";
+    if (!ev && idx === maxDoneIdx + 1) status = "CURRENT";
 
     return {
       step: idx + 1,
       key: s.key,
       title: s.label,
       status,
-      time: ev?.displayTime || ev?.createdAt || ev?.timestamp || null,
+      time: ev ? prettyTime(ev) : null,
       data: ev?.data || null,
       raw: ev,
     };
   });
 }
 
-/* ✅ Build Meta for UI */
+/* ✅ Build Meta */
 async function buildMeta(meta) {
   const driverId =
     meta.driverId || meta.driverUserId || meta.driverMobile || null;
@@ -169,7 +203,41 @@ async function buildMeta(meta) {
 
     status: meta.status || null,
     slotId: meta.slotId || meta.slotPk || null,
+
+    // ✅ merge info for option-1
+    isMerged: Boolean(
+      meta.isMerged ||
+          meta.mergedAt ||
+          (Array.isArray(meta.childOrderIds) && meta.childOrderIds.length > 0)
+    ),
+    childOrderIds: Array.isArray(meta.childOrderIds) ? meta.childOrderIds : [],
+    mergedAt: meta.mergedAt || null,
   };
+}
+async function fetchRawTimeline(orderId) {
+  const out = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_TIMELINE,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": `ORDER#${orderId}` },
+      ScanIndexForward: true,
+    })
+  );
+  return out.Items || [];
+}
+function trimPreMerge(neatList = []) {
+  // keep steps from start until SLOT_BOOKING (inclusive)
+  const idx = neatList.indexWhere?.((e) => false); // not needed in JS, ignore
+
+  const cutoffKeys = new Set(["SLOT_BOOKING", "SLOT_BOOKING_COMPLETED"]);
+
+  const out = [];
+  for (const step of neatList) {
+    out.push(step);
+    const key = String(step?.key || "").toUpperCase();
+    if (cutoffKeys.has(key)) break;
+  }
+  return out;
 }
 
 /* ✅ GET Order Timeline (RAW + NEAT + META) */
@@ -181,7 +249,6 @@ export async function getOrderTimeline(req, res) {
 
     const targetOrderId = await resolveTargetOrderId(orderId);
 
-    // ✅ fetch order meta
     const orderMetaRes = await ddb.send(
       new GetCommand({
         TableName: TABLE_ORDERS,
@@ -196,9 +263,7 @@ export async function getOrderTimeline(req, res) {
     const user = req.user || {};
     const role = String(user.role || "").toUpperCase();
 
-    // ✅ MASTER / MANAGER can access all
     if (role !== "MASTER" && role !== "MANAGER") {
-      // ✅ Distributor / Sales => own OR allocated
       if (
         role === "DISTRIBUTOR" ||
         role === "SALESMAN" ||
@@ -215,7 +280,6 @@ export async function getOrderTimeline(req, res) {
         }
       }
 
-      // ✅ Driver => assigned orders only
       if (role === "DRIVER") {
         const loggedDriverId = String(user.userId || user.id || user.mobile || "");
         const orderDriverId = String(meta.driverId || "");
@@ -226,7 +290,6 @@ export async function getOrderTimeline(req, res) {
       }
     }
 
-    // ✅ query timeline
     const out = await ddb.send(
       new QueryCommand({
         TableName: TABLE_TIMELINE,
@@ -254,7 +317,63 @@ export async function getOrderTimeline(req, res) {
   }
 }
 
-/* ✅ GET Slot Timeline */
+/* ✅ GET Order Timeline (NEAT ONLY) */
+export async function getOrderTimelineNeat(req, res) {
+  try {
+    const { orderId } = req.params;
+    if (!orderId)
+      return res.status(400).json({ ok: false, message: "orderId required" });
+
+    const targetOrderId = await resolveTargetOrderId(orderId);
+
+    const orderMetaRes = await ddb.send(
+      new GetCommand({
+        TableName: TABLE_ORDERS,
+        Key: { pk: `ORDER#${targetOrderId}`, sk: "META" },
+      })
+    );
+    const meta = orderMetaRes.Item || {};
+
+    // ✅ FULL timeline (common)
+    const rawTimeline = await fetchRawTimeline(targetOrderId);
+    const neatTimeline = buildNeatTimeline(rawTimeline);
+
+    // ✅ meta includes isMerged + childOrderIds
+    const uiMeta = await buildMeta(meta);
+
+    // ✅ preMerge block (D1 + D2)
+    let preMerge = null;
+
+    if (uiMeta.isMerged && Array.isArray(uiMeta.childOrderIds) && uiMeta.childOrderIds.length) {
+      const kids = uiMeta.childOrderIds.map(String);
+
+      const pre = {};
+
+      // fetch each child order neat timeline and trim upto SLOT_BOOKING
+      for (const kidId of kids) {
+        const childRaw = await fetchRawTimeline(kidId);
+        const childNeat = buildNeatTimeline(childRaw);
+        pre[kidId] = trimPreMerge(childNeat);
+      }
+
+      preMerge = pre;
+    }
+
+    return res.json({
+      ok: true,
+      requestedOrderId: orderId,
+      orderId: targetOrderId,
+      meta: uiMeta,
+      preMerge,      // ✅ NEW
+      neatTimeline,  // ✅ common
+    });
+  } catch (e) {
+    console.error("getOrderTimelineNeat error:", e);
+    return res.status(500).json({ ok: false, message: e.message || String(e) });
+  }
+}
+
+/* ✅ GET Slot Timeline (RAW + NEAT) */
 export async function getSlotTimeline(req, res) {
   try {
     const { slotId } = req.params;
@@ -276,54 +395,11 @@ export async function getSlotTimeline(req, res) {
     return res.json({ ok: true, slotId, timeline: rawTimeline, neatTimeline });
   } catch (e) {
     console.error("getSlotTimeline error:", e);
-    return res.status(500).json({ ok: false, message: e.message });
+    return res.status(500).json({ ok: false, message: e.message || String(e) });
   }
 }
 
-/* ✅ ONLY neat response (WITH META) */
-export async function getOrderTimelineNeat(req, res) {
-  try {
-    const { orderId } = req.params;
-    if (!orderId)
-      return res.status(400).json({ ok: false, message: "orderId required" });
-
-    const targetOrderId = await resolveTargetOrderId(orderId);
-
-    const orderMetaRes = await ddb.send(
-      new GetCommand({
-        TableName: TABLE_ORDERS,
-        Key: { pk: `ORDER#${targetOrderId}`, sk: "META" },
-      })
-    );
-    const meta = orderMetaRes.Item || {};
-
-    const out = await ddb.send(
-      new QueryCommand({
-        TableName: TABLE_TIMELINE,
-        KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: { ":pk": `ORDER#${targetOrderId}` },
-        ScanIndexForward: true,
-      })
-    );
-
-    const rawTimeline = out.Items || [];
-    const neatTimeline = buildNeatTimeline(rawTimeline);
-    const uiMeta = await buildMeta(meta);
-
-    return res.json({
-      ok: true,
-      requestedOrderId: orderId,
-      orderId: targetOrderId,
-      meta: uiMeta,
-      neatTimeline,
-    });
-  } catch (e) {
-    console.error("getOrderTimelineNeat error:", e);
-    return res.status(500).json({ ok: false, message: e.message });
-  }
-}
-
-/* ✅ ONLY slot neat response */
+/* ✅ GET Slot Timeline (NEAT ONLY) */
 export async function getSlotTimelineNeat(req, res) {
   try {
     const { slotId } = req.params;
@@ -345,6 +421,6 @@ export async function getSlotTimelineNeat(req, res) {
     return res.json({ ok: true, slotId, neatTimeline });
   } catch (e) {
     console.error("getSlotTimelineNeat error:", e);
-    return res.status(500).json({ ok: false, message: e.message });
+    return res.status(500).json({ ok: false, message: e.message || String(e) });
   }
 }

@@ -5,6 +5,7 @@ import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { resolveMergeKeyByRadius, haversineKm } from "./geoMerge.helper.js";
 import { pairingMap } from "../../appInit.js";
 import { getDistributorByCode } from "../distributors/distributors.service.js";
+import { markOrderAsMerged } from "../timeline/timeline.helper.js";
 
 import {
   GetCommand,
@@ -739,16 +740,22 @@ export async function bookSlot({
       })
     );
 
-    return {
-      ok: true,
-      bookingId,
-      type: "FULL",
-      userId: uid,
-      distributorName: resolvedName,
-      amount: amt,
-      lat: safeLat,
-      lng: safeLng,
-    };
+   return {
+  ok: true,
+  bookingId,
+  slotId,          // ✅ MUST return
+  orderId,         // ✅ MUST return
+  type: "FULL",
+  userId: uid,
+  distributorName: resolvedName,
+  amount: amt,
+  lat: safeLat,
+  lng: safeLng,
+  slotTime: time,
+  date,
+  companyCode,
+};
+
   }
 
   /* ======================================================
@@ -1185,7 +1192,7 @@ const displayName =
         orderId: fullOrderId,
         companyCode,
         distributorId: bookings[0].distributorCode,
-        distributorName: bookings[0].distributorName,
+        distributorName: displayName,
         mergeKey,
         mergedOrderIds,
         slotId: finalSlotId,
@@ -1241,6 +1248,11 @@ const displayName =
       );
     }
   }
+ // ✅ PASTE THIS HERE
+  await markOrderAsMerged({
+    fullOrderId,
+    childOrderIds: mergedOrderIds,
+  });
 
   return {
     ok: true,
@@ -1253,7 +1265,6 @@ const displayName =
     mergedOrderIds,
   };
 }
-
 /* ✅ Manual merge */
 export async function managerMergeOrdersToMergeKey({
   companyCode,
@@ -1469,7 +1480,6 @@ return {
   finalTotal,
   tripStatus: newTripStatus,
 };
-
 }
 
 /* ✅ CANCEL CONFIRMED MERGE */

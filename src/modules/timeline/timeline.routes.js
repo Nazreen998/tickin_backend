@@ -35,7 +35,6 @@ async function resolveTrackingOrderId(orderId) {
 }
 
 /* ✅ 1) LOADING START */
-/* ✅ 1) LOADING START */
 router.post(
   "/loading-start",
   verifyToken,
@@ -53,6 +52,7 @@ router.post(
         orderId: trackingOrderId,
         event: "LOAD_START",
         by: user.mobile,
+        byUserName: user?.name || user?.userName || null,
         role: user.role,
         data: { originalOrderId: orderId },
       });
@@ -77,6 +77,7 @@ router.post(
     }
   }
 );
+
 /* ✅ 2) LOADING ITEM */
 router.post(
   "/loading-item",
@@ -98,6 +99,7 @@ router.post(
         orderId: trackingOrderId,
         event: "LOADING_ITEM",
         by: user.mobile,
+        byUserName: user?.name || user?.userName || null,
         role: user.role,
         data: {
           productId,
@@ -121,8 +123,7 @@ router.post(
   allowRoles("MASTER", "MANAGER"),
   async (req, res) => {
     try {
-      const user = req.user;
-      const { orderId, vehicleNo } = req.body;
+      const { orderId, vehicleNo, vehicleType } = req.body;
 
       if (!orderId)
         return res.status(400).json({ message: "orderId required" });
@@ -134,9 +135,14 @@ router.post(
       await addTimelineEvent({
         orderId: trackingOrderId,
         event: "VEHICLE_SELECTED",
-        by: user.mobile,
-        role: user.role,
-        data: { vehicleNo, originalOrderId: orderId },
+        by: req.user?.mobile || "system",
+        byUserName: req.user?.name || req.user?.userName || null,
+        role: req.user?.role || "MANAGER",
+        data: {
+          vehicleNo: vehicleNo || null,
+          vehicleType: vehicleType || null,
+          originalOrderId: orderId,
+        },
       });
 
       await ddb.send(
@@ -159,7 +165,6 @@ router.post(
 );
 
 /* ✅ 4) LOADING END */
-/* ✅ 4) LOADING END */
 router.post(
   "/loading-end",
   verifyToken,
@@ -177,6 +182,7 @@ router.post(
         orderId: trackingOrderId,
         event: "LOAD_END",
         by: user.mobile,
+        byUserName: user?.name || user?.userName || null,
         role: user.role,
         data: { originalOrderId: orderId },
       });
@@ -202,7 +208,6 @@ router.post(
   }
 );
 
-
 /* ✅ 5) ASSIGN DRIVER */
 router.post(
   "/assign-driver",
@@ -210,7 +215,6 @@ router.post(
   allowRoles("MANAGER", "MASTER"),
   async (req, res) => {
     try {
-      const user = req.user;
       const { orderId, driverId, vehicleNo } = req.body;
 
       if (!orderId)
@@ -223,9 +227,11 @@ router.post(
       await addTimelineEvent({
         orderId: trackingOrderId,
         event: "DRIVER_ASSIGNED",
-        by: user.mobile,
-        role: user.role,
-        data: { driverId, vehicleNo, originalOrderId: orderId },
+        by: req.user?.mobile || "system",
+        byUserName: req.user?.name || req.user?.userName || null,
+        role: req.user?.role || "MANAGER",
+        // ✅ fixed undefined variables (driverPk/driver.name removed)
+        data: { driverId: String(driverId), driverName: null, vehicleNo: vehicleNo || null },
       });
 
       await ddb.send(

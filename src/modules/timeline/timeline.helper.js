@@ -1,6 +1,13 @@
 import dayjs from "dayjs";
-import { PutCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
+import { PutCommand, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "../../config/dynamo.js";
+import utc from "dayjs/plugin/utc.js";
+import timezone from "dayjs/plugin/timezone.js";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const IST = "Asia/Kolkata";
 
 const TABLE_ORDERS = process.env.ORDERS_TABLE || "tickin_orders";
 const TABLE_ORDER_TIMELINE = process.env.TABLE_TIMELINE || "tickin_timeline";
@@ -67,7 +74,8 @@ export const addTimelineEvent = async ({
     status: "DONE",
 
     timestamp,
-    displayTime: dayjs(timestamp).format("DD MMM YYYY, hh:mm A"),
+    // ✅ IST display time
+    displayTime: dayjs(timestamp).tz(IST).format("DD MMM YYYY, hh:mm A"),
 
     by: String(by || ""),
     byUserName: byUserName ? String(byUserName) : null,
@@ -126,7 +134,8 @@ export const addSlotTimelineEvent = async ({
     status: "DONE",
 
     timestamp,
-    displayTime: dayjs(timestamp).format("DD MMM YYYY, hh:mm A"),
+    // ✅ IST display time
+    displayTime: dayjs(timestamp).tz(IST).format("DD MMM YYYY, hh:mm A"),
 
     distributorName: distributorName ? String(distributorName) : null,
     amount: Number(amount || 0),
@@ -150,3 +159,28 @@ export const addSlotTimelineEvent = async ({
 
   return true;
 };
+// ✅ Mark master order as merged and store child orderIds
+export async function markOrderAsMerged({ fullOrderId, childOrderIds = [] }) {
+  if (!fullOrderId) throw new Error("fullOrderId required");
+
+  const now = new Date().toISOString();
+  const kids = Array.from(
+    new Set((childOrderIds || []).filter(Boolean).map((x) => String(x)))
+  );
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_ORDERS,
+      Key: { pk: `ORDER#${String(fullOrderId)}`, sk: "META" },
+      UpdateExpression:
+        "SET isMerged=:m, childOrderIds=:c, mergedAt=:t, updatedAt=:t",
+      ExpressionAttributeValues: {
+        ":m": true,
+        ":c": kids,
+        ":t": now,
+      },
+    })
+  );
+
+  return true;
+}

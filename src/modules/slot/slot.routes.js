@@ -1,7 +1,6 @@
 import express from "express";
 import { verifyToken } from "../../middleware/auth.middleware.js";
 import { allowRoles } from "../../middleware/role.middleware.js";
-
 import {
   getSlotGrid,
   bookSlot,
@@ -22,7 +21,7 @@ import {
 } from "../slot/slot.service.js";
 
 // ✅ NEW: Slot Timeline writer
-import { addSlotTimelineEvent } from "../timeline/timeline.helper.js";
+import { addTimelineEvent, addSlotTimelineEvent } from "../timeline/timeline.helper.js";
 
 const router = express.Router();
 
@@ -115,10 +114,10 @@ router.post(
       const user = req.user || {};
       const out = await bookSlot(req.body);
 
-      // ✅ write slot timeline event (only if slotId exists)
       const slotId = extractSlotId(out);
       const orderId = extractOrderId(out, req.body);
 
+      // ✅ 1) SLOT TIMELINE TABLE (tickin_timeline_events)
       if (slotId) {
         await addSlotTimelineEvent({
           slotId,
@@ -130,11 +129,29 @@ router.post(
           distributorName: req.body?.distributorName || null,
           amount: Number(req.body?.amount || req.body?.totalAmount || 0),
           data: {
-            bookingType: req.body?.slotType || req.body?.type || null,
+            slotId,
             companyCode: req.body?.companyCode || null,
             date: req.body?.date || null,
             time: req.body?.time || null,
-            originalBody: req.body || {},
+            bookingType: req.body?.slotType || req.body?.type || null,
+          },
+        });
+      }
+
+      // ✅ 2) ORDER TIMELINE TABLE (tickin_timeline)  ==> IMPORTANT for neatTimeline DONE
+      if (orderId) {
+        await addTimelineEvent({
+          orderId,
+          event: "SLOT_BOOKING",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          data: {
+            slotId,
+            companyCode: req.body?.companyCode || null,
+            date: req.body?.date || null,
+            time: req.body?.time || null,
+            bookingType: req.body?.slotType || req.body?.type || null,
           },
         });
       }
@@ -297,6 +314,7 @@ router.post(
 
       const slotId = extractSlotId(out) || req.body?.slotId || req.body?.slotID;
 
+      // ✅ slot timeline
       if (slotId) {
         await addSlotTimelineEvent({
           slotId,
@@ -311,13 +329,49 @@ router.post(
         });
       }
 
+      // ✅ IMPORTANT: orderIds from response (best)
+      const orderIds =
+        out?.orderIds ||
+        out?.orders ||
+        out?.data?.orderIds ||
+        req.body?.orderIds ||
+        [];
+
+      // ✅ write SLOT_BOOKING_COMPLETED for each order
+      if (Array.isArray(orderIds)) {
+        for (const oid of orderIds) {
+          if (!oid) continue;
+
+          await addTimelineEvent({
+            orderId: String(oid),
+            event: "SLOT_BOOKING_COMPLETED",
+            by: user.mobile || user.userId || "SYSTEM",
+            byUserName: user.name || user.userName || null,
+            role: user.role || null,
+            data: {
+              slotId,
+              mergeKey: out?.mergeKey || out?.flowKey || null,
+            },
+          });
+
+          // ✅ optional: ORDER_CONFIRMED also at merge time
+          await addTimelineEvent({
+            orderId: String(oid),
+            event: "ORDER_CONFIRMED",
+            by: user.mobile || user.userId || "SYSTEM",
+            byUserName: user.name || user.userName || null,
+            role: user.role || null,
+            data: { slotId },
+          });
+        }
+      }
+
       return res.json(out);
     } catch (err) {
       return res.status(400).json({ ok: false, message: err.message });
     }
   }
 );
-
 /* ✅ MANAGER CANCEL CONFIRMED MERGE */
 router.post(
   "/merge/cancel-confirm",
