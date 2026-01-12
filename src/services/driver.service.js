@@ -332,16 +332,18 @@ export async function updateDriverStatus({
     event: desired,
     by: String(after.driverId || "DRIVER"),
     role: "DRIVER",
-    data: {
-      stage:
-        desired === "WAREHOUSE_REACHED"
-          ? "WAREHOUSE"
-          : desired === "DELIVERY_COMPLETED"
-            ? "DONE"
-            : stopLabel(idx),
-      stopIndex: idx,
-      currentLat,
-      currentLng,
+     // 🔥 THIS IS THE FIX
+  createdAt: new Date().toISOString(),
+  displayTime: new Date().toISOString(),
+
+  data: {
+    stage:
+      desired === "WAREHOUSE_REACHED"
+        ? "WAREHOUSE"
+        : `D${newIdx + 1}`,
+    stopIndex: idx,
+    currentLat,
+    currentLng,
     },
   });
 
