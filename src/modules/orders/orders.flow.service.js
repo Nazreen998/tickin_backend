@@ -32,26 +32,27 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
   if (key.startsWith("ORD")) return [key];
   if (/^\d+$/.test(key)) return [`ORD${key}`];
 
-  // ✅ 1) First try BOOKINGS table (because GEO_* comes from slot booking flow)
+  // ✅ 1) Try BOOKINGS table (GEO_* usually comes from slot booking flow)
   const bRes = await ddb.send(
     new ScanCommand({
       TableName: BOOKINGS_TABLE,
       FilterExpression: "mergeKey = :m OR flowKey = :m",
       ExpressionAttributeValues: { ":m": key },
-      ProjectionExpression: "orderId, mergeKey, flowKey",
+      ProjectionExpression: "orderId, mergeKey, flowKey, mergedIntoOrderId",
     })
   );
 
-  const bIds = (bRes.Items || []).map(x => x.orderId).filter(Boolean);
-  if (bIds.length > 0) return [...new Set(bIds)];
+  const bIds = (bRes.Items || [])
+    .map((x) => x.orderId)
+    .filter(Boolean);
 
-  // ✅ 2) Fallback to ORDERS table mergeKey
+  // ✅ 2) Also scan ORDERS table by mergeKey (this will include ORD_FULL_ master meta)
   const scanRes = await ddb.send(
     new ScanCommand({
       TableName: ORDERS_TABLE,
       FilterExpression: "mergeKey = :m",
       ExpressionAttributeValues: { ":m": key },
-      ProjectionExpression: "orderId, pk, mergeKey",
+      ProjectionExpression: "orderId, pk, mergeKey, mergedIntoOrderId",
     })
   );
 
@@ -59,7 +60,18 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
     .map((x) => x.orderId || (x.pk ? x.pk.replace("ORDER#", "") : null))
     .filter(Boolean);
 
-  return [...new Set(ids)];
+  // ✅ combine both
+  const all = [...bIds, ...ids].filter(Boolean);
+
+  // ✅ unique + keep FULL order first
+  const uniq = [...new Set(all)];
+  uniq.sort((a, b) => {
+    const af = String(a).startsWith("ORD_FULL_") ? 0 : 1;
+    const bf = String(b).startsWith("ORD_FULL_") ? 0 : 1;
+    return af - bf;
+  });
+
+  return uniq;
 }
 
 /* ============================================================
@@ -122,11 +134,16 @@ async function ensureVehicleSelected(orderIds) {
 export const getOrderFlowByKey = async (req, res) => {
   try {
     const key = req.params.flowKey;
-    if (!key) return res.status(400).json({ ok: false, message: "flowKey required" });
+    if (!key) {
+      return res.status(400).json({ ok: false, message: "flowKey required" });
+    }
 
     const orderIds = await resolveOrderIdsFromFlowKey(key);
-    if (orderIds.length === 0)
-      return res.status(404).json({ ok: false, message: "No orders found for this flowKey" });
+    if (orderIds.length === 0) {
+      return res
+        .status(404)
+        .json({ ok: false, message: "No orders found for this flowKey" });
+    }
 
     // fetch all orders meta
     const orders = [];
@@ -139,6 +156,25 @@ export const getOrderFlowByKey = async (req, res) => {
       );
       if (g.Item) orders.push(g.Item);
     }
+
+    if (orders.length === 0) {
+      return res
+        .status(404)
+        .json({ ok: false, message: "Orders meta not found" });
+    }
+
+    // ✅ decide master order id for tracking
+    const masterFromFull = orders.find((o) =>
+      String(o.orderId || "").startsWith("ORD_FULL_")
+    )?.orderId;
+
+    const masterFromChildren =
+      orders
+        .map((o) => o.mergedIntoOrderId)
+        .find((x) => x && String(x).trim() !== "") || null;
+
+    const masterOrderId =
+      masterFromFull || masterFromChildren || orders[0]?.orderId || orderIds[0];
 
     // ✅ Combined response for UI
     let totalQty = 0;
@@ -155,24 +191,32 @@ export const getOrderFlowByKey = async (req, res) => {
     });
 
     const status = orders[0]?.status || "UNKNOWN";
-    const distributors = orders.map((o, idx) => ({
-  label: `D${idx + 1}`,
-  distributorId: o.distributorId || null,
-  distributorName: o.distributorName || null,
-  orderId: o.orderId || null,
-  amount: Number(o.totalAmount || o.grandTotal || o.total || 0),
-  qty: Number(o.totalQty || o.qty || 0),
-}));
 
-const distributorDisplay =
-  distributors.length <= 1
-    ? (distributors[0]?.distributorName || "-")
-    : distributors.map(d => `${d.label}: ${d.distributorName || "-"}`).join(" | ");
+    const distributors = orders.map((o, idx) => ({
+      label: `D${idx + 1}`,
+      distributorId: o.distributorId || null,
+      distributorName: o.distributorName || null,
+      orderId: o.orderId || null,
+      amount: Number(o.totalAmount || o.grandTotal || o.total || 0),
+      qty: Number(o.totalQty || o.qty || 0),
+    }));
+
+    const distributorDisplay =
+      distributors.length <= 1
+        ? (distributors[0]?.distributorName || "-")
+        : distributors
+            .map((d) => `${d.label}: ${d.distributorName || "-"}`)
+            .join(" | ");
 
     return res.json({
       ok: true,
       flowKey: key,
       mergeKey: orders[0]?.mergeKey || null,
+
+      // ✅ NEW: tracking fix
+      masterOrderId,
+      trackingOrderId: masterOrderId,
+
       orderIds,
       totalQty,
       grandTotal,
@@ -180,9 +224,10 @@ const distributorDisplay =
       vehicleType: orders[0]?.vehicleType || null,
       vehicleNo: orders[0]?.vehicleNo || null,
       loadingItems,
-      distributors,          // ✅ structured
-      distributorDisplay,    // ✅ string for card title
-      orders, // ✅ send full orders for D1/D2 separation if needed
+
+      distributors,       // ✅ structured
+      distributorDisplay, // ✅ string for UI
+      orders,             // ✅ full orders
     });
   } catch (err) {
     return res.status(500).json({ ok: false, message: err.message });
@@ -226,8 +271,6 @@ export const vehicleSelected = async (req, res) => {
 
 /* ============================================================
    ✅ LOADING START
-   ✅ Supports mergeKey + orderId (D1/D2 separate)
-   ✅ Requires vehicle selected first
 ============================================================ */
 export const loadingStart = async (req, res) => {
   try {
@@ -236,7 +279,6 @@ export const loadingStart = async (req, res) => {
 
     if (!key) return res.status(400).json({ ok: false, message: "flowKey required" });
 
-    // ✅ If orderId provided => only that order gets updated
     const orderIds = req.body.orderId
       ? [req.body.orderId]
       : await resolveOrderIdsFromFlowKey(key);
@@ -244,7 +286,6 @@ export const loadingStart = async (req, res) => {
     if (orderIds.length === 0)
       return res.status(404).json({ ok: false, message: "No orders found for this key" });
 
-    // ✅ Vehicle must be selected
     const vehicleOk = await ensureVehicleSelected(orderIds);
     if (!vehicleOk) {
       return res.status(400).json({
@@ -254,7 +295,8 @@ export const loadingStart = async (req, res) => {
     }
 
     await updateOrders(orderIds, {
-      UpdateExpression: "SET #s = :st, loadingStarted = :ls, loadingStartedAt = :t",
+      UpdateExpression:
+        "SET #s = :st, loadingStarted = :ls, loadingStartedAt = :t",
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
         ":st": "LOADING_STARTED",
@@ -263,15 +305,14 @@ export const loadingStart = async (req, res) => {
       },
     });
 
-    // timeline event per order
     for (const oid of orderIds) {
       await addTimelineEvent({
         orderId: oid,
         event: "LOADING_STARTED",
         by: user?.mobile || "system",
-  byUserName: user?.name || user?.userName || null,
-  role: user?.role || "MANAGER",
-  data: { flowKey: key },  // ✅ use data
+        byUserName: user?.name || user?.userName || null,
+        role: user?.role || "MANAGER",
+        data: { flowKey: key },
       });
     }
 
@@ -288,8 +329,6 @@ export const loadingStart = async (req, res) => {
 
 /* ============================================================
    ✅ LOADING END
-   ✅ Supports mergeKey + orderId (D1/D2 separate)
-   ✅ Requires vehicle selected first
 ============================================================ */
 export const loadingEnd = async (req, res) => {
   try {
@@ -305,7 +344,6 @@ export const loadingEnd = async (req, res) => {
     if (orderIds.length === 0)
       return res.status(404).json({ ok: false, message: "No orders found for this key" });
 
-    // ✅ Vehicle must be selected
     const vehicleOk = await ensureVehicleSelected(orderIds);
     if (!vehicleOk) {
       return res.status(400).json({
@@ -323,15 +361,14 @@ export const loadingEnd = async (req, res) => {
       },
     });
 
-    // timeline per order
     for (const oid of orderIds) {
       await addTimelineEvent({
         orderId: oid,
         event: "LOADING_COMPLETED",
         by: user?.mobile || "system",
-  byUserName: user?.name || user?.userName || null,
-  role: user?.role || "MANAGER",
-  data: { flowKey: key },
+        byUserName: user?.name || user?.userName || null,
+        role: user?.role || "MANAGER",
+        data: { flowKey: key },
       });
     }
 
@@ -348,7 +385,6 @@ export const loadingEnd = async (req, res) => {
 
 /* ============================================================
    ✅ ASSIGN DRIVER
-   ✅ Vehicle must be selected first
 ============================================================ */
 export const assignDriver = async (req, res) => {
   try {
@@ -362,7 +398,6 @@ export const assignDriver = async (req, res) => {
     if (orderIds.length === 0)
       return res.status(404).json({ ok: false, message: "No orders found for this key" });
 
-    // ✅ Vehicle must be selected before assigning driver
     const vehicleOk = await ensureVehicleSelected(orderIds);
     if (!vehicleOk) {
       return res.status(400).json({
@@ -379,12 +414,15 @@ export const assignDriver = async (req, res) => {
         Key: { pk: driverPk, sk: "PROFILE" },
       })
     );
+
     const driver = dg.Item;
-    if (!driver)
+    if (!driver) {
       return res.status(404).json({ ok: false, message: "Driver not found" });
+    }
 
     await updateOrders(orderIds, {
-      UpdateExpression: "SET #s = :st, driverId = :d, driverName = :dn, driverMobile = :dm,vehicleNo = :vn",
+      UpdateExpression:
+        "SET #s = :st, driverId = :d, driverName = :dn, driverMobile = :dm, vehicleNo = :vn",
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
         ":st": "DRIVER_ASSIGNED",

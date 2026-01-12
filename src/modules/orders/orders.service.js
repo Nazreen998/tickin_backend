@@ -34,7 +34,6 @@ export const getSlotConfirmedOrders = async (req, res) => {
 
     const pk = `COMPANY#VAGR_IT#DATE#${date}`;
 
-    // ✅ 1) Fetch CONFIRMED bookings for given date
     const bookingsRes = await ddb.send(
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
@@ -52,10 +51,8 @@ export const getSlotConfirmedOrders = async (req, res) => {
 
     const bookings = bookingsRes.Items || [];
 
-    // ✅ 2) unique orderIds
     const orderIds = [...new Set(bookings.map((b) => b.orderId).filter(Boolean))];
 
-    // ✅ 3) fetch order metas for all orderIds
     const ordersMeta = [];
     for (const orderId of orderIds) {
       const orderRes = await ddb.send(
@@ -67,7 +64,6 @@ export const getSlotConfirmedOrders = async (req, res) => {
       if (orderRes.Item) ordersMeta.push(orderRes.Item);
     }
 
-    // ✅ 4) group by mergeKey (if exists) else by orderId
     const grouped = {};
 
     for (const order of ordersMeta) {
@@ -76,8 +72,6 @@ export const getSlotConfirmedOrders = async (req, res) => {
       if (!booking) continue;
 
       const mk = booking.mergeKey || order.mergeKey || null;
-
-      // ✅ flowKey = mergeKey (preferred) else orderId
       const flowKey = mk ? mk : oid;
 
       if (!grouped[flowKey]) {
@@ -88,8 +82,6 @@ export const getSlotConfirmedOrders = async (req, res) => {
           slotTime: booking.slotTime,
           pos: booking.slotPos || booking.pos || null,
           vehicleType: booking.vehicleType,
-
-          // ✅ participants orders list
           orderIds: [],
           distributors: [],
           totalQty: 0,
@@ -105,47 +97,28 @@ export const getSlotConfirmedOrders = async (req, res) => {
         distributorName: booking.distributorName || order.distributorName,
         distributorId: booking.distributorCode || order.distributorId,
       });
-const finalOrders = Object.values(grouped).map((g) => {
-  // ✅ D1/D2 format string (same as manager flow expectation)
-  const names = (g.distributors || [])
-    .map((d, i) => `D${i + 1}: ${d.distributorName || "-"}`)
-    .join(" | ");
-
-  // ✅ for old UI fields (no frontend change)
-  return {
-    ...g,
-
-    // UI reads this line mostly:
-    distributorName: names || (g.distributors?.[0]?.distributorName ?? "-"),
-
-    // aliases (some screens use Amount/Qty keys)
-    totalAmount: g.grandAmount,
-    amount: g.grandAmount,
-    qty: g.totalQty,
-
-    // ensure status always latest
-    status: g.status,
-  };
-});
 
       grouped[flowKey].totalQty += Number(order.totalQty || 0);
       grouped[flowKey].grandAmount += Number(order.totalAmount || 0);
 
-      // ✅ take latest status if any order progressed
       const st = String(order.status || "CONFIRMED").toUpperCase();
       if (st !== "CONFIRMED") grouped[flowKey].status = st;
     }
 
-    const finalOrders = Object.values(grouped);
-   for (const g of Object.values(grouped)) {
-  // D1/D2 string
-  const names = g.distributors.map((d, i) => `D${i + 1}: ${d.distributorName}`).join(" | ");
-  g.distributorName = names;            // ✅ UI-friendly single string
+    // ✅ Final shaping for UI (NO frontend changes)
+    const finalOrders = Object.values(grouped).map((g) => {
+      const names = (g.distributors || [])
+        .map((d, i) => `D${i + 1}: ${d.distributorName || "-"}`)
+        .join(" | ");
 
-  // also aliases for UI if it expects Qty/Amount fields
-  g.qty = g.totalQty;
-  g.amount = g.grandAmount;
-}
+      return {
+        ...g,
+        distributorName: names || (g.distributors?.[0]?.distributorName ?? "-"),
+        totalAmount: g.grandAmount,
+        amount: g.grandAmount,
+        qty: g.totalQty,
+      };
+    });
 
     return res.json({
       ok: true,
@@ -158,6 +131,7 @@ const finalOrders = Object.values(grouped).map((g) => {
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
+
 /*FLOW KEY*/ 
 export const getOrderFlowByKey = async (req, res) => {
   try {
