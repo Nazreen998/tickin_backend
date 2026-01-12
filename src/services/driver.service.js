@@ -333,9 +333,7 @@ export async function updateDriverStatus({
     by: String(after.driverId || "DRIVER"),
     role: "DRIVER",
      // 🔥 THIS IS THE FIX
-  createdAt: new Date().toISOString(),
-  displayTime: new Date().toISOString(),
-
+ eventAt: now,
   data: {
     stage:
       desired === "WAREHOUSE_REACHED"
