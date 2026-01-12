@@ -123,37 +123,37 @@ function prettyTime(ev) {
 function buildNeatTimeline(events = [], opts = {}) {
   const includeD2 = Boolean(opts.includeD2);
 
-  const BASE_STEPS = [
-  { key: "ORDER_CREATED", label: "Order Created" },
-  { key: "ORDER_CONFIRMED", label: "Order Confirmed" },
-  { key: "SLOT_BOOKING", label: "Slot Booking" },
-  { key: "SLOT_BOOKING_COMPLETED", label: "Slot Booking Completed" },
-  { key: "VEHICLE_SELECTED", label: "Vehicle Selected" },
-  { key: "LOADING_START", label: "Loading Start" },
-  { key: "LOADING_COMPLETED", label: "Loading Completed" },
-  { key: "DRIVER_ASSIGNED", label: "Driver Assigned" },
-  { key: "DRIVE_STARTED", label: "Drive Started" },
+  const STEPS_ALL = [
+    { key: "ORDER_CREATED", label: "Order Created" },
+    { key: "ORDER_CONFIRMED", label: "Order Confirmed" },
+    { key: "SLOT_BOOKING", label: "Slot Booking" },
+    { key: "SLOT_BOOKING_COMPLETED", label: "Slot Booking Completed" },
+    { key: "VEHICLE_SELECTED", label: "Vehicle Selected" },
+    { key: "LOADING_START", label: "Loading Start" },
+    { key: "LOADING_COMPLETED", label: "Loading Completed" },
+    { key: "DRIVER_ASSIGNED", label: "Driver Assigned" },
+    { key: "DRIVE_STARTED", label: "Drive Started" },
+    { key: "REACHED_D1", label: "Reached D1" },
+    { key: "UNLOADING_START_D1", label: "Unloading Start D1" },
+    { key: "UNLOADING_END_D1", label: "Unloading End D1" },
 
-  // D1
-  { key: "REACHED_D1", label: "Reached D1" },
-  { key: "UNLOADING_START_D1", label: "Unloading Start D1" },
-  { key: "UNLOADING_END_D1", label: "Unloading End D1" },
-];
+    // ✅ D2 steps (single order la hide)
+    { key: "REACHED_D2", label: "Reached D2" },
+    { key: "UNLOADING_START_D2", label: "Unloading Start D2" },
+    { key: "UNLOADING_END_D2", label: "Unloading End D2" },
 
-const MERGE_ONLY_STEPS = [
-  { key: "REACHED_D2", label: "Reached D2" },
-  { key: "UNLOADING_START_D2", label: "Unloading Start D2" },
-  { key: "UNLOADING_END_D2", label: "Unloading End D2" },
-];
-
-const FINAL_STEPS = [
-  { key: "WAREHOUSE_REACHED", label: "Warehouse Reached" },
-  { key: "DELIVERY_COMPLETED", label: "Delivery Completed" },
-];
-
-const STEPS = isMerged
-  ? [...BASE_STEPS, ...MERGE_ONLY_STEPS, ...FINAL_STEPS]
-  : [...BASE_STEPS, ...FINAL_STEPS];
+    { key: "WAREHOUSE_REACHED", label: "Warehouse Reached" },
+    { key: "DELIVERY_COMPLETED", label: "Delivery Completed" },
+  ];
+  
+  const STEPS = includeD2
+    ? STEPS_ALL
+    : STEPS_ALL.filter(
+        (s) =>
+          !["REACHED_D2", "UNLOADING_START_D2", "UNLOADING_END_D2"].includes(
+            s.key
+          )
+      );
 
   const ALIAS = {
     LOAD_START: "LOADING_START",
@@ -295,7 +295,7 @@ async function buildMeta(meta) {
   const isMerged = Boolean(
     meta.isMerged ||
       meta.mergedAt ||
-       (Array.isArray(meta?.childOrderIds) && meta.childOrderIds.length > 1)
+      (Array.isArray(childOrderIds) && childOrderIds.length > 1)
   );
 
   const distributorDisplay = await buildDistributorDisplay(meta, childOrderIds);
