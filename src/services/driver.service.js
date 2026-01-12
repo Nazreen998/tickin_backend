@@ -25,18 +25,30 @@ function extractLatLngFromUrl(url) {
     return { lat: null, lng: null };
   }
 
-  // Matches: 11.0214,76.9661 OR -11.0214,76.9661
-  const match = url.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
+  let match;
 
-  if (!match) {
-    return { lat: null, lng: null };
+  // 1️⃣ !3dLAT!4dLNG (Google Maps place URLs)
+  match = url.match(/!3d(-?\d+(\.\d+)?)!4d(-?\d+(\.\d+)?)/);
+  if (match) {
+    return {
+      lat: Number(match[1]),
+      lng: Number(match[3]),
+    };
   }
 
-  return {
-    lat: Number(match[1]),
-    lng: Number(match[2]),
-  };
+  // 2️⃣ lat,lng (plain or query param)
+  match = url.match(/(-?\d+(\.\d+)?)\s*,\s*(-?\d+(\.\d+)?)/);
+  if (match) {
+    return {
+      lat: Number(match[1]),
+      lng: Number(match[3]),
+    };
+  }
+
+  // ❌ Could not extract
+  return { lat: null, lng: null };
 }
+
 
 // Haversine distance in meters
 function haversineMeters(lat1, lon1, lat2, lon2) {
@@ -55,21 +67,28 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
 }
 
 function normalizeDistributors(order) {
-  // order.distributors should be like:
-  // [{ distributorCode, distributorName, lat, lng, items:[...] }, ...]
   const list = Array.isArray(order.distributors) ? order.distributors : [];
-  return list.map((d) => ({
-    distributorCode: d.distributorCode || d.code || null,
-    distributorName: d.distributorName || d.name || null,
-    lat: d.lat ?? d.latitude ?? parsed.lat ?? null,
-    lng: d.lng ?? d.longitude ?? parsed.lng ?? null,
-    mapUrl: d.mapUrl || null,
-    items: Array.isArray(d.items) ? d.items : [],
-    reachedAt: d.reachedAt || null,
-    unloadStartAt: d.unloadStartAt || null,
-    unloadEndAt: d.unloadEndAt || null,
-  }));
+
+  return list.map((d) => {
+    const parsed = extractLatLngFromUrl(d.mapUrl);
+
+    return {
+      distributorCode: d.distributorCode || d.code || null,
+      distributorName: d.distributorName || d.name || null,
+
+      // ✅ correct parsing
+      lat: d.lat ?? d.latitude ?? parsed.lat ?? null,
+      lng: d.lng ?? d.longitude ?? parsed.lng ?? null,
+
+      mapUrl: d.mapUrl || null,
+      items: Array.isArray(d.items) ? d.items : [],
+      reachedAt: d.reachedAt || null,
+      unloadStartAt: d.unloadStartAt || null,
+      unloadEndAt: d.unloadEndAt || null,
+    };
+  });
 }
+
 
 function getCurrentStop(order) {
   const distributors = normalizeDistributors(order);
@@ -153,9 +172,10 @@ export async function updateDriverStatus({ orderId, nextStatus, currentLat, curr
   const desired = String(nextStatus || "").toUpperCase();
 
   validateTransition(currentStatus, desired);
-  console.log("📍 CURRENT STOP:", stop);
   // Prepare multi-stop state
   const { distributors, idx, stop } = getCurrentStop(order);
+  console.log("📍 CURRENT STOP:", stop);
+
   let newIdx = idx;
   let newDistributors = distributors;
 
