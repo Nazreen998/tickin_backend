@@ -160,6 +160,8 @@ export async function validateDriverReach30m({ orderId, currentLat, currentLng }
     currentStopIndex: idx,
     distributorCode: stop.distributorCode,
     distributorName: stop.distributorName,
+    distributorLat: stop.lat,   // 👈 ADD
+    distributorLng: stop.lng,
   };
 }
 
