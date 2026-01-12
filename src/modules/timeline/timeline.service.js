@@ -1,4 +1,3 @@
-// timeline.service.js
 import { ddb } from "../../config/dynamo.js";
 import { QueryCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import dayjs from "dayjs";
@@ -15,13 +14,6 @@ const TABLE_ORDERS = process.env.ORDERS_TABLE || "tickin_orders";
 const TABLE_SLOT_TIMELINE =
   process.env.TABLE_SLOT_TIMELINE || "tickin_timeline_events";
 const TABLE_USERS = process.env.USERS_TABLE || "tickin_users";
-
-/* ✅ small helper (same logic as orders.flow.service.js) */
-function normalizeUserPk(id) {
-  const s = String(id || "").trim();
-  if (!s) return null;
-  return s.startsWith("USER#") ? s : `USER#${s}`;
-}
 
 /* ✅ Resolve FULL OrderId if HALF merged */
 async function resolveTargetOrderId(orderId) {
@@ -71,7 +63,14 @@ function isAllocatedToUser(meta, user) {
   return false;
 }
 
-/* ✅ Get Driver Name (FIX: USER# prefix + PROFILE/META) */
+/* ✅ Normalize USER PK */
+function normalizeUserPk(id) {
+  const s = String(id || "").trim();
+  if (!s) return null;
+  return s.startsWith("USER#") ? s : `USER#${s}`;
+}
+
+/* ✅ Get Driver Name (PROFILE/META both) */
 async function getDriverName(driverId) {
   if (!driverId) return null;
 
@@ -79,7 +78,7 @@ async function getDriverName(driverId) {
     const pk = normalizeUserPk(driverId);
     if (!pk) return null;
 
-    // ✅ Try PROFILE first (newer)
+    // ✅ Try PROFILE first
     const r1 = await ddb.send(
       new GetCommand({
         TableName: TABLE_USERS,
@@ -89,7 +88,7 @@ async function getDriverName(driverId) {
     const d1 = r1.Item;
     if (d1) return d1.name || d1.userName || d1.fullName || d1.mobile || null;
 
-    // ✅ fallback META (older)
+    // ✅ fallback META
     const r2 = await ddb.send(
       new GetCommand({
         TableName: TABLE_USERS,
@@ -110,20 +109,21 @@ function prettyTime(ev) {
   const t = ev?.displayTime || ev?.createdAt || ev?.timestamp || null;
   if (!t) return null;
 
-  // if already formatted string like "10 Jan 2026, 10:30 AM" keep it
+  // already formatted
   if (typeof t === "string" && /[A-Za-z]{3}/.test(t) && /AM|PM/i.test(t))
     return t;
 
-  // else format ISO -> IST
   const dt = dayjs(t);
   if (!dt.isValid()) return String(t);
 
   return dt.tz(IST).format("DD MMM YYYY, hh:mm A");
 }
 
-/* ✅ Build Neat Timeline (GAP FIX + alias mapping) */
-function buildNeatTimeline(events = []) {
-  const STEPS = [
+/* ✅ Build Neat Timeline (alias + gap fix) */
+function buildNeatTimeline(events = [], opts = {}) {
+  const includeD2 = Boolean(opts.includeD2);
+
+  const STEPS_ALL = [
     { key: "ORDER_CREATED", label: "Order Created" },
     { key: "ORDER_CONFIRMED", label: "Order Confirmed" },
     { key: "SLOT_BOOKING", label: "Slot Booking" },
@@ -136,22 +136,33 @@ function buildNeatTimeline(events = []) {
     { key: "REACHED_D1", label: "Reached D1" },
     { key: "UNLOADING_START_D1", label: "Unloading Start D1" },
     { key: "UNLOADING_END_D1", label: "Unloading End D1" },
+
+    // ✅ D2 steps (single order la hide)
     { key: "REACHED_D2", label: "Reached D2" },
     { key: "UNLOADING_START_D2", label: "Unloading Start D2" },
     { key: "UNLOADING_END_D2", label: "Unloading End D2" },
+
     { key: "WAREHOUSE_REACHED", label: "Warehouse Reached" },
     { key: "DELIVERY_COMPLETED", label: "Delivery Completed" },
   ];
 
-  // ✅ ALIAS FIX (routes write LOAD_START/LOAD_END or LOADING_STARTED)
+  const STEPS = includeD2
+    ? STEPS_ALL
+    : STEPS_ALL.filter(
+        (s) =>
+          !["REACHED_D2", "UNLOADING_START_D2", "UNLOADING_END_D2"].includes(
+            s.key
+          )
+      );
+
   const ALIAS = {
     LOAD_START: "LOADING_START",
     LOAD_END: "LOADING_COMPLETED",
     LOADING_STARTED: "LOADING_START",
-    LOADING_END: "LOADING_COMPLETED",
+    DRIVER_STARTED: "DRIVE_STARTED",
   };
 
-  // ✅ keep latest event per key
+  // keep latest event per key
   const map = {};
   for (const e of events) {
     if (!e?.event) continue;
@@ -168,7 +179,7 @@ function buildNeatTimeline(events = []) {
     }
   }
 
-  // ✅ farthest DONE step index => removes GAP
+  // gap fix
   let maxDoneIdx = -1;
   STEPS.forEach((s, idx) => {
     if (map[s.key]) maxDoneIdx = Math.max(maxDoneIdx, idx);
@@ -178,9 +189,6 @@ function buildNeatTimeline(events = []) {
     const ev = map[s.key] || null;
 
     let status = "UPCOMING";
-
-    // ✅ GAP FIX:
-    // If a later step is DONE, previous steps are also DONE
     if (idx < maxDoneIdx) status = "DONE";
     if (ev) status = "DONE";
     if (!ev && idx === maxDoneIdx + 1) status = "CURRENT";
@@ -197,7 +205,7 @@ function buildNeatTimeline(events = []) {
   });
 }
 
-/* ✅ Fetch Raw */
+/* ✅ Fetch Raw Timeline */
 async function fetchRawTimeline(orderId) {
   const out = await ddb.send(
     new QueryCommand({
@@ -210,7 +218,7 @@ async function fetchRawTimeline(orderId) {
   return out.Items || [];
 }
 
-/* ✅ Trim child timeline only till SLOT booking (inclusive) */
+/* ✅ PreMerge: only till SLOT_BOOKING_COMPLETED */
 function trimPreMerge(neatList = []) {
   const cutoffKeys = new Set(["SLOT_BOOKING", "SLOT_BOOKING_COMPLETED"]);
   const out = [];
@@ -222,42 +230,18 @@ function trimPreMerge(neatList = []) {
   return out;
 }
 
-/* ✅ Build preMerge block:
-   - Only meaningful when FULL order is merged
-   - Child orders show only upto SLOT_BOOKING_COMPLETED
-*/
-async function buildPreMergeIfNeeded(meta) {
-  const childIds = Array.isArray(meta.childOrderIds)
-    ? meta.childOrderIds
-    : Array.isArray(meta.mergedOrderIds)
-      ? meta.mergedOrderIds
-      : [];
-
-  const isMerged = Boolean(
-    meta.isMerged ||
-      meta.mergedAt ||
-      (Array.isArray(childIds) && childIds.length > 0)
+/* ✅ PostMerge: start AFTER SLOT_BOOKING_COMPLETED (i.e. from VEHICLE_SELECTED) */
+function trimPostMerge(neatList = []) {
+  const cutKey = "SLOT_BOOKING_COMPLETED";
+  const idx = neatList.findIndex(
+    (x) => String(x?.key || "").toUpperCase() === cutKey
   );
-
-  if (!isMerged || !childIds.length) return null;
-
-  const kids = childIds.map(String).filter(Boolean);
-  const pre = {};
-
-  for (const kidId of kids) {
-    const childRaw = await fetchRawTimeline(kidId);
-    const childNeat = buildNeatTimeline(childRaw);
-    pre[kidId] = trimPreMerge(childNeat);
-  }
-
-  return pre;
+  if (idx === -1) return neatList;
+  return neatList.slice(idx + 1);
 }
 
-/* ✅ Build D1/D2 display:
-   - Single order => plain distributorName
-   - Merged FULL order => "D1: xxx | D2: yyy"
-*/
-async function buildDistributorDisplay(meta) {
+/* ✅ Build D1/D2 distributor display (ONLY if merged and >1 child) */
+async function buildDistributorDisplay(meta, childIds) {
   const baseName =
     meta.distributorName ||
     meta.distributor ||
@@ -266,17 +250,11 @@ async function buildDistributorDisplay(meta) {
     meta.companyName ||
     null;
 
-  const childIds = Array.isArray(meta.childOrderIds)
-    ? meta.childOrderIds
-    : Array.isArray(meta.mergedOrderIds)
-      ? meta.mergedOrderIds
-      : [];
+  const kids = Array.isArray(childIds) ? childIds.map(String).filter(Boolean) : [];
 
-  // ✅ SINGLE => don't show D1/D2
-  if (!childIds.length) return baseName;
+  // ✅ Single => just base name
+  if (kids.length <= 1) return baseName;
 
-  // fetch each child order meta
-  const kids = childIds.map(String).filter(Boolean);
   const metas = await Promise.all(
     kids.map(async (oid) => {
       try {
@@ -293,39 +271,22 @@ async function buildDistributorDisplay(meta) {
     })
   );
 
-  const names = metas
-    .map((x, idx) => {
-      const nm =
-        x?.meta?.distributorName ||
-        x?.meta?.distributor ||
-        x?.meta?.agencyName ||
-        null;
-      const label = `D${idx + 1}`;
-      return nm ? `${label}: ${String(nm).trim()}` : `${label}: -`;
-    })
-    .filter(Boolean);
+  const names = metas.map((x, idx) => {
+    const nm =
+      x?.meta?.distributorName || x?.meta?.distributor || x?.meta?.agencyName || null;
+    const label = `D${idx + 1}`;
+    return nm ? `${label}: ${String(nm).trim()}` : `${label}: -`;
+  });
 
-  return names.length ? names.join(" | ") : baseName;
+  return names.join(" | ") || baseName;
 }
 
-/* ✅ Build Meta:
-   - driverName must show (reads order META driverId/driverName)
-   - for merged FULL order: distributorName shows D1/D2
-*/
+/* ✅ Build Meta (mergedOrderIds support + driverName + D1/D2 only if merged) */
 async function buildMeta(meta) {
-  // driverId might be stored as USER#xxx OR plain xxx
   const driverId = meta.driverId || meta.driverUserId || meta.driverMobile || null;
+  const driverName = await getDriverName(driverId);
 
-  // ✅ if driverName already stored in order, prefer it (no extra DB hit)
-  const storedDriverName =
-    meta.driverName || meta.driverUserName || meta.driverFullName || null;
-
-  const driverName =
-    storedDriverName || (await getDriverName(driverId)) || meta.driverMobile || null;
-
-  const distributorDisplay = await buildDistributorDisplay(meta);
-
-  const childIds = Array.isArray(meta.childOrderIds)
+  const childOrderIds = Array.isArray(meta.childOrderIds)
     ? meta.childOrderIds
     : Array.isArray(meta.mergedOrderIds)
       ? meta.mergedOrderIds
@@ -334,8 +295,10 @@ async function buildMeta(meta) {
   const isMerged = Boolean(
     meta.isMerged ||
       meta.mergedAt ||
-      (Array.isArray(childIds) && childIds.length > 0)
+      (Array.isArray(childOrderIds) && childOrderIds.length > 1)
   );
+
+  const distributorDisplay = await buildDistributorDisplay(meta, childOrderIds);
 
   return {
     distributorName: distributorDisplay,
@@ -348,21 +311,35 @@ async function buildMeta(meta) {
       null,
 
     driverId,
-    driverName,
+    driverName: driverName || meta.driverName || meta.driverMobile || null,
 
     status: meta.status || null,
     slotId: meta.slotId || meta.slotPk || null,
 
     isMerged,
-    childOrderIds: childIds.map(String),
-    mergedAt: meta.mergedAt || null,
+    childOrderIds: childOrderIds.map(String),
+    mergedAt: meta.mergedAt || meta.mergedOn || meta.mergedTime || null,
   };
 }
 
-/* ✅ GET Order Timeline (RAW + NEAT + META + preMerge)
-   - preMerge: each child order upto SLOT_BOOKING_COMPLETED
-   - common timeline: FULL order neatTimeline
-*/
+/* ✅ Build preMerge map: each child timeline till SLOT_BOOKING_COMPLETED */
+async function buildPreMergeIfNeeded(uiMeta) {
+  if (!uiMeta?.isMerged) return null;
+  const kids = Array.isArray(uiMeta.childOrderIds)
+    ? uiMeta.childOrderIds.map(String).filter(Boolean)
+    : [];
+  if (kids.length <= 1) return null;
+
+  const pre = {};
+  for (const kidId of kids) {
+    const childRaw = await fetchRawTimeline(kidId);
+    const childNeat = buildNeatTimeline(childRaw, { includeD2: false }); // child always single
+    pre[kidId] = trimPreMerge(childNeat);
+  }
+  return pre;
+}
+
+/* ✅ GET Order Timeline (RAW + NEAT + META + preMerge) */
 export async function getOrderTimeline(req, res) {
   try {
     const { orderId } = req.params;
@@ -382,15 +359,12 @@ export async function getOrderTimeline(req, res) {
     if (!meta)
       return res.status(404).json({ ok: false, message: "Order not found" });
 
+    // ✅ access control
     const user = req.user || {};
     const role = String(user.role || "").toUpperCase();
 
     if (role !== "MASTER" && role !== "MANAGER") {
-      if (
-        role === "DISTRIBUTOR" ||
-        role === "SALESMAN" ||
-        role === "SALES OFFICER"
-      ) {
+      if (role === "DISTRIBUTOR" || role === "SALESMAN" || role === "SALES OFFICER") {
         const metaUserId = String(meta.userId || meta.createdBy || "");
         const loggedUserId = String(user.userId || user.id || user.mobile || "");
 
@@ -406,22 +380,24 @@ export async function getOrderTimeline(req, res) {
         const loggedDriverId = String(user.userId || user.id || user.mobile || "");
         const orderDriverId = String(meta.driverId || "");
 
-        // normalize compare (strip USER# if needed)
-        const a = orderDriverId.replace("USER#", "");
-        const b = loggedDriverId.replace("USER#", "");
-
-        if (orderDriverId && a !== b) {
+        if (orderDriverId && orderDriverId !== loggedDriverId) {
           return res.status(403).json({ ok: false, message: "Not allowed" });
         }
       }
     }
 
-    const rawTimeline = await fetchRawTimeline(targetOrderId);
-    const neatTimeline = buildNeatTimeline(rawTimeline);
     const uiMeta = await buildMeta(meta);
 
-    // ✅ NEW: preMerge timelines (only if merged)
-    const preMerge = await buildPreMergeIfNeeded(meta);
+    // ✅ single => D2 hide | merged => D2 show
+    const includeD2 = Boolean(uiMeta.isMerged && uiMeta.childOrderIds.length > 1);
+
+    const rawTimeline = await fetchRawTimeline(targetOrderId);
+    let neatTimeline = buildNeatTimeline(rawTimeline, { includeD2 });
+
+    // ✅ mergedனா common timeline should start AFTER slot booking completed
+    if (uiMeta.isMerged) neatTimeline = trimPostMerge(neatTimeline);
+
+    const preMerge = await buildPreMergeIfNeeded(uiMeta);
 
     return res.json({
       ok: true,
@@ -430,7 +406,7 @@ export async function getOrderTimeline(req, res) {
       meta: uiMeta,
       timeline: rawTimeline,
       neatTimeline,
-      preMerge, // ✅ frontend already supports it (your screenshot shows)
+      preMerge, // ✅ frontend already can show this
     });
   } catch (e) {
     console.error("getOrderTimeline error:", e);
@@ -438,9 +414,7 @@ export async function getOrderTimeline(req, res) {
   }
 }
 
-/* ✅ GET Order Timeline (NEAT ONLY + preMerge)
-   - keeps same fields so frontend no change
-*/
+/* ✅ GET Order Timeline (NEAT ONLY) */
 export async function getOrderTimelineNeat(req, res) {
   try {
     const { orderId } = req.params;
@@ -455,13 +429,19 @@ export async function getOrderTimelineNeat(req, res) {
         Key: { pk: `ORDER#${targetOrderId}`, sk: "META" },
       })
     );
-    const meta = orderMetaRes.Item || {};
+    const meta = orderMetaRes.Item;
+    if (!meta)
+      return res.status(404).json({ ok: false, message: "Order not found" });
+
+    const uiMeta = await buildMeta(meta);
+    const includeD2 = Boolean(uiMeta.isMerged && uiMeta.childOrderIds.length > 1);
 
     const rawTimeline = await fetchRawTimeline(targetOrderId);
-    const neatTimeline = buildNeatTimeline(rawTimeline);
-    const uiMeta = await buildMeta(meta);
+    let neatTimeline = buildNeatTimeline(rawTimeline, { includeD2 });
 
-    const preMerge = await buildPreMergeIfNeeded(meta);
+    if (uiMeta.isMerged) neatTimeline = trimPostMerge(neatTimeline);
+
+    const preMerge = await buildPreMergeIfNeeded(uiMeta);
 
     return res.json({
       ok: true,
@@ -494,7 +474,7 @@ export async function getSlotTimeline(req, res) {
     );
 
     const rawTimeline = out.Items || [];
-    const neatTimeline = buildNeatTimeline(rawTimeline);
+    const neatTimeline = buildNeatTimeline(rawTimeline, { includeD2: true });
 
     return res.json({ ok: true, slotId, timeline: rawTimeline, neatTimeline });
   } catch (e) {
@@ -520,7 +500,7 @@ export async function getSlotTimelineNeat(req, res) {
     );
 
     const rawTimeline = out.Items || [];
-    const neatTimeline = buildNeatTimeline(rawTimeline);
+    const neatTimeline = buildNeatTimeline(rawTimeline, { includeD2: true });
 
     return res.json({ ok: true, slotId, neatTimeline });
   } catch (e) {
