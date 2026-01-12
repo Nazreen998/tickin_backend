@@ -457,9 +457,11 @@ export const loadingEnd = async (req, res) => {
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
-
 /* ============================================================
-   ✅ ASSIGN DRIVER
+   ✅ ASSIGN DRIVER  (UPDATED - FULL ORDER update + timeline event + fixed vars)
+   - Updates child orders + ORD_FULL_ (if exists)
+   - Adds timeline event for FULL order (so tracking screen shows DRIVER_ASSIGNED)
+   - Fixes: finalorderIds typo, ensureVehicleSelected uses finalOrderIds
 ============================================================ */
 export const assignDriver = async (req, res) => {
   try {
@@ -471,37 +473,42 @@ export const assignDriver = async (req, res) => {
     if (!driverId)
       return res.status(400).json({ ok: false, message: "driverId required" });
 
+    // child orderIds from flowKey
     const orderIds = await resolveOrderIdsFromFlowKey(key);
-    // ✅ ALSO INCLUDE FULL ORDER (ORD_FULL_) IF EXISTS
-let fullOrderId = null;
-
-for (const raw of orderIds) {
-  const oid = normalizeOrderId(raw);
-  if (!oid) continue;
-
-  const g = await ddb.send(
-    new GetCommand({
-      TableName: ORDERS_TABLE,
-      Key: { pk: `ORDER#${oid}`, sk: "META" },
-    })
-  );
-
-  if (g.Item?.mergedIntoOrderId) {
-    fullOrderId = normalizeOrderId(g.Item.mergedIntoOrderId);
-  }
-}
-
-// ✅ FINAL list = child orders + FULL order
-const finalOrderIds = fullOrderId
-  ? [...new Set([...orderIds, fullOrderId])]
-  : orderIds;
-
-    if (orderIds.length === 0)
+    if (orderIds.length === 0) {
       return res
         .status(404)
         .json({ ok: false, message: "No orders found for this key" });
+    }
 
-    const vehicleOk = await ensureVehicleSelected(orderIds);
+    // ✅ Find FULL orderId (ORD_FULL_) if children are merged into it
+    let fullOrderId = null;
+
+    for (const raw of orderIds) {
+      const oid = normalizeOrderId(raw);
+      if (!oid) continue;
+
+      const g = await ddb.send(
+        new GetCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${oid}`, sk: "META" },
+          ProjectionExpression: "orderId, mergedIntoOrderId",
+        })
+      );
+
+      if (g.Item?.mergedIntoOrderId) {
+        fullOrderId = normalizeOrderId(g.Item.mergedIntoOrderId);
+        break;
+      }
+    }
+
+    // ✅ FINAL list = child orders + FULL order (if exists)
+    const finalOrderIds = fullOrderId
+      ? [...new Set([...orderIds.map(normalizeOrderId).filter(Boolean), fullOrderId])]
+      : orderIds.map(normalizeOrderId).filter(Boolean);
+
+    // ✅ Check vehicle selected for ALL affected orders (important)
+    const vehicleOk = await ensureVehicleSelected(finalOrderIds);
     if (!vehicleOk) {
       return res.status(400).json({
         ok: false,
@@ -509,6 +516,7 @@ const finalOrderIds = fullOrderId
       });
     }
 
+    // ✅ Driver lookup
     const driverPk = normalizeUserPk(driverId);
 
     const dg = await ddb.send(
@@ -523,28 +531,54 @@ const finalOrderIds = fullOrderId
       return res.status(404).json({ ok: false, message: "Driver not found" });
     }
 
+    const driverName = driver.name || driver.userName || "Driver";
+    const driverMobile = driver.mobile || null;
+
+    // ✅ Update orders (child + FULL)
     await updateOrders(finalOrderIds, {
       UpdateExpression:
-        "SET #s = :st, driverId = :d, driverName = :dn, driverMobile = :dm, vehicleNo = :vn",
+        "SET #s = :st, driverId = :d, driverName = :dn, driverMobile = :dm, vehicleNo = :vn, updatedAt = :t",
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
         ":st": "DRIVER_ASSIGNED",
-        ":d": driverPk,
-        ":dn": driver.name || driver.userName || "Driver",
-        ":dm": driver.mobile || null,
+        ":d": driverPk,          // store as USER#xxx
+        ":dn": driverName,
+        ":dm": driverMobile,
         ":vn": vehicleNo || null,
+        ":t": new Date().toISOString(),
       },
     });
+
+    // ✅ IMPORTANT: Add timeline event to FULL order (tracking reads FULL timeline)
+    // (optional but recommended so tracking neat timeline moves to DRIVER_ASSIGNED)
+    const user = req.user || {};
+    if (fullOrderId) {
+      await addTimelineEvent({
+        orderId: fullOrderId,
+        event: "DRIVER_ASSIGNED",
+        by: user?.mobile || "system",
+        byUserName: user?.name || user?.userName || null,
+        role: user?.role || "MANAGER",
+        data: {
+          flowKey: key,
+          driverId: driverPk,
+          driverName,
+          driverMobile,
+          vehicleNo: vehicleNo || null,
+        },
+      });
+    }
 
     return res.json({
       ok: true,
       message: "✅ Driver assigned",
       flowKey: key,
-      affectedOrders: finalorderIds,
+      affectedOrders: finalOrderIds,
+      fullOrderId: fullOrderId || null,
       driver: {
         driverId: driverPk,
-        name: driver.name,
-        mobile: driver.mobile,
+        name: driverName,
+        mobile: driverMobile,
         vehicleNo: vehicleNo || null,
       },
     });
@@ -552,7 +586,10 @@ const finalOrderIds = fullOrderId
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
-// ✅ NEW: List drivers for dropdown (Manager/Master)
+
+/* ============================================================
+   ✅ NEW: List drivers for dropdown (Manager/Master)  (UNCHANGED)
+============================================================ */
 export const getDriversForDropdown = async (req, res) => {
   try {
     const result = await ddb.send(
@@ -566,7 +603,7 @@ export const getDriversForDropdown = async (req, res) => {
     );
 
     const drivers = (result.Items || []).map((u) => ({
-      driverId: u.pk,
+      driverId: u.pk, // USER#...
       name: u.name || u.userName || "Driver",
       mobile: u.mobile || null,
     }));
