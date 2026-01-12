@@ -6,8 +6,8 @@ import { addTimelineEvent } from "../modules/timeline/timeline.helper.js";
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const DRIVER_GSI = "GSI_DRIVER_ASSIGNED";
 
-// ✅ 50km = 50,000 meters
-const REACH_RADIUS_METERS = 50 * 1000;
+// ✅ 150m = 1500 meters
+const REACH_RADIUS_METERS = 150 * 100;
 
 /* ------------------ helpers ------------------ */
 

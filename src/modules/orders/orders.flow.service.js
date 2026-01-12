@@ -1,9 +1,6 @@
+// orders.flow.service.js
 import { ddb } from "../../config/dynamo.js";
-import {
-  GetCommand,
-  UpdateCommand,
-  ScanCommand,
-} from "@aws-sdk/lib-dynamodb";
+import { GetCommand, UpdateCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
@@ -14,6 +11,18 @@ function normalizeUserPk(id) {
   const s = String(id || "").trim();
   if (!s) return null;
   return s.startsWith("USER#") ? s : `USER#${s}`;
+}
+
+// ✅ Normalize orderId consistently (prevents duplicates like "123" vs "ORD123")
+function normalizeOrderId(id) {
+  const s = String(id || "").trim();
+  if (!s) return null;
+  if (s.startsWith("ORDER#")) return s.replace("ORDER#", "");
+  if (s.startsWith("ORD")) return s;
+  // if only digits, still prefix ORD
+  if (/^\d+$/.test(s)) return `ORD${s}`;
+  // otherwise keep as-is (safety)
+  return s;
 }
 
 export async function assignDriverToOrder(req, res) {
@@ -43,10 +52,10 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
   );
 
   const bIds = (bRes.Items || [])
-    .map((x) => x.orderId)
+    .map((x) => normalizeOrderId(x.orderId))
     .filter(Boolean);
 
-  // ✅ 2) Also scan ORDERS table by mergeKey (this will include ORD_FULL_ master meta)
+  // ✅ 2) Also scan ORDERS table by mergeKey (may include ORD_FULL_ master meta)
   const scanRes = await ddb.send(
     new ScanCommand({
       TableName: ORDERS_TABLE,
@@ -57,14 +66,14 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
   );
 
   const ids = (scanRes.Items || [])
-    .map((x) => x.orderId || (x.pk ? x.pk.replace("ORDER#", "") : null))
+    .map((x) => normalizeOrderId(x.orderId || (x.pk ? x.pk.replace("ORDER#", "") : null)))
     .filter(Boolean);
 
-  // ✅ combine both
+  // ✅ combine + unique (after normalization)
   const all = [...bIds, ...ids].filter(Boolean);
-
-  // ✅ unique + keep FULL order first
   const uniq = [...new Set(all)];
+
+  // ✅ keep FULL order first (only for tracking/master id)
   uniq.sort((a, b) => {
     const af = String(a).startsWith("ORD_FULL_") ? 0 : 1;
     const bf = String(b).startsWith("ORD_FULL_") ? 0 : 1;
@@ -78,7 +87,10 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
    ✅ Helper: Update multiple orders safely
 ============================================================ */
 async function updateOrders(orderIds, updatePayload) {
-  for (const oid of orderIds) {
+  for (const raw of orderIds) {
+    const oid = normalizeOrderId(raw);
+    if (!oid) continue;
+
     const tryIds = [
       oid,
       oid.startsWith("ORD") ? oid.replace("ORD", "") : "ORD" + oid,
@@ -115,7 +127,10 @@ async function updateOrders(orderIds, updatePayload) {
    ✅ GUARD: Ensure vehicle selected for all orders
 ============================================================ */
 async function ensureVehicleSelected(orderIds) {
-  for (const oid of orderIds) {
+  for (const raw of orderIds) {
+    const oid = normalizeOrderId(raw);
+    if (!oid) return false;
+
     const g = await ddb.send(
       new GetCommand({
         TableName: ORDERS_TABLE,
@@ -147,7 +162,10 @@ export const getOrderFlowByKey = async (req, res) => {
 
     // fetch all orders meta
     const orders = [];
-    for (const oid of orderIds) {
+    for (const raw of orderIds) {
+      const oid = normalizeOrderId(raw);
+      if (!oid) continue;
+
       const g = await ddb.send(
         new GetCommand({
           TableName: ORDERS_TABLE,
@@ -163,7 +181,7 @@ export const getOrderFlowByKey = async (req, res) => {
         .json({ ok: false, message: "Orders meta not found" });
     }
 
-    // ✅ decide master order id for tracking
+    // ✅ decide master order id for tracking (can use ORD_FULL_)
     const masterFromFull = orders.find((o) =>
       String(o.orderId || "").startsWith("ORD_FULL_")
     )?.orderId;
@@ -176,23 +194,49 @@ export const getOrderFlowByKey = async (req, res) => {
     const masterOrderId =
       masterFromFull || masterFromChildren || orders[0]?.orderId || orderIds[0];
 
+    // ✅ IMPORTANT FIX:
+    // Don't include ORD_FULL_ in totals/items/distributors (it may have empty/combined data)
+    const childOrders = orders.filter(
+      (o) => !String(o.orderId || "").startsWith("ORD_FULL_")
+    );
+
+    // If for some reason only FULL exists, fallback to all orders
+    const calcOrders = childOrders.length > 0 ? childOrders : orders;
+
     // ✅ Combined response for UI
     let totalQty = 0;
     let grandTotal = 0;
-
     const loadingItems = [];
 
-    orders.forEach((o) => {
+    calcOrders.forEach((o) => {
       totalQty += Number(o.totalQty || o.qty || 0);
       grandTotal += Number(o.totalAmount || o.grandTotal || o.total || 0);
 
-      const items = o.loadingItems || o.items || [];
+      // ✅ prefer items first (your UI expects items even before loading starts)
+      const items = o.items || o.loadingItems || [];
       items.forEach((it) => loadingItems.push(it));
     });
 
-    const status = orders[0]?.status || "UNKNOWN";
+    // ✅ status: prefer most advanced among calcOrders
+    let status = "UNKNOWN";
+    const priority = [
+      "CONFIRMED",
+      "SLOT_BOOKED",
+      "VEHICLE_SELECTED",
+      "LOADING_STARTED",
+      "LOADING_COMPLETED",
+      "DRIVER_ASSIGNED",
+      "OUT_FOR_DELIVERY",
+      "DELIVERED",
+    ];
+    const stList = calcOrders.map((o) => String(o.status || "").toUpperCase());
+    // pick the highest priority match (last in priority)
+    for (const p of priority) {
+      if (stList.includes(p)) status = p;
+    }
+    if (status === "UNKNOWN") status = calcOrders[0]?.status || "UNKNOWN";
 
-    const distributors = orders.map((o, idx) => ({
+    const distributors = calcOrders.map((o, idx) => ({
       label: `D${idx + 1}`,
       distributorId: o.distributorId || null,
       distributorName: o.distributorName || null,
@@ -213,21 +257,21 @@ export const getOrderFlowByKey = async (req, res) => {
       flowKey: key,
       mergeKey: orders[0]?.mergeKey || null,
 
-      // ✅ NEW: tracking fix
+      // ✅ tracking/master
       masterOrderId,
       trackingOrderId: masterOrderId,
 
-      orderIds,
+      orderIds: calcOrders.map((o) => o.orderId).filter(Boolean),
       totalQty,
       grandTotal,
       status,
-      vehicleType: orders[0]?.vehicleType || null,
-      vehicleNo: orders[0]?.vehicleNo || null,
+      vehicleType: calcOrders[0]?.vehicleType || null,
+      vehicleNo: calcOrders[0]?.vehicleNo || null,
       loadingItems,
 
       distributors,       // ✅ structured
       distributorDisplay, // ✅ string for UI
-      orders,             // ✅ full orders
+      orders: calcOrders, // ✅ full orders (child orders only)
     });
   } catch (err) {
     return res.status(500).json({ ok: false, message: err.message });
@@ -242,9 +286,12 @@ export const vehicleSelected = async (req, res) => {
     const flowKey = req.params.flowKey;
     const { vehicleType, vehicleNo } = req.body;
 
-    if (!flowKey) return res.status(400).json({ ok: false, message: "flowKey required" });
+    if (!flowKey)
+      return res.status(400).json({ ok: false, message: "flowKey required" });
     if (!vehicleType && !vehicleNo)
-      return res.status(400).json({ ok: false, message: "vehicleType or vehicleNo required" });
+      return res
+        .status(400)
+        .json({ ok: false, message: "vehicleType or vehicleNo required" });
 
     const orderIds = await resolveOrderIdsFromFlowKey(flowKey);
     if (orderIds.length === 0)
@@ -277,14 +324,17 @@ export const loadingStart = async (req, res) => {
     const key = req.body.flowKey || req.body.mergeKey || req.body.orderId;
     const user = req.user;
 
-    if (!key) return res.status(400).json({ ok: false, message: "flowKey required" });
+    if (!key)
+      return res.status(400).json({ ok: false, message: "flowKey required" });
 
     const orderIds = req.body.orderId
       ? [req.body.orderId]
       : await resolveOrderIdsFromFlowKey(key);
 
     if (orderIds.length === 0)
-      return res.status(404).json({ ok: false, message: "No orders found for this key" });
+      return res
+        .status(404)
+        .json({ ok: false, message: "No orders found for this key" });
 
     const vehicleOk = await ensureVehicleSelected(orderIds);
     if (!vehicleOk) {
@@ -295,8 +345,7 @@ export const loadingStart = async (req, res) => {
     }
 
     await updateOrders(orderIds, {
-      UpdateExpression:
-        "SET #s = :st, loadingStarted = :ls, loadingStartedAt = :t",
+      UpdateExpression: "SET #s = :st, loadingStarted = :ls, loadingStartedAt = :t",
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
         ":st": "LOADING_STARTED",
@@ -335,14 +384,17 @@ export const loadingEnd = async (req, res) => {
     const key = req.body.flowKey || req.body.mergeKey || req.body.orderId;
     const user = req.user;
 
-    if (!key) return res.status(400).json({ ok: false, message: "flowKey required" });
+    if (!key)
+      return res.status(400).json({ ok: false, message: "flowKey required" });
 
     const orderIds = req.body.orderId
       ? [req.body.orderId]
       : await resolveOrderIdsFromFlowKey(key);
 
     if (orderIds.length === 0)
-      return res.status(404).json({ ok: false, message: "No orders found for this key" });
+      return res
+        .status(404)
+        .json({ ok: false, message: "No orders found for this key" });
 
     const vehicleOk = await ensureVehicleSelected(orderIds);
     if (!vehicleOk) {
@@ -391,12 +443,16 @@ export const assignDriver = async (req, res) => {
     const key = req.body.flowKey || req.body.mergeKey || req.body.orderId;
     const { driverId, vehicleNo } = req.body;
 
-    if (!key) return res.status(400).json({ ok: false, message: "flowKey required" });
-    if (!driverId) return res.status(400).json({ ok: false, message: "driverId required" });
+    if (!key)
+      return res.status(400).json({ ok: false, message: "flowKey required" });
+    if (!driverId)
+      return res.status(400).json({ ok: false, message: "driverId required" });
 
     const orderIds = await resolveOrderIdsFromFlowKey(key);
     if (orderIds.length === 0)
-      return res.status(404).json({ ok: false, message: "No orders found for this key" });
+      return res
+        .status(404)
+        .json({ ok: false, message: "No orders found for this key" });
 
     const vehicleOk = await ensureVehicleSelected(orderIds);
     if (!vehicleOk) {

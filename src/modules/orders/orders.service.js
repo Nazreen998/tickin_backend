@@ -50,8 +50,15 @@ export const getSlotConfirmedOrders = async (req, res) => {
     );
 
     const bookings = bookingsRes.Items || [];
+    const bookingByOrderId = {};
+for (const b of bookings) {
+  const oid = String(b.orderId || "").trim();
+  if (!oid) continue;
+  if (!bookingByOrderId[oid]) bookingByOrderId[oid] = b; // keep first
+}
+const uniqueOrderIds = Object.keys(bookingByOrderId);
 
-    const orderIds = [...new Set(bookings.map((b) => b.orderId).filter(Boolean))];
+const orderIds = uniqueOrderIds;
 
     const ordersMeta = [];
     for (const orderId of orderIds) {
@@ -68,7 +75,8 @@ export const getSlotConfirmedOrders = async (req, res) => {
 
     for (const order of ordersMeta) {
       const oid = order.orderId;
-      const booking = bookings.find((b) => b.orderId === oid);
+     const booking = bookingByOrderId[oid];
+
       if (!booking) continue;
 
       const mk = booking.mergeKey || order.mergeKey || null;
@@ -100,7 +108,7 @@ export const getSlotConfirmedOrders = async (req, res) => {
 
       grouped[flowKey].totalQty += Number(order.totalQty || 0);
       grouped[flowKey].grandAmount += Number(
-  booking.amount || booking.totalAmount || order.totalAmount || 0
+  booking.amount || booking.totalAmount || 0
 );
 
       const st = String(order.status || "CONFIRMED").toUpperCase();
