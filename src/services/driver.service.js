@@ -8,7 +8,7 @@ import { addTimelineEvent } from "../modules/timeline/timeline.helper.js";
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const DRIVER_GSI = "GSI_DRIVER_ASSIGNED";
 // 30 meters
-const REACH_RADIUS_METERS = 30;
+const REACH_RADIUS_METERS = 100;
 
 /* ------------------ helpers ------------------ */
 
@@ -18,6 +18,24 @@ function orderKey(orderId) {
 
 function toIsoNow() {
   return new Date().toISOString();
+}
+// Extract lat/lng from Google Maps URL or plain text
+function extractLatLngFromUrl(url) {
+  if (!url || typeof url !== "string") {
+    return { lat: null, lng: null };
+  }
+
+  // Matches: 11.0214,76.9661 OR -11.0214,76.9661
+  const match = url.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
+
+  if (!match) {
+    return { lat: null, lng: null };
+  }
+
+  return {
+    lat: Number(match[1]),
+    lng: Number(match[2]),
+  };
 }
 
 // Haversine distance in meters
@@ -43,8 +61,9 @@ function normalizeDistributors(order) {
   return list.map((d) => ({
     distributorCode: d.distributorCode || d.code || null,
     distributorName: d.distributorName || d.name || null,
-    lat: d.lat ?? null,
-    lng: d.lng ?? null,
+    lat: d.lat ?? d.latitude ?? parsed.lat ?? null,
+    lng: d.lng ?? d.longitude ?? parsed.lng ?? null,
+    mapUrl: d.mapUrl || null,
     items: Array.isArray(d.items) ? d.items : [],
     reachedAt: d.reachedAt || null,
     unloadStartAt: d.unloadStartAt || null,
@@ -134,7 +153,7 @@ export async function updateDriverStatus({ orderId, nextStatus, currentLat, curr
   const desired = String(nextStatus || "").toUpperCase();
 
   validateTransition(currentStatus, desired);
-
+  console.log("📍 CURRENT STOP:", stop);
   // Prepare multi-stop state
   const { distributors, idx, stop } = getCurrentStop(order);
   let newIdx = idx;
@@ -142,7 +161,7 @@ export async function updateDriverStatus({ orderId, nextStatus, currentLat, curr
 
   // Reach validation only when reaching distributor
   if (desired === "DRIVER_REACHED_DISTRIBUTOR") {
-    if (!stop) throw new Error("No distributor stop found");
+    if (!stop) throw new Error("Distributor location missing or invalid");
     if (!force) {
       if (currentLat == null || currentLng == null) {
         throw new Error("currentLat/currentLng required for reach validation");
