@@ -320,7 +320,7 @@ export const vehicleSelected = async (req, res) => {
     if (orderIds.length === 0)
       return res.status(404).json({ ok: false, message: "No orders found" });
 
-    await updateOrders(orderIds, {
+    await updateOrders(finalOrderIds, {
       UpdateExpression: "SET vehicleType = :v, vehicleNo = :vn",
       ExpressionAttributeValues: {
         ":v": vehicleType || vehicleNo,
@@ -332,7 +332,7 @@ export const vehicleSelected = async (req, res) => {
       ok: true,
       message: "✅ Vehicle selected",
       flowKey,
-      affectedOrders: orderIds,
+      affectedOrders: finalorderIds,
     });
   } catch (err) {
     return res.status(500).json({ ok: false, message: err.message });
@@ -367,7 +367,7 @@ export const loadingStart = async (req, res) => {
       });
     }
 
-    await updateOrders(orderIds, {
+    await updateOrders(finalOrderIds, {
       UpdateExpression: "SET #s = :st, loadingStarted = :ls, loadingStartedAt = :t",
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
@@ -392,7 +392,7 @@ export const loadingStart = async (req, res) => {
       ok: true,
       message: "✅ Loading started",
       flowKey: key,
-      affectedOrders: orderIds,
+      affectedOrders: finalorderIds,
     });
   } catch (err) {
     return res.status(500).json({ ok: false, message: err.message });
@@ -427,7 +427,7 @@ export const loadingEnd = async (req, res) => {
       });
     }
 
-    await updateOrders(orderIds, {
+    await updateOrders(finalOrderIds, {
       UpdateExpression: "SET #s = :st, loadingEndAt = :t",
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
@@ -451,7 +451,7 @@ export const loadingEnd = async (req, res) => {
       ok: true,
       message: "✅ Loading completed",
       flowKey: key,
-      affectedOrders: orderIds,
+      affectedOrders: finalorderIds,
     });
   } catch (err) {
     return res.status(500).json({ ok: false, message: err.message });
@@ -472,6 +472,30 @@ export const assignDriver = async (req, res) => {
       return res.status(400).json({ ok: false, message: "driverId required" });
 
     const orderIds = await resolveOrderIdsFromFlowKey(key);
+    // ✅ ALSO INCLUDE FULL ORDER (ORD_FULL_) IF EXISTS
+let fullOrderId = null;
+
+for (const raw of orderIds) {
+  const oid = normalizeOrderId(raw);
+  if (!oid) continue;
+
+  const g = await ddb.send(
+    new GetCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${oid}`, sk: "META" },
+    })
+  );
+
+  if (g.Item?.mergedIntoOrderId) {
+    fullOrderId = normalizeOrderId(g.Item.mergedIntoOrderId);
+  }
+}
+
+// ✅ FINAL list = child orders + FULL order
+const finalOrderIds = fullOrderId
+  ? [...new Set([...orderIds, fullOrderId])]
+  : orderIds;
+
     if (orderIds.length === 0)
       return res
         .status(404)
@@ -499,7 +523,7 @@ export const assignDriver = async (req, res) => {
       return res.status(404).json({ ok: false, message: "Driver not found" });
     }
 
-    await updateOrders(orderIds, {
+    await updateOrders(finalOrderIds, {
       UpdateExpression:
         "SET #s = :st, driverId = :d, driverName = :dn, driverMobile = :dm, vehicleNo = :vn",
       ExpressionAttributeNames: { "#s": "status" },
@@ -516,7 +540,7 @@ export const assignDriver = async (req, res) => {
       ok: true,
       message: "✅ Driver assigned",
       flowKey: key,
-      affectedOrders: orderIds,
+      affectedOrders: finalorderIds,
       driver: {
         driverId: driverPk,
         name: driver.name,
