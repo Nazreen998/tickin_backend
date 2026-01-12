@@ -397,7 +397,6 @@ const stops = await buildOrderStopsFromDistributorId({
       totalAmount,
       totalQty,
      status: finalStatus,
-           distributorName: orderDistributorName || null, // (if you have it)
       distributors: stops,
       currentDistributorIndex: 0,
 
