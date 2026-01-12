@@ -5,7 +5,9 @@ import { addTimelineEvent } from "../modules/timeline/timeline.helper.js";
 
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const DRIVER_GSI = "GSI_DRIVER_ASSIGNED";
-const REACH_RADIUS_METERS = 100;
+
+// ✅ 50km = 50,000 meters
+const REACH_RADIUS_METERS = 50 * 1000;
 
 /* ------------------ helpers ------------------ */
 
@@ -15,6 +17,16 @@ function orderKey(orderId) {
 
 function toIsoNow() {
   return new Date().toISOString();
+}
+
+function isFiniteLatLng(lat, lng) {
+  const la = Number(lat);
+  const ln = Number(lng);
+  if (!Number.isFinite(la) || !Number.isFinite(ln)) return false;
+  if (la === 0 || ln === 0) return false;
+  if (la < -90 || la > 90) return false;
+  if (ln < -180 || ln > 180) return false;
+  return true;
 }
 
 /* -------- Google Maps URL → lat/lng -------- */
@@ -53,13 +65,20 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const toRad = (d) => (d * Math.PI) / 180;
 
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
+  const lat1N = Number(lat1);
+  const lon1N = Number(lon1);
+  const lat2N = Number(lat2);
+  const lon2N = Number(lon2);
+
+  if (!isFiniteLatLng(lat1N, lon1N) || !isFiniteLatLng(lat2N, lon2N)) return Infinity;
+
+  const dLat = toRad(lat2N - lat1N);
+  const dLon = toRad(lon2N - lon1N);
 
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) *
-      Math.cos(toRad(lat2)) *
+    Math.cos(toRad(lat1N)) *
+      Math.cos(toRad(lat2N)) *
       Math.sin(dLon / 2) ** 2;
 
   return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
@@ -71,14 +90,19 @@ function normalizeDistributors(order) {
   const list = Array.isArray(order.distributors) ? order.distributors : [];
 
   return list.map((d) => {
-    const parsed = extractLatLngFromUrl(d.mapUrl);
+    // ✅ support mapUrl + final_url + finalUrl
+    const url = d.mapUrl || d.final_url || d.finalUrl || null;
+    const parsed = extractLatLngFromUrl(url);
+
+    const lat = d.lat ?? d.latitude ?? parsed.lat ?? null;
+    const lng = d.lng ?? d.longitude ?? parsed.lng ?? null;
 
     return {
       distributorCode: d.distributorCode || d.code || null,
       distributorName: d.distributorName || d.name || null,
-      lat: d.lat ?? d.latitude ?? parsed.lat ?? null,
-      lng: d.lng ?? d.longitude ?? parsed.lng ?? null,
-      mapUrl: d.mapUrl || null,
+      lat,
+      lng,
+      mapUrl: url,
       items: Array.isArray(d.items) ? d.items : [],
       reachedAt: d.reachedAt || null,
       unloadStartAt: d.unloadStartAt || null,
@@ -90,6 +114,12 @@ function normalizeDistributors(order) {
 function getCurrentStop(order) {
   const distributors = normalizeDistributors(order);
   const idx = Number(order.currentDistributorIndex || 0);
+
+  // ✅ safeguard: idx out of bounds
+  if (!Number.isFinite(idx) || idx < 0) {
+    return { distributors, idx: 0, stop: distributors[0] || null };
+  }
+
   return { distributors, idx, stop: distributors[idx] || null };
 }
 
@@ -124,24 +154,25 @@ export async function getDriverOrders(driverId) {
     "UNLOAD_END",
   ]);
 
-  return (res.Items || []).filter((o) =>
-    allowed.has(String(o.status || "").toUpperCase())
-  );
+  return (res.Items || []).filter((o) => allowed.has(String(o.status || "").toUpperCase()));
 }
 
 /* -------- distance validation -------- */
 
-export async function validateDriverReach30m({
-  orderId,
-  currentLat,
-  currentLng,
-}) {
+// ✅ name keep same for compatibility, but now it checks 50km
+export async function validateDriverReach30m({ orderId, currentLat, currentLng }) {
   const order = await getOrder(orderId);
   if (!order) throw new Error("Order not found");
 
   const { idx, stop } = getCurrentStop(order);
-  if (!stop || stop.lat == null || stop.lng == null) {
+  if (!stop) throw new Error("No distributor stop found");
+
+  if (!isFiniteLatLng(stop.lat, stop.lng)) {
     throw new Error("Distributor location missing or invalid");
+  }
+
+  if (!isFiniteLatLng(currentLat, currentLng)) {
+    throw new Error("Driver location missing or invalid");
   }
 
   const dist = haversineMeters(
@@ -154,6 +185,7 @@ export async function validateDriverReach30m({
   return {
     within: dist <= REACH_RADIUS_METERS,
     distanceMeters: Math.round(dist),
+    radiusMeters: REACH_RADIUS_METERS,
     currentStopIndex: idx,
     distributorLat: stop.lat,
     distributorLng: stop.lng,
@@ -185,25 +217,29 @@ export async function updateDriverStatus({
 
   /* ---------- DRIVER_REACHED_DISTRIBUTOR ---------- */
   if (desired === "DRIVER_REACHED_DISTRIBUTOR") {
+    if (!stop) throw new Error("No distributor stop found");
+
     if (!force) {
-      if (!stop || stop.lat == null || stop.lng == null) {
+      if (!isFiniteLatLng(stop.lat, stop.lng)) {
         throw new Error("Distributor location missing or invalid");
       }
 
-      if (currentLat == null || currentLng == null) {
+      if (!isFiniteLatLng(currentLat, currentLng)) {
         throw new Error("currentLat/currentLng required");
       }
 
-      const check = await validateDriverReach30m({
-        orderId,
-        currentLat,
-        currentLng,
-      });
+      const check = await validateDriverReach30m({ orderId, currentLat, currentLng });
 
+      // ✅ IMPORTANT: “Try again” should not throw
       if (!check.within) {
-        throw new Error(
-          `Not within ${REACH_RADIUS_METERS}m. Distance: ${check.distanceMeters}m`
-        );
+        return {
+          ok: false,
+          reached: false,
+          message: "Try again",
+          distanceMeters: check.distanceMeters,
+          radiusMeters: check.radiusMeters,
+          currentStopIndex: check.currentStopIndex,
+        };
       }
     }
 
@@ -240,6 +276,7 @@ export async function updateDriverStatus({
 
   const tripClosed = desired === "WAREHOUSE_REACHED";
 
+  // ✅ If we returned Try again above, we won't reach here (no DB update)
   const updated = await ddb.send(
     new UpdateCommand({
       TableName: ORDERS_TABLE,
@@ -277,6 +314,7 @@ export async function updateDriverStatus({
 
   return {
     ok: true,
+    reached: desired === "DRIVER_REACHED_DISTRIBUTOR" ? true : undefined,
     order: after,
   };
 }

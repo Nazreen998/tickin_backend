@@ -99,7 +99,9 @@ export const getSlotConfirmedOrders = async (req, res) => {
       });
 
       grouped[flowKey].totalQty += Number(order.totalQty || 0);
-      grouped[flowKey].grandAmount += Number(order.totalAmount || 0);
+      grouped[flowKey].grandAmount += Number(
+  booking.amount || booking.totalAmount || order.totalAmount || 0
+);
 
       const st = String(order.status || "CONFIRMED").toUpperCase();
       if (st !== "CONFIRMED") grouped[flowKey].status = st;
