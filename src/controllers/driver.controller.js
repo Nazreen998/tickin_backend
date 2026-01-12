@@ -19,19 +19,17 @@ function pickLatLng(body = {}) {
   };
 }
 
-// optional: status which needs location check (customize as per your flow)
+// status which needs location check
 function needsLocation(nextStatus) {
   const s = String(nextStatus || "").toUpperCase();
-  // add/remove statuses as your backend expects
-  return ["REACHED", "ARRIVED", "DELIVERED"].includes(s);
+  return ["DRIVER_REACHED_DISTRIBUTOR"].includes(s);
 }
 
 function normalizeErrMessage(e) {
   const msg = e?.message || String(e);
 
-  // map common errors to user friendly messages
   if (msg.includes("Distributor location missing or invalid")) {
-    return "Distributor location missing/invalid in DB. Order-ku distributorLat/distributorLng save pannunga (final_url mattum podadheenga).";
+    return "Distributor location missing/invalid in DB. Order-ku distributors list/mapUrl set aaganum.";
   }
   if (msg.includes("Not allowed") || msg.includes("Access denied")) {
     return "Not allowed: indha endpoint role permission match aagala. Driver role-ku allow pannanum (backend RBAC).";
@@ -41,6 +39,8 @@ function normalizeErrMessage(e) {
   }
   return msg;
 }
+
+/* ------------------ APIs ------------------ */
 
 export async function getOrders(req, res) {
   try {
@@ -67,14 +67,12 @@ export async function validateReach(req, res) {
       });
     }
 
-    // NOTE: function name says 30m; if you want 50km, change in service side
     const out = await validateDriverReach30m({
       orderId: String(orderId),
       currentLat: lat,
       currentLng: lng,
     });
 
-    // out can be { reached: true/false, distanceKm, ... } depending on service
     return res.json({ ok: true, ...out });
   } catch (e) {
     return res.status(400).json({ ok: false, message: normalizeErrMessage(e) });
@@ -91,18 +89,18 @@ export async function updateStatus(req, res) {
     if (!nextStatus) return res.status(400).json({ ok: false, message: "nextStatus required" });
 
     const statusUpper = String(nextStatus).toUpperCase();
-
     const { hasBoth, lat, lng } = pickLatLng(body);
 
     // if this status needs location, enforce lat/lng unless force=true
-    if (!force && needsLocation(statusUpper) && !hasBoth) {
+    if (!Boolean(force) && needsLocation(statusUpper) && !hasBoth) {
       return res.status(400).json({
         ok: false,
         message: `For nextStatus=${statusUpper}, currentLat/currentLng required (or driverLat/driverLng).`,
       });
     }
 
-    const updated = await updateDriverStatus({
+    // ✅ IMPORTANT: service already returns { ok:true/false, order: {...} } OR ok:false for Try again
+    const result = await updateDriverStatus({
       orderId: String(orderId),
       nextStatus: statusUpper,
       currentLat: hasBoth ? lat : null,
@@ -110,7 +108,7 @@ export async function updateStatus(req, res) {
       force: Boolean(force),
     });
 
-    return res.json({ ok: true, order: updated });
+    return res.json(result);
   } catch (e) {
     return res.status(400).json({ ok: false, message: normalizeErrMessage(e) });
   }
