@@ -34,6 +34,7 @@ export const getSlotConfirmedOrders = async (req, res) => {
 
     const pk = `COMPANY#VAGR_IT#DATE#${date}`;
 
+    // ✅ 1) Fetch CONFIRMED bookings for given date
     const bookingsRes = await ddb.send(
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
@@ -50,16 +51,18 @@ export const getSlotConfirmedOrders = async (req, res) => {
     );
 
     const bookings = bookingsRes.Items || [];
+
+    // ✅ 2) DEDUPE bookings by orderId (prevents D3 / amount double)
     const bookingByOrderId = {};
-for (const b of bookings) {
-  const oid = String(b.orderId || "").trim();
-  if (!oid) continue;
-  if (!bookingByOrderId[oid]) bookingByOrderId[oid] = b; // keep first
-}
-const uniqueOrderIds = Object.keys(bookingByOrderId);
+    for (const b of bookings) {
+      const oid = String(b.orderId || "").trim();
+      if (!oid) continue;
+      if (!bookingByOrderId[oid]) bookingByOrderId[oid] = b; // keep first occurrence
+    }
 
-const orderIds = uniqueOrderIds;
+    const orderIds = Object.keys(bookingByOrderId);
 
+    // ✅ 3) fetch order metas for all orderIds
     const ordersMeta = [];
     for (const orderId of orderIds) {
       const orderRes = await ddb.send(
@@ -71,12 +74,12 @@ const orderIds = uniqueOrderIds;
       if (orderRes.Item) ordersMeta.push(orderRes.Item);
     }
 
+    // ✅ 4) group by mergeKey (if exists) else by orderId
     const grouped = {};
 
     for (const order of ordersMeta) {
       const oid = order.orderId;
-     const booking = bookingByOrderId[oid];
-
+      const booking = bookingByOrderId[oid];
       if (!booking) continue;
 
       const mk = booking.mergeKey || order.mergeKey || null;
@@ -98,35 +101,48 @@ const orderIds = uniqueOrderIds;
         };
       }
 
-      grouped[flowKey].orderIds.push(oid);
+      // ✅ ensure orderIds unique inside each group
+      if (!grouped[flowKey].orderIds.includes(oid)) {
+        grouped[flowKey].orderIds.push(oid);
+      }
 
-      grouped[flowKey].distributors.push({
-        orderId: oid,
-        distributorName: booking.distributorName || order.distributorName,
-        distributorId: booking.distributorCode || order.distributorId,
-      });
+      // ✅ push distributor only if not already added (prevents D3)
+      const already = grouped[flowKey].distributors.some((d) => d.orderId === oid);
+      if (!already) {
+        grouped[flowKey].distributors.push({
+          orderId: oid,
+          distributorName: booking.distributorName || order.distributorName,
+          distributorId: booking.distributorCode || order.distributorId,
+        });
+      }
 
+      // ✅ Qty from order (correct)
       grouped[flowKey].totalQty += Number(order.totalQty || 0);
-      grouped[flowKey].grandAmount += Number(
-  booking.amount || booking.totalAmount || 0
-);
 
+      // ✅ Amount ONLY from booking (prevents double/merged issues)
+      grouped[flowKey].grandAmount += Number(booking.amount || 0);
+
+      // ✅ take latest status if any order progressed
       const st = String(order.status || "CONFIRMED").toUpperCase();
       if (st !== "CONFIRMED") grouped[flowKey].status = st;
     }
 
-    // ✅ Final shaping for UI (NO frontend changes)
+    // ✅ 5) Final shaping: only D1/D2 needed
     const finalOrders = Object.values(grouped).map((g) => {
-      const names = (g.distributors || [])
+      // keep only first 2 distributors
+      const d2 = (g.distributors || []).slice(0, 2);
+      const names = d2
         .map((d, i) => `D${i + 1}: ${d.distributorName || "-"}`)
         .join(" | ");
 
       return {
         ...g,
-        distributorName: names || (g.distributors?.[0]?.distributorName ?? "-"),
-        totalAmount: g.grandAmount,
-        amount: g.grandAmount,
-        qty: g.totalQty,
+        distributors: d2,
+        distributorName: names || "-",
+
+        // ✅ keep UI keys as-is
+        grandAmount: g.grandAmount,
+        totalQty: g.totalQty,
       };
     });
 
@@ -141,7 +157,6 @@ const orderIds = uniqueOrderIds;
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
-
 /*FLOW KEY*/ 
 export const getOrderFlowByKey = async (req, res) => {
   try {

@@ -15,6 +15,19 @@ const TABLE_SLOT_TIMELINE =
   process.env.TABLE_SLOT_TIMELINE || "tickin_timeline_events";
 const TABLE_USERS = process.env.USERS_TABLE || "tickin_users";
 
+async function getOrderMetaById(orderId) {
+  if (!orderId) return null;
+
+  const res = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_ORDERS,
+      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    })
+  );
+
+  return res.Item || null;
+}
+
 /* ✅ Resolve FULL OrderId if HALF merged */
 async function resolveTargetOrderId(orderId) {
   if (!orderId) return null;
@@ -64,30 +77,42 @@ function isAllocatedToUser(meta, user) {
 }
 
 /* ✅ Get Driver Name */
+/* ✅ Get Driver Name (FIX: USER# double prefix + PROFILE key) */
 async function getDriverName(driverId) {
   if (!driverId) return null;
 
   try {
-    const pk = String(driverId || "").startsWith("USER#")
-      ? String(driverId)
-      : `USER#${driverId}`;
+    let pk = String(driverId).trim();
+    if (!pk) return null;
 
-    const res = await ddb.send(
+    // ✅ If already USER# keep it, else add USER#
+    if (!pk.startsWith("USER#")) pk = `USER#${pk}`;
+
+    // ✅ Try PROFILE first (your assignDriver uses PROFILE)
+    const r1 = await ddb.send(
       new GetCommand({
         TableName: TABLE_USERS,
-        Key: { pk, sk: "PROFILE" }, // ✅ users table uses PROFILE in your code
+        Key: { pk, sk: "PROFILE" },
       })
     );
+    const d1 = r1.Item;
+    if (d1) return d1.name || d1.userName || d1.fullName || d1.mobile || null;
 
-    const d = res.Item;
-    if (!d) return null;
+    // ✅ fallback: META (older data)
+    const r2 = await ddb.send(
+      new GetCommand({
+        TableName: TABLE_USERS,
+        Key: { pk, sk: "META" },
+      })
+    );
+    const d2 = r2.Item;
+    if (d2) return d2.name || d2.userName || d2.fullName || d2.mobile || null;
 
-    return d.name || d.userName || d.fullName || d.mobile || null;
+    return null;
   } catch (e) {
     return null;
   }
 }
-
 /* ✅ Force display time (IST) */
 function prettyTime(ev) {
   const t = ev?.displayTime || ev?.createdAt || ev?.timestamp || null;
@@ -202,30 +227,78 @@ async function buildMeta(meta) {
   const driverId =
     meta.driverId || meta.driverUserId || meta.driverMobile || null;
 
-  const driverName = await getDriverName(driverId);
+  const directDriverName = meta.driverName || meta.driverMobile || null;
+  const driverName = directDriverName || (await getDriverName(driverId));
 
-  // ✅ childOrderIds fallback to mergedOrderIds
-  const childOrderIds = Array.isArray(meta.childOrderIds)
-    ? meta.childOrderIds
-    : Array.isArray(meta.mergedOrderIds)
-      ? meta.mergedOrderIds
-      : [];
-
+  // ✅ merge info
   const isMerged = Boolean(
     meta.isMerged ||
       meta.mergedAt ||
-      (Array.isArray(childOrderIds) && childOrderIds.length > 0)
+      (Array.isArray(meta.childOrderIds) && meta.childOrderIds.length > 0)
   );
 
-  return {
-    distributorName:
-      meta.distributorName ||
-      meta.distributor ||
-      meta.agencyName ||
-      meta.customerName ||
-      meta.companyName ||
-      null,
+  const childOrderIds = Array.isArray(meta.childOrderIds) ? meta.childOrderIds : [];
 
+  // ✅ Default distributor (normal orders)
+  let distributorName =
+    meta.distributorName ||
+    meta.distributor ||
+    meta.agencyName ||
+    meta.customerName ||
+    meta.companyName ||
+    null;
+
+  // ✅ If merged -> build "D1: .. | D2: .." from child orders
+  if (isMerged && childOrderIds.length > 0) {
+    const names = [];
+
+    for (let i = 0; i < childOrderIds.length; i++) {
+      const kidId = String(childOrderIds[i]).trim();
+      const kidMeta = await getOrderMetaById(kidId);
+
+      const nm = String(
+        kidMeta?.distributorName ||
+          kidMeta?.distributor ||
+          kidMeta?.agencyName ||
+          "-"
+      ).trim();
+
+      names.push({ label: `D${i + 1}`, name: nm, orderId: kidId });
+    }
+
+    // ✅ Set distributorName as required format (frontend already reads this)
+    distributorName =
+      names.length === 1
+        ? names[0].name
+        : names.map((x) => `${x.label}: ${x.name}`).join(" | ");
+
+    return {
+      distributorName,
+      vehicleNo:
+        meta.vehicleNo ||
+        meta.vehicleNumber ||
+        meta.vehicle ||
+        meta.vehicleId ||
+        null,
+
+      driverId,
+      driverName: driverName || null,
+
+      status: meta.status || null,
+      slotId: meta.slotId || meta.slotPk || null,
+
+      isMerged: true,
+      childOrderIds: childOrderIds.map(String),
+      mergedAt: meta.mergedAt || null,
+
+      // ✅ optional extra (harmless even if frontend ignores)
+      distributors: names,
+    };
+  }
+
+  // ✅ normal (not merged)
+  return {
+    distributorName,
     vehicleNo:
       meta.vehicleNo ||
       meta.vehicleNumber ||
@@ -234,17 +307,16 @@ async function buildMeta(meta) {
       null,
 
     driverId,
-    driverName: driverName || meta.driverName || meta.driverMobile || null,
+    driverName: driverName || null,
 
     status: meta.status || null,
     slotId: meta.slotId || meta.slotPk || null,
 
     isMerged,
-    childOrderIds: childOrderIds.map(String),
-    mergedAt: meta.mergedAt || meta.mergedOn || meta.mergedTime || null,
+    childOrderIds,
+    mergedAt: meta.mergedAt || null,
   };
 }
-
 /* ✅ Helper: Build preMerge block for merged FULL order */
 async function buildPreMergeIfNeeded(uiMeta) {
   if (!uiMeta?.isMerged) return null;
