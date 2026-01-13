@@ -2058,3 +2058,186 @@ export async function managerMoveBookingToMerge({
     movedAmount: amt,
   };
 }
+export async function managerManualCrossSessionMerge({
+  companyCode,
+  date,
+  bookingSk1,
+  bookingSk2,
+  managerId,
+}) {
+  validateSlotDate(date);
+
+  if (!companyCode || !date || !bookingSk1 || !bookingSk2) {
+    throw new Error("companyCode, date, 2 bookingSk required");
+  }
+
+  if (bookingSk1 === bookingSk2) {
+    throw new Error("Same booking cannot be merged");
+  }
+
+  const pk = pkFor(companyCode, date);
+
+  /* 1️⃣ Fetch both bookings */
+  const [b1Res, b2Res] = await Promise.all([
+    ddb.send(new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSk1 } })),
+    ddb.send(new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSk2 } })),
+  ]);
+
+  const b1 = b1Res.Item;
+  const b2 = b2Res.Item;
+
+  if (!b1 || !b2) throw new Error("Booking not found");
+
+  /* 2️⃣ STRICT VALIDATIONS */
+  if (
+    String(b1.vehicleType).toUpperCase() !== "HALF" ||
+    String(b2.vehicleType).toUpperCase() !== "HALF"
+  ) {
+    throw new Error("❌ Only HALF + HALF allowed");
+  }
+
+  if (!isPendingOrWaitingStatus(b1.status) || !isPendingOrWaitingStatus(b2.status)) {
+    throw new Error("❌ Only PENDING / WAITING bookings allowed");
+  }
+
+  /* 3️⃣ Decide FINAL SESSION (later time wins) */
+  const t1 = dayjs(b1.slotTime, "HH:mm");
+  const t2 = dayjs(b2.slotTime, "HH:mm");
+
+  const finalTime = t1.isAfter(t2) ? b1.slotTime : b2.slotTime;
+
+  /* 4️⃣ Find AVAILABLE FULL slot in finalTime */
+  let chosenPos = null;
+
+  for (const p of ALL_POSITIONS) {
+    const slotSk = skForSlot(finalTime, "FULL", p);
+    const cap = await ddb.send(
+      new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: slotSk } })
+    );
+
+    const st = String(cap?.Item?.status || "AVAILABLE").toUpperCase();
+    if (st === "AVAILABLE") {
+      chosenPos = p;
+      break;
+    }
+  }
+
+  if (!chosenPos) {
+    throw new Error(`❌ No FULL slot available in ${finalTime} session`);
+  }
+
+  /* 5️⃣ Prepare FULL booking data */
+  const totalAmount = Number(b1.amount || 0) + Number(b2.amount || 0);
+
+  const displayName = [b1.distributorName, b2.distributorName]
+    .filter(Boolean)
+    .join(" + ");
+
+  const displayCode = b1.distributorCode || b2.distributorCode || "MERGE";
+
+  const fullOrderId = `ORD_FULL_${uuidv4().slice(0, 8)}`;
+  const fullBookingSk = skForBooking(finalTime, "FULL", chosenPos, fullOrderId);
+  const finalSlotId = `${companyCode}#${date}#${finalTime}#FULL#${chosenPos}`;
+
+  /* 6️⃣ TRANSACTION (atomic & safe) */
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        /* FULL slot booking */
+        {
+          Update: {
+            TableName: TABLE_CAPACITY,
+            Key: { pk, sk: skForSlot(finalTime, "FULL", chosenPos) },
+            ConditionExpression: "attribute_not_exists(#s) OR #s = :avail",
+            UpdateExpression:
+              "SET #s=:b, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:m, amount=:a",
+            ExpressionAttributeNames: { "#s": "status" },
+            ExpressionAttributeValues: {
+              ":avail": "AVAILABLE",
+              ":b": "BOOKED",
+              ":dn": displayName,
+              ":dc": displayCode,
+              ":oid": fullOrderId,
+              ":m": String(managerId || "MANAGER"),
+              ":a": totalAmount,
+            },
+          },
+        },
+
+        /* FULL booking record */
+        {
+          Put: {
+            TableName: TABLE_BOOKINGS,
+            Item: {
+              pk,
+              sk: fullBookingSk,
+              bookingId: uuidv4(),
+              slotTime: finalTime,
+              vehicleType: "FULL",
+              pos: chosenPos,
+              userId: fullOrderId,
+              distributorCode: displayCode,
+              distributorName: displayName,
+              amount: totalAmount,
+              orderId: fullOrderId,
+              status: "CONFIRMED",
+              createdAt: new Date().toISOString(),
+            },
+          },
+        },
+      ],
+    })
+  );
+
+  /* 7️⃣ Update BOTH HALF bookings + orders */
+  const halfs = [b1, b2];
+
+  for (const b of halfs) {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_BOOKINGS,
+        Key: { pk, sk: b.sk },
+        UpdateExpression:
+          "SET #st=:m, mergedIntoOrderId=:fo, slotVehicleType=:vt, slotTime=:t, slotPos=:p, confirmedAt=:c",
+        ExpressionAttributeNames: { "#st": "status" },
+        ExpressionAttributeValues: {
+          ":m": "MERGED",
+          ":fo": fullOrderId,
+          ":vt": "FULL",
+          ":t": finalTime,
+          ":p": chosenPos,
+          ":c": new Date().toISOString(),
+        },
+      })
+    );
+
+    if (b.orderId) {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: TABLE_ORDERS,
+          Key: { pk: `ORDER#${b.orderId}`, sk: "META" },
+          UpdateExpression:
+            "SET mergedIntoOrderId=:fo, slotId=:sid, slotVehicleType=:vt, slotPos=:p, tripStatus=:ts, updatedAt=:u",
+          ExpressionAttributeValues: {
+            ":fo": fullOrderId,
+            ":sid": finalSlotId,
+            ":vt": "FULL",
+            ":p": chosenPos,
+            ":ts": "CONFIRMED",
+            ":u": new Date().toISOString(),
+          },
+        })
+      );
+    }
+  }
+
+  return {
+    ok: true,
+    message: "✅ Cross-session HALF + HALF merged to FULL",
+    fullOrderId,
+    slotId: finalSlotId,
+    finalSession: finalTime,
+    pos: chosenPos,
+    mergedBookings: [b1.sk, b2.sk],
+  };
+}
