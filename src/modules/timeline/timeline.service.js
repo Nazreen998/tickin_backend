@@ -391,45 +391,47 @@ export async function getOrderTimeline(req, res) {
 
     // ✅ access control
     const user = req.user || {};
-    const role = String(user.role || "").toUpperCase();
+  const role = String(user?.role || "").trim().toUpperCase();
+const isAdmin = ["MASTER", "MANAGER"].includes(role);
 
-    if (role !== "MASTER" && role !== "MANAGER") {
-      if (role === "DISTRIBUTOR") {
-  const userCodes = getUserDistributorCodes(user);
-  const orderCodes = getOrderDistributorCodes(meta);
+// 🔥 HARD ADMIN BYPASS
+if (!isAdmin) {
+  if (role === "DISTRIBUTOR") {
+    const userCodes = getUserDistributorCodes(user);
+    const orderCodes = getOrderDistributorCodes(meta);
 
-  const allowed = orderCodes.some((c) => userCodes.includes(c));
-
-  if (!allowed) {
-    return res.status(403).json({ ok: false, message: "Not allowed" });
-  }
-}
-
-else if (role === "SALESMAN" || role === "SALES OFFICER") {
-  // salesman/sales officer can see: own created OR allocated OR belongs to allowed distributor codes
-  const metaUserId = String(meta.userId || meta.createdBy || "");
-  const loggedUserId = String(user.userId || user.id || user.mobile || "");
-
-  const isOwn = metaUserId === loggedUserId;
-  const isAllocated = isAllocatedToUser(meta, user);
-
-  const userCodes = getUserDistributorCodes(user);
-  const orderCodes = getOrderDistributorCodes(meta);
-  const allowedByCode = orderCodes.some((c) => userCodes.includes(c));
-
-  if (!isOwn && !isAllocated && !allowedByCode) {
-    return res.status(403).json({ ok: false, message: "Not allowed" });
-  }
-}
-      if (role === "DRIVER") {
-        const loggedDriverId = String(user.userId || user.id || user.mobile || "");
-        const orderDriverId = String(meta.driverId || "");
-
-        if (orderDriverId && orderDriverId !== loggedDriverId) {
-          return res.status(403).json({ ok: false, message: "Not allowed" });
-        }
-      }
+    const allowed = orderCodes.some((c) => userCodes.includes(c));
+    if (!allowed) {
+      return res.status(403).json({ ok: false, message: "Not allowed" });
     }
+  }
+
+  else if (role === "SALESMAN" || role === "SALES OFFICER") {
+    const metaUserId = String(meta.userId || meta.createdBy || "");
+    const loggedUserId = String(user.userId || user.id || user.mobile || "");
+
+    const isOwn = metaUserId === loggedUserId;
+    const isAllocated = isAllocatedToUser(meta, user);
+
+    const userCodes = getUserDistributorCodes(user);
+    const orderCodes = getOrderDistributorCodes(meta);
+    const allowedByCode = orderCodes.some((c) => userCodes.includes(c));
+
+    if (!isOwn && !isAllocated && !allowedByCode) {
+      return res.status(403).json({ ok: false, message: "Not allowed" });
+    }
+  }
+
+  else if (role === "DRIVER") {
+    const loggedDriverId = String(user.userId || user.id || user.mobile || "");
+    const orderDriverId = String(meta.driverId || "");
+
+    if (orderDriverId && orderDriverId !== loggedDriverId) {
+      return res.status(403).json({ ok: false, message: "Not allowed" });
+    }
+  }
+}
+
 
     const uiMeta = await buildMeta(meta);
 
