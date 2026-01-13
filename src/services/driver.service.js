@@ -150,18 +150,24 @@ export async function getDriverOrders(driverId) {
   );
 
   // ✅ allow all statuses that driver can see
-  const allowed = new Set([
-    "DRIVER_ASSIGNED",
-    "DRIVE_STARTED",
-    "REACHED_D1",
-    "UNLOADING_START_D1",
-    "UNLOADING_END_D1",
-    "REACHED_D2",
-    "UNLOADING_START_D2",
-    "UNLOADING_END_D2",
-    "WAREHOUSE_REACHED",
-    "DELIVERY_COMPLETED",
-  ]);
+ const allowed = new Set([
+  "DRIVER_ASSIGNED",
+  "DRIVER_STARTED",           // ✅ add
+  "DRIVE_STARTED",            // keep if old data exists
+  "DRIVER_REACHED_DISTRIBUTOR", // ✅ add (safety)
+  "UNLOAD_START",             // ✅ add
+  "UNLOAD_END",               // ✅ add
+
+  "REACHED_D1",
+  "UNLOADING_START_D1",
+  "UNLOADING_END_D1",
+  "REACHED_D2",
+  "UNLOADING_START_D2",
+  "UNLOADING_END_D2",
+
+  "WAREHOUSE_REACHED",
+  "DELIVERY_COMPLETED",
+]);
 
   return (res.Items || []).filter((o) =>
     allowed.has(String(o.status || "").toUpperCase())
@@ -231,7 +237,9 @@ export async function updateDriverStatus({
 
   // ✅ map generic → timeline keys
   let desired = incoming;
-
+  
+if (incoming === "DRIVER_STARTED") desired = "DRIVER_STARTED";
+if (incoming === "DRIVE_STARTED") desired = "DRIVER_STARTED"; // alias normalize
   if (incoming === "DRIVER_REACHED_DISTRIBUTOR") desired = reachedEventKey(idx);
   if (incoming === "UNLOAD_START") desired = unloadStartEventKey(idx);
   if (incoming === "UNLOAD_END") desired = unloadEndEventKey(idx);

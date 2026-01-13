@@ -1,36 +1,37 @@
+function norm(s) {
+  return String(s || "").trim().toUpperCase();
+}
+
+// stage-status -> canonical groups (for transition allow)
+function groupStatus(s) {
+  const x = norm(s);
+
+  if (x === "DRIVE_STARTED") return "DRIVER_STARTED"; // alias
+  if (x.startsWith("REACHED_D")) return "REACHED";
+  if (x.startsWith("UNLOADING_START_D")) return "UNLOADING_START";
+  if (x.startsWith("UNLOADING_END_D")) return "UNLOADING_END";
+
+  return x;
+}
+
 export const transitions = {
-  // Manager -> Driver
-  DRIVER_ASSIGNED: ["DRIVE_STARTED", "DRIVER_STARTED"],
+  DRIVER_ASSIGNED: ["DRIVER_STARTED"],
 
-  // Start trip
-  DRIVE_STARTED: ["DRIVER_REACHED_DISTRIBUTOR", "REACHED_D1", "REACHED_D2"],
-  DRIVER_STARTED: ["DRIVER_REACHED_DISTRIBUTOR", "REACHED_D1", "REACHED_D2"],
+  DRIVER_STARTED: ["REACHED"],
 
-  // Generic reach (old) -> unload
-  DRIVER_REACHED_DISTRIBUTOR: ["UNLOAD_START", "UNLOADING_START_D1", "UNLOADING_START_D2"],
+  REACHED: ["UNLOADING_START"],
 
-  // D1/D2 reach -> unload start
-  REACHED_D1: ["UNLOAD_START", "UNLOADING_START_D1"],
-  REACHED_D2: ["UNLOAD_START", "UNLOADING_START_D2"],
+  UNLOADING_START: ["UNLOADING_END"],
 
-  // Unload start -> unload end
-  UNLOAD_START: ["UNLOAD_END", "UNLOADING_END_D1", "UNLOADING_END_D2"],
-  UNLOADING_START_D1: ["UNLOAD_END", "UNLOADING_END_D1"],
-  UNLOADING_START_D2: ["UNLOAD_END", "UNLOADING_END_D2"],
+  UNLOADING_END: ["REACHED", "WAREHOUSE_REACHED"],
 
-  // Unload end -> next reach OR warehouse
-  UNLOAD_END: ["DRIVER_REACHED_DISTRIBUTOR", "REACHED_D1", "REACHED_D2", "WAREHOUSE_REACHED"],
-  UNLOADING_END_D1: ["DRIVER_REACHED_DISTRIBUTOR", "REACHED_D2", "WAREHOUSE_REACHED"],
-  UNLOADING_END_D2: ["WAREHOUSE_REACHED"],
-
-  // End trip
   WAREHOUSE_REACHED: ["DELIVERY_COMPLETED"],
   DELIVERY_COMPLETED: [],
 };
 
 export function validateTransition(current, next) {
-  const c = String(current || "").toUpperCase();
-  const n = String(next || "").toUpperCase();
+  const c = groupStatus(current);
+  const n = groupStatus(next);
 
   const allowed = transitions[c] || [];
   if (!allowed.includes(n)) {
