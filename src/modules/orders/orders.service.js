@@ -1013,6 +1013,68 @@ await ddb.send(
     return res.status(500).json({ message: "Error", error: err.message });
   }
 };
+export const cancelOrderSlot = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const user = req.user;
+
+    const existing = await ddb.send(
+      new GetCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${orderId}`, sk: "META" },
+      })
+    );
+
+    if (!existing.Item) return res.status(404).json({ message: "Order not found" });
+
+    const order = existing.Item;
+
+    // ✅ allow only MANAGER/MASTER (optional)
+    const role = String(user.role || "").toUpperCase();
+    const isAdmin = role === "MANAGER" || role === "MASTER";
+    if (!isAdmin) return res.status(403).json({ message: "Access denied" });
+
+    // ✅ If no slot booked, nothing to cancel
+    if (!order.slotBooked) {
+      return res.json({ ok: true, message: "No slot booked already", orderId });
+    }
+
+    const now = new Date().toISOString();
+
+    await ddb.send(
+      new UpdateCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${orderId}`, sk: "META" },
+        UpdateExpression: `
+          SET slotBooked = :sb,
+              updatedAt = :u
+          REMOVE slot, slotId, slotDate, slotTime, slotPos, slotVehicleType
+        `,
+        ExpressionAttributeValues: {
+          ":sb": false,
+          ":u": now,
+        },
+      })
+    );
+
+    await addTimelineEvent({
+      orderId,
+      event: "SLOT_CANCELLED",
+      by: user.mobile,
+      extra: { role: user.role, note: "Slot cancelled only (order kept)" },
+    });
+
+    return res.json({
+      ok: true,
+      message: "✅ Slot cancelled (order kept CONFIRMED)",
+      orderId,
+      slotBooked: false,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Error", error: err.message });
+  }
+};
 
 /**
  * ✅ Sales officer: fetch all orders of distributors mapped to his location
