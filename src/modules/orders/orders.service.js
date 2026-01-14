@@ -972,19 +972,29 @@ if (!isAdmin && order.status !== "PENDING") {
     });
 
     // ✅ Mark cancelled
-    await ddb.send(
-      new UpdateCommand({
-        TableName: "tickin_orders",
-        Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression: "SET #st = :c, cancelledAt = :t, cancelledBy = :u",
-        ExpressionAttributeNames: { "#st": "status" },
-        ExpressionAttributeValues: {
-          ":c": "CANCELLED",
-          ":t": new Date().toISOString(),
-          ":u": user.mobile,
-        },
-      })
-    );
+    const now = new Date().toISOString();
+
+await ddb.send(
+  new UpdateCommand({
+    TableName: "tickin_orders",
+    Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    UpdateExpression: `
+      SET #st = :c,
+          cancelledAt = :t,
+          cancelledBy = :u,
+          slotBooked = :sb,
+          updatedAt = :t
+      REMOVE slot, slotId, slotDate, slotTime, slotPos, slotVehicleType
+    `,
+    ExpressionAttributeNames: { "#st": "status" },
+    ExpressionAttributeValues: {
+      ":c": "CANCELLED",
+      ":t": now,
+      ":u": user.mobile,
+      ":sb": false,
+    },
+  })
+);
 
     await addTimelineEvent({
       orderId,
