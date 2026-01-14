@@ -25,10 +25,19 @@ import {
   loadingStart,
   loadingEnd,
   getOrderFlowByKey,
-  assignDriver
+   assignDriver,
+  getDriversForDropdown, 
 } from "./orders.flow.service.js";
 
 const router = express.Router();
+router.get(
+  "/drivers",
+  verifyToken,
+  allowRoles("MANAGER"),
+  getDriversForDropdown
+);
+router.get("/driver-list", verifyToken, allowRoles("MANAGER","MASTER"), getDriversForDropdown);
+router.get("/drivers/list", verifyToken, allowRoles("MANAGER","MASTER"), getDriversForDropdown);
 
 /* ===========================
    MASTER / MANAGER ROUTES

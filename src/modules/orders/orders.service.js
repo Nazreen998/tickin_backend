@@ -12,7 +12,7 @@ import { v4 as uuidv4 } from "uuid";
 import { ddb } from "../../config/dynamo.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
-
+import { buildOrderStopsFromDistributorId } from "../../services/orderStops.helper.js";
 import {
   deductDistributorMonthlyGoalProductWise,
   addBackDistributorMonthlyGoalProductWise,
@@ -21,6 +21,7 @@ import {
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const TRIPS_TABLE = process.env.TRIPS_TABLE || "tickin_trips";
 const BOOKINGS_TABLE = process.env.BOOKINGS_TABLE || "tickin_slot_bookings";
+
 export const getSlotConfirmedOrders = async (req, res) => {
   try {
     const { date } = req.query;
@@ -380,6 +381,11 @@ export const createOrder = async (req, res) => {
       role === "SALESMAN" || role.includes("SALES")
         ? "CONFIRMED"
         : "PENDING";
+const stops = await buildOrderStopsFromDistributorId({
+  distributorId,
+  distributorName: null, // நீங்க orderItem-ல distributorName store பண்ணல, so null ok
+  items: finalItems,
+});
 
     const orderItem = {
       pk: `ORDER#${orderId}`,
@@ -391,6 +397,8 @@ export const createOrder = async (req, res) => {
       totalAmount,
       totalQty,
      status: finalStatus,
+      distributors: stops,
+      currentDistributorIndex: 0,
 
       // ✅ NEW FLAGS (keep safe)
       loadingStarted: false,

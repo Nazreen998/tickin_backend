@@ -570,4 +570,21 @@ router.post(
   }
 );
 
+router.post(
+  "/merge/manual-cross-session",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const out = await managerManualCrossSessionMerge({
+        ...req.body,
+        managerId: req.user?.userId || req.user?.mobile || "MANAGER",
+      });
+      res.json(out);
+    } catch (e) {
+      res.status(400).json({ ok: false, message: e.message });
+    }
+  }
+);
+
 export default router;

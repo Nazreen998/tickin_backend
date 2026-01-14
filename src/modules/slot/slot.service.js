@@ -29,13 +29,20 @@ const TABLE_QUEUE = process.env.TABLE_QUEUE || "tickin_slot_waiting_queue";
 const TABLE_RULES = process.env.TABLE_RULES || "tickin_slot_rules";
 const TABLE_ORDERS = process.env.ORDERS_TABLE || "tickin_orders";
 
-const DEFAULT_SLOTS = ["09:00", "12:30", "16:00", "20:00"];
+const DEFAULT_SLOTS = [
+  "09:00", "09:30", "10:00", "10:30",
+  "12:00", "12:30", "13:00", "13:30",
+  "15:00", "15:30", "16:00", "16:30",
+  "18:00", "18:30", "19:00", "19:30",
+];
+
 const ALL_POSITIONS = ["A", "B", "C", "D"];
+const NIGHT_SLOTS = ["18:00", "18:30", "19:00", "19:30"];
 
 const DEFAULT_THRESHOLD = Number(process.env.DEFAULT_MAX_AMOUNT || 80000);
 const MERGE_RADIUS_KM = Number(process.env.MERGE_RADIUS_KM || 25);
 
-const LAST_SLOT_TIME = "20:00";
+const LAST_SLOT_TIME = "19:30";
 
 /* ============================================================
    ✅ Eligible HALF Bookings (Manual Merge list API)
@@ -340,7 +347,6 @@ export async function managerEnableSlot({
 }
 
 /* ---------------- SLOT GRID ---------------- */
-
 export async function getSlotGrid({ companyCode, date }) {
   validateSlotDate(date);
   const pk = pkFor(companyCode, date);
@@ -354,7 +360,6 @@ export async function getSlotGrid({ companyCode, date }) {
       ExpressionAttributeValues: { ":pk": pk },
     })
   );
-
   const overrides = res.Items || [];
 
   const bookingsRes = await ddb.send(
@@ -364,14 +369,13 @@ export async function getSlotGrid({ companyCode, date }) {
       ExpressionAttributeValues: { ":pk": pk },
     })
   );
-
   const allBookings = bookingsRes.Items || [];
 
   const defaultSlots = [];
   for (const time of DEFAULT_SLOTS) {
     for (const pos of ALL_POSITIONS) {
       let status = "AVAILABLE";
-      if (time === LAST_SLOT_TIME && rules.lastSlotEnabled === false) {
+      if (NIGHT_SLOTS.includes(time) && rules.lastSlotEnabled === false) {
         status = "DISABLED";
       }
 
@@ -385,124 +389,117 @@ export async function getSlotGrid({ companyCode, date }) {
       });
     }
   }
-const finalSlots = defaultSlots.map((slot) => {
-  const override = overrides.find((o) => o.sk === slot.sk);
-  const merged = override ? { ...slot, ...override } : { ...slot };
 
-  // ✅ If capacity shows userId but status AVAILABLE -> force BOOKED
-  if (
-    merged.vehicleType === "FULL" &&
-    String(merged.status || "").toUpperCase() === "AVAILABLE" &&
-    merged.userId
-  ) {
-    merged.status = "BOOKED";
-  }
+  const finalSlots = defaultSlots.map((slot) => {
+    const override = overrides.find((o) => o.sk === slot.sk);
+    const merged = override ? { ...slot, ...override } : { ...slot };
 
-  // ✅ Attach booking details always when BOOKED
-  if (
-    merged.vehicleType === "FULL" &&
-    String(merged.status || "").toUpperCase() === "BOOKED"
-  ) {
-    const match = allBookings.find(
-      (b) =>
-        String(b.vehicleType || "").toUpperCase() === "FULL" &&
-        String(b.slotTime || "") === String(merged.time) &&
-        String(b.pos || "") === String(merged.pos)
-    );
-
-    if (match) {
-      merged.distributorName = match.distributorName || merged.distributorName || null;
-      merged.distributorCode = match.distributorCode || merged.distributorCode || null;
-      merged.orderId = match.orderId || merged.orderId || null;
-      merged.amount = Number(
-  match?.amount ??
-  merged?.amount ??
-  merged?.totalAmount ??
-  0
-);
-
-      merged.bookedBy = match.userId || merged.bookedBy || null;
-    }
-  }
-
-  return merged;
-});
-    const mergeSlots = overrides
-  .filter((o) => {
-    if (!String(o.sk || "").startsWith("MERGE_SLOT#")) return false;
-    const ts = String(o.tripStatus || "").toUpperCase();
-    return ts !== "FULL"; // ✅ hide confirmed merges
-  })
-  .map((m) => {
-    let time = m.time;
-    if (!time) {
-      try {
-        const parts = String(m.sk).split("#");
-        if (parts.length > 1) time = parts[1];
-      } catch (_) {}
+    if (
+      merged.vehicleType === "FULL" &&
+      String(merged.status || "").toUpperCase() === "AVAILABLE" &&
+      merged.userId
+    ) {
+      merged.status = "BOOKED";
     }
 
-    let mergeKey = m.mergeKey;
-    if (!mergeKey) {
-      try {
-        const sk = String(m.sk || "");
-        const parts = sk.split("#KEY#");
-        if (parts.length > 1) mergeKey = parts[1];
-      } catch (_) {}
-    }
-
-    const participants = allBookings
-      .filter(
+    if (
+      merged.vehicleType === "FULL" &&
+      String(merged.status || "").toUpperCase() === "BOOKED"
+    ) {
+      const match = allBookings.find(
         (b) =>
-          String(b.vehicleType || "").toUpperCase() === "HALF" &&
-          String(b.slotTime || "") === String(time) &&
-          String(b.mergeKey || "") === String(mergeKey)
-      )
-      .map((b) => ({
-        distributorCode: b.distributorCode,
-        distributorName: b.distributorName,
-        amount: Number(b.amount || 0),
-        orderId: b.orderId || null,
-        bookingSk: b.sk,
-        status: b.status,
-        slotTime: b.slotTime,
-        mergeKey: b.mergeKey,
-        lat: b.lat,
-        lng: b.lng,
-      }));
+          String(b.vehicleType || "").toUpperCase() === "FULL" &&
+          String(b.slotTime || "") === String(merged.time) &&
+          String(b.pos || "") === String(merged.pos)
+      );
 
-    let distanceKm = null;
-    if (participants.length >= 2) {
-      const a = participants[0];
-      const b = participants[1];
-      if (a.lat && a.lng && b.lat && b.lng) {
-        distanceKm = haversineKm(
-          Number(a.lat),
-          Number(a.lng),
-          Number(b.lat),
-          Number(b.lng)
+      if (match) {
+        merged.distributorName =
+          match.distributorName || merged.distributorName || null;
+        merged.distributorCode =
+          match.distributorCode || merged.distributorCode || null;
+        merged.orderId = match.orderId || merged.orderId || null;
+        merged.amount = Number(
+          match?.amount ?? merged?.amount ?? merged?.totalAmount ?? 0
         );
-        distanceKm = Number(distanceKm.toFixed(2));
+        merged.bookedBy = match.userId || merged.bookedBy || null;
       }
     }
 
-    const tripStatus = m.tripStatus || "PARTIAL";
-    const blink = m.blink === true;
+    return merged;
+  });
 
-    return {
-      ...m,
-      time,
-      blink,
-      tripStatus,
-      vehicleType: "HALF",
-      mergeKey,
-      participants,
-      bookingCount: participants.length,
-      distanceKm,
-    };
-  })
-  // ✅ ✅ ✅ THIS LINE REMOVES EMPTY OR ₹0 MERGE TILES
-  .filter((m) => (m.bookingCount || 0) > 0 || Number(m.totalAmount || 0) > 0);
+  const mergeSlots = overrides
+    .filter((o) => {
+      if (!String(o.sk || "").startsWith("MERGE_SLOT#")) return false;
+      const ts = String(o.tripStatus || "").toUpperCase();
+      return ts !== "FULL";
+    })
+    .map((m) => {
+      let time = m.time;
+      if (!time) {
+        try {
+          const parts = String(m.sk).split("#");
+          if (parts.length > 1) time = parts[1];
+        } catch (_) {}
+      }
+
+      let mergeKey = m.mergeKey;
+      if (!mergeKey) {
+        try {
+          const sk = String(m.sk || "");
+          const parts = sk.split("#KEY#");
+          if (parts.length > 1) mergeKey = parts[1];
+        } catch (_) {}
+      }
+
+      const participants = allBookings
+        .filter(
+          (b) =>
+            String(b.vehicleType || "").toUpperCase() === "HALF" &&
+            String(b.slotTime || "") === String(time) &&
+            String(b.mergeKey || "") === String(mergeKey)
+        )
+        .map((b) => ({
+          distributorCode: b.distributorCode,
+          distributorName: b.distributorName,
+          amount: Number(b.amount || 0),
+          orderId: b.orderId || null,
+          bookingSk: b.sk,
+          status: b.status,
+          slotTime: b.slotTime,
+          mergeKey: b.mergeKey,
+          lat: b.lat,
+          lng: b.lng,
+        }));
+
+      let distanceKm = null;
+      if (participants.length >= 2) {
+        const a = participants[0];
+        const b = participants[1];
+        if (a.lat && a.lng && b.lat && b.lng) {
+          distanceKm = haversineKm(
+            Number(a.lat),
+            Number(a.lng),
+            Number(b.lat),
+            Number(b.lng)
+          );
+          distanceKm = Number(distanceKm.toFixed(2));
+        }
+      }
+
+      return {
+        ...m,
+        time,
+        blink: m.blink === true,
+        tripStatus: m.tripStatus || "PARTIAL",
+        vehicleType: "HALF",
+        mergeKey,
+        participants,
+        bookingCount: participants.length,
+        distanceKm,
+      };
+    });
 
   const waitingHalfBookings = allBookings
     .filter((b) => {
@@ -531,10 +528,8 @@ const finalSlots = defaultSlots.map((slot) => {
       lastSlotOpenAfter: rules.lastSlotOpenAfter,
     },
   };
-}
-
+} // ✅ MUST END getSlotGrid HERE
 /* ---------------- ORDERID DUPLICATE CHECK ---------------- */
-
 async function checkOrderAlreadyBooked(pk, orderId) {
   if (!orderId) return false;
 
@@ -549,8 +544,6 @@ async function checkOrderAlreadyBooked(pk, orderId) {
   const items = res.Items || [];
   return items.some((x) => String(x.orderId || "") === String(orderId));
 }
-
-/* ✅ COMMON RESOLVER */
 
 async function resolveDistributorDetails({
   distributorCode,
@@ -590,7 +583,6 @@ async function resolveDistributorDetails({
 
   return { resolvedName, safeLat, safeLng };
 }
-/* ---------------- BOOK SLOT ---------------- */
 export async function bookSlot({
   companyCode,
   date,
@@ -641,8 +633,10 @@ export async function bookSlot({
   ====================================================== */
   if (vehicleType === "FULL") {
     if (!pos) throw new Error("pos required for FULL booking");
-    if (time === LAST_SLOT_TIME && rules.lastSlotEnabled === false) {
-      throw new Error("❌ Last slot is closed");
+
+    // ✅ Night slots closed unless manager enabled
+    if (NIGHT_SLOTS.includes(time) && rules.lastSlotEnabled === false) {
+      throw new Error("❌ Night slots are closed");
     }
 
     const slotSk = skForSlot(time, "FULL", pos);
@@ -653,6 +647,7 @@ export async function bookSlot({
       await ddb.send(
         new TransactWriteCommand({
           TransactItems: [
+            // ✅ prevent duplicate booking per order
             {
               Put: {
                 TableName: TABLE_BOOKINGS,
@@ -665,6 +660,8 @@ export async function bookSlot({
                 ConditionExpression: "attribute_not_exists(sk)",
               },
             },
+
+            // ✅ book capacity slot
             {
               Update: {
                 TableName: TABLE_CAPACITY,
@@ -678,13 +675,15 @@ export async function bookSlot({
                   ":booked": "BOOKED",
                   ":uid": uid,
                   ":dn": resolvedName,
-                  ":amt": amt,
                   ":dc": distributorCode,
                   ":oid": orderId,
                   ":by": uid,
+                  ":amt": amt,
                 },
               },
             },
+
+            // ✅ create booking record
             {
               Put: {
                 TableName: TABLE_BOOKINGS,
@@ -740,47 +739,46 @@ export async function bookSlot({
       })
     );
 
-   return {
-  ok: true,
-  bookingId,
-  slotId,          // ✅ MUST return
-  orderId,         // ✅ MUST return
-  type: "FULL",
-  userId: uid,
-  distributorName: resolvedName,
-  amount: amt,
-  lat: safeLat,
-  lng: safeLng,
-  slotTime: time,
-  date,
-  companyCode,
-};
-
+    return {
+      ok: true,
+      bookingId,
+      slotId,
+      orderId,
+      type: "FULL",
+      userId: uid,
+      distributorName: resolvedName,
+      amount: amt,
+      lat: safeLat,
+      lng: safeLng,
+      slotTime: time,
+      date,
+      companyCode,
+    };
   }
 
   /* ======================================================
      ✅ HALF BOOKING (LOCATIONID BASED MERGE)
   ====================================================== */
-let rawLocationId =
-  locationId && String(locationId).trim() !== ""
-    ? String(locationId).trim()
-    : `GEO_${Number(safeLat || 0).toFixed(4)}_${Number(safeLng || 0).toFixed(4)}`;
+  let rawLocationId =
+    locationId && String(locationId).trim() !== ""
+      ? String(locationId).trim()
+      : `GEO_${Number(safeLat || 0).toFixed(4)}_${Number(safeLng || 0).toFixed(
+          4
+        )}`;
 
-// ✅ PLACE THIS HERE 👇
-rawLocationId = String(rawLocationId || "").trim();
+  rawLocationId = String(rawLocationId || "").trim();
 
-// ✅ if purely numeric -> normalize (01 -> 1)
-if (/^\d+$/.test(rawLocationId)) {
-  rawLocationId = String(parseInt(rawLocationId, 10));
-}
+  // ✅ if purely numeric normalize 01 -> 1
+  if (/^\d+$/.test(rawLocationId)) {
+    rawLocationId = String(parseInt(rawLocationId, 10));
+  }
 
-// ✅ remove LOC# prefix if present
-rawLocationId = rawLocationId.replace(/^(LOC#)+/i, "").trim();
+  // ✅ remove LOC# prefix if present
+  rawLocationId = rawLocationId.replace(/^(LOC#)+/i, "").trim();
 
-const mergeKey = rawLocationId.startsWith("GEO_")
-  ? rawLocationId
-  : `LOC#${rawLocationId.toUpperCase()}`;
-
+  const mergeKey = rawLocationId.startsWith("GEO_")
+    ? rawLocationId
+    : `LOC#${rawLocationId.toUpperCase()}`;
 
   const mergeSk = skForMergeSlot(time, mergeKey);
 
@@ -795,6 +793,7 @@ const mergeKey = rawLocationId.startsWith("GEO_")
     throw new Error("❌ This merge is already confirmed. Cancel & rebook.");
   }
 
+  // ✅ get existing HALF bookings for blink
   const allBookingsRes = await ddb.send(
     new QueryCommand({
       TableName: TABLE_BOOKINGS,
@@ -820,6 +819,7 @@ const mergeKey = rawLocationId.startsWith("GEO_")
     await ddb.send(
       new TransactWriteCommand({
         TransactItems: [
+          // ✅ lock orderId
           {
             Put: {
               TableName: TABLE_BOOKINGS,
@@ -833,6 +833,7 @@ const mergeKey = rawLocationId.startsWith("GEO_")
             },
           },
 
+          // ✅ update merge slot amount
           {
             Update: {
               TableName: TABLE_CAPACITY,
@@ -853,6 +854,7 @@ const mergeKey = rawLocationId.startsWith("GEO_")
             },
           },
 
+          // ✅ put booking record
           {
             Put: {
               TableName: TABLE_BOOKINGS,
@@ -880,13 +882,11 @@ const mergeKey = rawLocationId.startsWith("GEO_")
       })
     );
   } catch (e) {
-    console.log("❌ AUTO CONFIRM FAILED:", e.message);
     if (
       String(e.message || "").includes("ConditionalCheckFailed") ||
       String(e.name || "") === "TransactionCanceledException"
     ) {
       throw new Error("❌ This Order already booked a slot (LOCKED)");
-      
     }
     throw e;
   }
@@ -960,7 +960,7 @@ const mergeKey = rawLocationId.startsWith("GEO_")
         distributorName: resolvedName,
       };
     } catch (e) {
-      console.log("AUTO CONFIRM skipped:", e.message);
+      // keep as pending
     }
   }
 
@@ -977,7 +977,6 @@ const mergeKey = rawLocationId.startsWith("GEO_")
     distributorName: resolvedName,
   };
 }
-
 /*Date wise merge*/
 export async function getWaitingHalfBookingsByDate(req, res) {
   try {
@@ -2056,5 +2055,188 @@ export async function managerMoveBookingToMerge({
     fromMergeKey,
     toMergeKey,
     movedAmount: amt,
+  };
+}
+export async function managerManualCrossSessionMerge({
+  companyCode,
+  date,
+  bookingSk1,
+  bookingSk2,
+  managerId,
+}) {
+  validateSlotDate(date);
+
+  if (!companyCode || !date || !bookingSk1 || !bookingSk2) {
+    throw new Error("companyCode, date, 2 bookingSk required");
+  }
+
+  if (bookingSk1 === bookingSk2) {
+    throw new Error("Same booking cannot be merged");
+  }
+
+  const pk = pkFor(companyCode, date);
+
+  /* 1️⃣ Fetch both bookings */
+  const [b1Res, b2Res] = await Promise.all([
+    ddb.send(new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSk1 } })),
+    ddb.send(new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSk2 } })),
+  ]);
+
+  const b1 = b1Res.Item;
+  const b2 = b2Res.Item;
+
+  if (!b1 || !b2) throw new Error("Booking not found");
+
+  /* 2️⃣ STRICT VALIDATIONS */
+  if (
+    String(b1.vehicleType).toUpperCase() !== "HALF" ||
+    String(b2.vehicleType).toUpperCase() !== "HALF"
+  ) {
+    throw new Error("❌ Only HALF + HALF allowed");
+  }
+
+  if (!isPendingOrWaitingStatus(b1.status) || !isPendingOrWaitingStatus(b2.status)) {
+    throw new Error("❌ Only PENDING / WAITING bookings allowed");
+  }
+
+  /* 3️⃣ Decide FINAL SESSION (later time wins) */
+  const t1 = dayjs(b1.slotTime, "HH:mm");
+  const t2 = dayjs(b2.slotTime, "HH:mm");
+
+  const finalTime = t1.isAfter(t2) ? b1.slotTime : b2.slotTime;
+
+  /* 4️⃣ Find AVAILABLE FULL slot in finalTime */
+  let chosenPos = null;
+
+  for (const p of ALL_POSITIONS) {
+    const slotSk = skForSlot(finalTime, "FULL", p);
+    const cap = await ddb.send(
+      new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: slotSk } })
+    );
+
+    const st = String(cap?.Item?.status || "AVAILABLE").toUpperCase();
+    if (st === "AVAILABLE") {
+      chosenPos = p;
+      break;
+    }
+  }
+
+  if (!chosenPos) {
+    throw new Error(`❌ No FULL slot available in ${finalTime} session`);
+  }
+
+  /* 5️⃣ Prepare FULL booking data */
+  const totalAmount = Number(b1.amount || 0) + Number(b2.amount || 0);
+
+  const displayName = [b1.distributorName, b2.distributorName]
+    .filter(Boolean)
+    .join(" + ");
+
+  const displayCode = b1.distributorCode || b2.distributorCode || "MERGE";
+
+  const fullOrderId = `ORD_FULL_${uuidv4().slice(0, 8)}`;
+  const fullBookingSk = skForBooking(finalTime, "FULL", chosenPos, fullOrderId);
+  const finalSlotId = `${companyCode}#${date}#${finalTime}#FULL#${chosenPos}`;
+
+  /* 6️⃣ TRANSACTION (atomic & safe) */
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        /* FULL slot booking */
+        {
+          Update: {
+            TableName: TABLE_CAPACITY,
+            Key: { pk, sk: skForSlot(finalTime, "FULL", chosenPos) },
+            ConditionExpression: "attribute_not_exists(#s) OR #s = :avail",
+            UpdateExpression:
+              "SET #s=:b, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:m, amount=:a",
+            ExpressionAttributeNames: { "#s": "status" },
+            ExpressionAttributeValues: {
+              ":avail": "AVAILABLE",
+              ":b": "BOOKED",
+              ":dn": displayName,
+              ":dc": displayCode,
+              ":oid": fullOrderId,
+              ":m": String(managerId || "MANAGER"),
+              ":a": totalAmount,
+            },
+          },
+        },
+
+        /* FULL booking record */
+        {
+          Put: {
+            TableName: TABLE_BOOKINGS,
+            Item: {
+              pk,
+              sk: fullBookingSk,
+              bookingId: uuidv4(),
+              slotTime: finalTime,
+              vehicleType: "FULL",
+              pos: chosenPos,
+              userId: fullOrderId,
+              distributorCode: displayCode,
+              distributorName: displayName,
+              amount: totalAmount,
+              orderId: fullOrderId,
+              status: "CONFIRMED",
+              createdAt: new Date().toISOString(),
+            },
+          },
+        },
+      ],
+    })
+  );
+
+  /* 7️⃣ Update BOTH HALF bookings + orders */
+  const halfs = [b1, b2];
+
+  for (const b of halfs) {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_BOOKINGS,
+        Key: { pk, sk: b.sk },
+        UpdateExpression:
+          "SET #st=:m, mergedIntoOrderId=:fo, slotVehicleType=:vt, slotTime=:t, slotPos=:p, confirmedAt=:c",
+        ExpressionAttributeNames: { "#st": "status" },
+        ExpressionAttributeValues: {
+          ":m": "MERGED",
+          ":fo": fullOrderId,
+          ":vt": "FULL",
+          ":t": finalTime,
+          ":p": chosenPos,
+          ":c": new Date().toISOString(),
+        },
+      })
+    );
+
+    if (b.orderId) {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: TABLE_ORDERS,
+          Key: { pk: `ORDER#${b.orderId}`, sk: "META" },
+          UpdateExpression:
+            "SET mergedIntoOrderId=:fo, slotId=:sid, slotVehicleType=:vt, slotPos=:p, tripStatus=:ts, updatedAt=:u",
+          ExpressionAttributeValues: {
+            ":fo": fullOrderId,
+            ":sid": finalSlotId,
+            ":vt": "FULL",
+            ":p": chosenPos,
+            ":ts": "CONFIRMED",
+            ":u": new Date().toISOString(),
+          },
+        })
+      );
+    }
+  }
+
+  return {
+    ok: true,
+    message: "✅ Cross-session HALF + HALF merged to FULL",
+    fullOrderId,
+    slotId: finalSlotId,
+    finalSession: finalTime,
+    pos: chosenPos,
+    mergedBookings: [b1.sk, b2.sk],
   };
 }

@@ -6,8 +6,8 @@ import { addTimelineEvent } from "../modules/timeline/timeline.helper.js";
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const DRIVER_GSI = "GSI_DRIVER_ASSIGNED";
 
-// ✅ 150m = 1500 meters
-//const REACH_RADIUS_METERS = 150 * 100;
+// ✅100 meters
+//const REACH_RADIUS_METERS = 100;
 const REACH_RADIUS_METERS = 20;
 
 /* ------------------ helpers ------------------ */
@@ -33,29 +33,18 @@ function isFiniteLatLng(lat, lng) {
 /* -------- Google Maps URL → lat/lng -------- */
 
 function extractLatLngFromUrl(url) {
-  if (!url || typeof url !== "string") {
-    return { lat: null, lng: null };
-  }
+  if (!url || typeof url !== "string") return { lat: null, lng: null };
 
   let match;
 
-  // !3dLAT!4dLNG
   match = url.match(/!3d(-?\d+(\.\d+)?)!4d(-?\d+(\.\d+)?)/);
-  if (match) {
-    return { lat: Number(match[1]), lng: Number(match[3]) };
-  }
+  if (match) return { lat: Number(match[1]), lng: Number(match[3]) };
 
-  // @LAT,LNG
   match = url.match(/@(-?\d+(\.\d+)?),(-?\d+(\.\d+)?)/);
-  if (match) {
-    return { lat: Number(match[1]), lng: Number(match[3]) };
-  }
+  if (match) return { lat: Number(match[1]), lng: Number(match[3]) };
 
-  // LAT,LNG
   match = url.match(/(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)/);
-  if (match) {
-    return { lat: Number(match[1]), lng: Number(match[3]) };
-  }
+  if (match) return { lat: Number(match[1]), lng: Number(match[3]) };
 
   return { lat: null, lng: null };
 }
@@ -71,7 +60,8 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
   const lat2N = Number(lat2);
   const lon2N = Number(lon2);
 
-  if (!isFiniteLatLng(lat1N, lon1N) || !isFiniteLatLng(lat2N, lon2N)) return Infinity;
+  if (!isFiniteLatLng(lat1N, lon1N) || !isFiniteLatLng(lat2N, lon2N))
+    return Infinity;
 
   const dLat = toRad(lat2N - lat1N);
   const dLon = toRad(lon2N - lon1N);
@@ -91,7 +81,6 @@ function normalizeDistributors(order) {
   const list = Array.isArray(order.distributors) ? order.distributors : [];
 
   return list.map((d) => {
-    // ✅ support mapUrl + final_url + finalUrl
     const url = d.mapUrl || d.final_url || d.finalUrl || null;
     const parsed = extractLatLngFromUrl(url);
 
@@ -116,12 +105,26 @@ function getCurrentStop(order) {
   const distributors = normalizeDistributors(order);
   const idx = Number(order.currentDistributorIndex || 0);
 
-  // ✅ safeguard: idx out of bounds
   if (!Number.isFinite(idx) || idx < 0) {
     return { distributors, idx: 0, stop: distributors[0] || null };
   }
 
   return { distributors, idx, stop: distributors[idx] || null };
+}
+
+/* ✅ D1 / D2 helpers */
+function stopLabel(idx) {
+  return idx === 0 ? "D1" : "D2";
+}
+
+function reachedEventKey(idx) {
+  return idx === 0 ? "REACHED_D1" : "REACHED_D2";
+}
+function unloadStartEventKey(idx) {
+  return idx === 0 ? "UNLOADING_START_D1" : "UNLOADING_START_D2";
+}
+function unloadEndEventKey(idx) {
+  return idx === 0 ? "UNLOADING_END_D1" : "UNLOADING_END_D2";
 }
 
 /* ------------------ core ------------------ */
@@ -147,20 +150,33 @@ export async function getDriverOrders(driverId) {
     })
   );
 
-  const allowed = new Set([
-    "DRIVER_ASSIGNED",
-    "DRIVER_STARTED",
-    "DRIVER_REACHED_DISTRIBUTOR",
-    "UNLOAD_START",
-    "UNLOAD_END",
-  ]);
+  // ✅ allow all statuses that driver can see
+ const allowed = new Set([
+  "DRIVER_ASSIGNED",
+  "DRIVER_STARTED",           // ✅ add
+  "DRIVE_STARTED",            // keep if old data exists
+  "DRIVER_REACHED_DISTRIBUTOR", // ✅ add (safety)
+  "UNLOAD_START",             // ✅ add
+  "UNLOAD_END",               // ✅ add
 
-  return (res.Items || []).filter((o) => allowed.has(String(o.status || "").toUpperCase()));
+  "REACHED_D1",
+  "UNLOADING_START_D1",
+  "UNLOADING_END_D1",
+  "REACHED_D2",
+  "UNLOADING_START_D2",
+  "UNLOADING_END_D2",
+
+  "WAREHOUSE_REACHED",
+  "DELIVERY_COMPLETED",
+]);
+
+  return (res.Items || []).filter((o) =>
+    allowed.has(String(o.status || "").toUpperCase())
+  );
 }
 
 /* -------- distance validation -------- */
 
-// ✅ name keep same for compatibility, but now it checks 50km
 export async function validateDriverReach30m({ orderId, currentLat, currentLng }) {
   const order = await getOrder(orderId);
   if (!order) throw new Error("Order not found");
@@ -193,8 +209,16 @@ export async function validateDriverReach30m({ orderId, currentLat, currentLng }
   };
 }
 
-/* ------------------ UPDATE STATUS (FINAL) ------------------ */
-
+/* ------------------ UPDATE STATUS ------------------ */
+/**
+ * nextStatus (frontend/driver app) can send:
+ *  - DRIVE_STARTED
+ *  - DRIVER_REACHED_DISTRIBUTOR   (we convert to REACHED_D1/REACHED_D2)
+ *  - UNLOAD_START                 (we convert to UNLOADING_START_D1/D2)
+ *  - UNLOAD_END                   (we convert to UNLOADING_END_D1/D2)
+ *  - WAREHOUSE_REACHED
+ *  - DELIVERY_COMPLETED (optional)
+ */
 export async function updateDriverStatus({
   orderId,
   nextStatus,
@@ -206,32 +230,50 @@ export async function updateDriverStatus({
   if (!order) throw new Error("Order not found");
 
   const currentStatus = String(order.status || "").toUpperCase();
-  const desired = String(nextStatus || "").toUpperCase();
-
-  validateTransition(currentStatus, desired);
+  const incoming = String(nextStatus || "").toUpperCase();
 
   const { distributors, idx, stop } = getCurrentStop(order);
-  console.log("📍 CURRENT STOP:", stop, "🔥 FORCE:", force);
+  const totalStops = distributors.length;
+  const hasD2 = totalStops > 1;
+
+  // ✅ map generic → timeline keys
+  let desired = incoming;
+  
+if (incoming === "DRIVER_STARTED") desired = "DRIVER_STARTED";
+if (incoming === "DRIVE_STARTED") desired = "DRIVER_STARTED"; // alias normalize
+  if (incoming === "DRIVER_REACHED_DISTRIBUTOR") desired = reachedEventKey(idx);
+  if (incoming === "UNLOAD_START") desired = unloadStartEventKey(idx);
+  if (incoming === "UNLOAD_END") desired = unloadEndEventKey(idx);
+
+  // ✅ Single order => never allow D2 events
+  if (!hasD2 && ["REACHED_D2", "UNLOADING_START_D2", "UNLOADING_END_D2"].includes(desired)) {
+    throw new Error("D2 not applicable for single order");
+  }
+
+  // ✅ validate transition using your existing rules
+  validateTransition(currentStatus, desired);
 
   let newIdx = idx;
   let newDistributors = distributors;
 
-  /* ---------- DRIVER_REACHED_DISTRIBUTOR ---------- */
-  if (desired === "DRIVER_REACHED_DISTRIBUTOR") {
+  /* ---------- DRIVE_STARTED ---------- */
+  if (desired === "DRIVE_STARTED") {
+    // nothing special, just status update + timeline event below
+  }
+
+  /* ---------- REACHED_D1 / REACHED_D2 ---------- */
+  if (desired === "REACHED_D1" || desired === "REACHED_D2") {
     if (!stop) throw new Error("No distributor stop found");
 
     if (!force) {
       if (!isFiniteLatLng(stop.lat, stop.lng)) {
         throw new Error("Distributor location missing or invalid");
       }
-
       if (!isFiniteLatLng(currentLat, currentLng)) {
         throw new Error("currentLat/currentLng required");
       }
 
       const check = await validateDriverReach30m({ orderId, currentLat, currentLng });
-
-      // ✅ IMPORTANT: “Try again” should not throw
       if (!check.within) {
         return {
           ok: false,
@@ -245,39 +287,32 @@ export async function updateDriverStatus({
     }
 
     newDistributors = [...newDistributors];
-    newDistributors[idx] = {
-      ...newDistributors[idx],
-      reachedAt: toIsoNow(),
-    };
+    newDistributors[idx] = { ...newDistributors[idx], reachedAt: toIsoNow() };
   }
 
-  /* ---------- UNLOAD_START ---------- */
-  if (desired === "UNLOAD_START") {
+  /* ---------- UNLOADING_START_D1 / D2 ---------- */
+  if (desired === "UNLOADING_START_D1" || desired === "UNLOADING_START_D2") {
     if (!stop) throw new Error("No distributor stop found");
     newDistributors = [...newDistributors];
-    newDistributors[idx] = {
-      ...newDistributors[idx],
-      unloadStartAt: toIsoNow(),
-    };
+    newDistributors[idx] = { ...newDistributors[idx], unloadStartAt: toIsoNow() };
   }
 
-  /* ---------- UNLOAD_END ---------- */
-  if (desired === "UNLOAD_END") {
+  /* ---------- UNLOADING_END_D1 / D2 ---------- */
+  if (desired === "UNLOADING_END_D1" || desired === "UNLOADING_END_D2") {
     if (!stop) throw new Error("No distributor stop found");
-    newDistributors = [...newDistributors];
-    newDistributors[idx] = {
-      ...newDistributors[idx],
-      unloadEndAt: toIsoNow(),
-    };
 
+    newDistributors = [...newDistributors];
+    newDistributors[idx] = { ...newDistributors[idx], unloadEndAt: toIsoNow() };
+
+    // ✅ after unload end, move to next stop if exists
     if (idx + 1 < newDistributors.length) {
       newIdx = idx + 1;
     }
   }
 
-  const tripClosed = desired === "WAREHOUSE_REACHED";
+  const tripClosed = desired === "WAREHOUSE_REACHED" || desired === "DELIVERY_COMPLETED";
 
-  // ✅ If we returned Try again above, we won't reach here (no DB update)
+  // ✅ DB update
   const updated = await ddb.send(
     new UpdateCommand({
       TableName: ORDERS_TABLE,
@@ -300,13 +335,19 @@ export async function updateDriverStatus({
 
   const after = updated.Attributes || {};
 
+  // ✅ timeline event (THIS is what your tracking screen reads)
   await addTimelineEvent({
     orderId,
     event: desired,
     by: String(after.driverId || "DRIVER"),
     role: "DRIVER",
     data: {
-      stage: desired === "WAREHOUSE_REACHED" ? "WAREHOUSE" : `D${newIdx + 1}`,
+      stage:
+        desired === "WAREHOUSE_REACHED"
+          ? "WAREHOUSE"
+          : desired === "DELIVERY_COMPLETED"
+            ? "DONE"
+            : stopLabel(idx),
       stopIndex: idx,
       currentLat,
       currentLng,
@@ -315,7 +356,7 @@ export async function updateDriverStatus({
 
   return {
     ok: true,
-    reached: desired === "DRIVER_REACHED_DISTRIBUTOR" ? true : undefined,
+    reached: desired === "REACHED_D1" || desired === "REACHED_D2" ? true : undefined,
     order: after,
   };
 }
