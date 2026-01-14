@@ -8,7 +8,7 @@ const DRIVER_GSI = "GSI_DRIVER_ASSIGNED";
 
 // ✅100 meters
 //const REACH_RADIUS_METERS = 100;
-const REACH_RADIUS_METERS = 50;
+const REACH_RADIUS_METERS = 200;
 
 /* ------------------ helpers ------------------ */
 
