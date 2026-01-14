@@ -637,7 +637,7 @@ export const confirmOrder = async (req, res) => {
 
     const order = orderRes.Item;
     const role = String(user.role || "").trim().toUpperCase();
-
+    const isAdmin = ["MASTER", "MANAGER", "DISTRIBUTOR", "SALESMAN", "SALES OFFICER"].includes(role);
     // // ✅ Only MANAGER can confirm (as you requested)
     // if (role !== "MANAGER") {
     //   return res.status(403).json({ message: "Access denied (MANAGER only)" });
@@ -652,21 +652,28 @@ export const confirmOrder = async (req, res) => {
 
     // ✅ 2) Confirm Order status => CONFIRMED, slotBooked false initially
     await ddb.send(
-      new UpdateCommand({
-        TableName: ORDERS_TABLE,
-        Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression:
-          "SET #st = :c, confirmedBy = :u, confirmedAt = :t, slotBooked = :sb",
-        ExpressionAttributeNames: { "#st": "status" },
-        ExpressionAttributeValues: {
-          ":c": "CONFIRMED",
-          ":u": user.mobile,
-          ":t": new Date().toISOString(),
-          ":sb": false,
-        },
-      })
-    );
-
+  new UpdateCommand({
+    TableName: ORDERS_TABLE,
+    Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    UpdateExpression: `
+      SET #st = :c,
+          confirmedBy = :u,
+          confirmedAt = :t,
+          slotBooked = :sb,
+          updatedAt = :t
+      REMOVE cancelledAt, cancelledBy,
+             slotId, slotDate, slotTime, slotPos, slotVehicleType,
+             slot
+    `,
+    ExpressionAttributeNames: { "#st": "status" },
+    ExpressionAttributeValues: {
+      ":c": "CONFIRMED",
+      ":u": user.mobile,
+      ":t": new Date().toISOString(),
+      ":sb": false,
+    },
+  })
+);
     await addTimelineEvent({
       orderId,
       event: "ORDER_CONFIRMED",
@@ -705,18 +712,40 @@ export const confirmOrder = async (req, res) => {
       };
 
       // ✅ Store slot + slotBooked in order
-      await ddb.send(
-        new UpdateCommand({
-          TableName: ORDERS_TABLE,
-          Key: { pk: `ORDER#${orderId}`, sk: "META" },
-          UpdateExpression: "SET slotBooked = :sb, slot = :slot",
-          ExpressionAttributeValues: {
-            ":sb": true,
-            ":slot": slotDetails,
-          },
-        })
-      );
+      const now = new Date().toISOString();
 
+// slotId: உங்கள் existing format வேண்டும்னா bookSlot return-ல இருந்து build பண்ணலாம்
+const slotIdValue =
+  slotDetails?.bookingId ||
+  booked?.bookingId ||
+  `${companyCode}#${slot.date}#${slot.time}#${slotDetails?.vehicleType || "FULL"}#${slot.pos}`;
+
+await ddb.send(
+  new UpdateCommand({
+    TableName: ORDERS_TABLE,
+    Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    UpdateExpression: `
+      SET slotBooked = :sb,
+          slot = :slot,
+          slotDate = :sd,
+          slotTime = :st,
+          slotPos = :sp,
+          slotVehicleType = :svt,
+          slotId = :sid,
+          updatedAt = :u
+    `,
+    ExpressionAttributeValues: {
+      ":sb": true,
+      ":slot": slotDetails,
+      ":sd": slot.date,
+      ":st": slot.time,
+      ":sp": slot.pos,
+      ":svt": slotDetails?.vehicleType || booked?.type || null,
+      ":sid": slotIdValue,
+      ":u": now,
+    },
+  })
+);
       // ✅ Create trip record (tickin_trips)
       const tripId = "TRP" + crypto.randomBytes(4).toString("hex").toUpperCase();
 
