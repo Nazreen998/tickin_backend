@@ -7,7 +7,8 @@ const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const DRIVER_GSI = "GSI_DRIVER_ASSIGNED";
 
 // ✅ 150m = 1500 meters
-const REACH_RADIUS_METERS = 150 * 100;
+//const REACH_RADIUS_METERS = 150 * 100;
+const REACH_RADIUS_METERS = 20;
 
 /* ------------------ helpers ------------------ */
 
