@@ -23,13 +23,10 @@ import {
 // ✅ NEW: Slot Timeline writer
 import { addTimelineEvent, addSlotTimelineEvent } from "../timeline/timeline.helper.js";
 import { BUILD_TAG } from "./slot.service.js";
-
+const router = express.Router();
 router.get("/build", (req, res) => {
   res.json({ ok: true, build: BUILD_TAG });
 });
-
-const router = express.Router();
-
 /* ✅ helper: extract slotId safely from any response */
 function extractSlotId(out) {
   if (!out) return null;
