@@ -22,6 +22,11 @@ import {
 
 // ✅ NEW: Slot Timeline writer
 import { addTimelineEvent, addSlotTimelineEvent } from "../timeline/timeline.helper.js";
+import { BUILD_TAG } from "./slot.service.js";
+
+router.get("/build", (req, res) => {
+  res.json({ ok: true, build: BUILD_TAG });
+});
 
 const router = express.Router();
 
