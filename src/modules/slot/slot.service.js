@@ -1635,21 +1635,20 @@ export async function managerCancelConfirmedMerge({
     cancelledBy: String(managerId || "MANAGER"),
   };
 }
+/* ✅ CANCEL BOOKING */
+export async function managerCancelBooking(payload) {
+  let {
+    companyCode,
+    date,
+    time,
+    pos,
+    userId,
+    bookingSk,
+    mergeKey,
+    orderId,
+  } = payload;
 
-/* ✅ CANCEL BOOKING */
-/* ✅ CANCEL BOOKING */
-export async function managerCancelBooking({
-  companyCode,
-  date,
-  time,
-  pos,
-  userId,
-  bookingSk,
-  mergeKey,
-  orderId, // optional
-}) {
   const pk = pkFor(companyCode, date);
-
   /* =========================
      ✅ FULL cancel
   ========================= */
