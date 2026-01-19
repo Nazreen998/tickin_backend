@@ -1646,48 +1646,85 @@ export async function managerCancelBooking({
   userId,
   bookingSk,
   mergeKey,
-  orderId, // ✅ NEW
+  orderId, // optional
 }) {
   const pk = pkFor(companyCode, date);
 
-  // ✅ FULL cancel
+  /* =========================
+     ✅ FULL cancel
+  ========================= */
   if (pos && userId) {
     const slotSk = skForSlot(time, "FULL", pos);
     const bookingSK = skForBooking(time, "FULL", pos, userId);
 
-    // ✅ delete lock also
-    const lockSk = orderId ? `ORDERLOCK#${orderId}` : null;
+    // ✅ resolve orderId (payload OR capacity OR booking)
+    let resolvedOrderId = orderId || null;
 
-    const items = [
+    if (!resolvedOrderId) {
+      const capRes = await ddb.send(
+        new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: slotSk } })
+      );
+      resolvedOrderId = capRes?.Item?.orderId || null;
+    }
+
+    if (!resolvedOrderId) {
+      const bookRes = await ddb.send(
+        new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSK } })
+      );
+      resolvedOrderId = bookRes?.Item?.orderId || null;
+    }
+
+    const lockSk = resolvedOrderId ? `ORDERLOCK#${resolvedOrderId}` : null;
+
+    const transactItems = [
       {
         Update: {
           TableName: TABLE_CAPACITY,
           Key: { pk, sk: slotSk },
           UpdateExpression:
-            "SET #s = :avail REMOVE userId, distributorName, distributorCode, orderId, bookedBy",
+            "SET #s = :avail REMOVE userId, distributorName, distributorCode, orderId, bookedBy, amount",
           ExpressionAttributeNames: { "#s": "status" },
           ExpressionAttributeValues: { ":avail": "AVAILABLE" },
         },
       },
-      { Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSK } } },
+      {
+        Delete: {
+          TableName: TABLE_BOOKINGS,
+          Key: { pk, sk: bookingSK },
+        },
+      },
     ];
 
     if (lockSk) {
-      items.push({
+      transactItems.push({
         Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: lockSk } },
       });
     }
 
-    await ddb.send(
-      new TransactWriteCommand({
-        TransactItems: items,
-      })
-    );
+    if (resolvedOrderId) {
+      transactItems.push({
+        Update: {
+          TableName: TABLE_ORDERS,
+          Key: { pk: `ORDER#${resolvedOrderId}`, sk: "META" },
+          UpdateExpression:
+            "SET slotBooked=:sb, updatedAt=:u " +
+            "REMOVE slotId, slotDate, slotTime, slotVehicleType, slotPos, mergeKey, locationId, mergedIntoOrderId, tripStatus",
+          ExpressionAttributeValues: {
+            ":sb": false,
+            ":u": new Date().toISOString(),
+          },
+        },
+      });
+    }
 
-    return { ok: true, type: "FULL" };
+    await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
+
+    return { ok: true, type: "FULL", orderId: resolvedOrderId };
   }
 
-  // ✅ HALF cancel
+  /* =========================
+     ✅ HALF cancel
+  ========================= */
   if (bookingSk && mergeKey) {
     const mergeSk2 = skForMergeSlot(time, mergeKey);
 
@@ -1699,41 +1736,54 @@ export async function managerCancelBooking({
     );
 
     if (!bookingRes.Item) throw new Error("Booking not found");
-    const amt = Number(bookingRes.Item.amount || 0);
 
-    const orderIdFromBooking = bookingRes.Item.orderId;
+    const amt = Number(bookingRes.Item.amount || 0);
+    const orderIdFromBooking = bookingRes.Item.orderId || null;
     const lockSk = orderIdFromBooking ? `ORDERLOCK#${orderIdFromBooking}` : null;
 
-    await ddb.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Update: {
-              TableName: TABLE_CAPACITY,
-              Key: { pk, sk: mergeSk2 },
-              UpdateExpression:
-                "SET totalAmount = totalAmount - :a, updatedAt = :u",
-              ConditionExpression: "totalAmount >= :a",
-              ExpressionAttributeValues: {
-                ":a": amt,
-                ":u": new Date().toISOString(),
-              },
-            },
+    const transactItems = [
+      {
+        Update: {
+          TableName: TABLE_CAPACITY,
+          Key: { pk, sk: mergeSk2 },
+          UpdateExpression: "SET totalAmount = totalAmount - :a, updatedAt = :u",
+          ConditionExpression: "totalAmount >= :a",
+          ExpressionAttributeValues: {
+            ":a": amt,
+            ":u": new Date().toISOString(),
           },
-          {
-            Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSk } },
-          },
-          ...(lockSk
-            ? [
-                {
-                  Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: lockSk } },
-                },
-              ]
-            : []),
-        ],
-      })
-    );
+        },
+      },
+      {
+        Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSk } },
+      },
+    ];
 
+    if (lockSk) {
+      transactItems.push({
+        Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: lockSk } },
+      });
+    }
+
+    if (orderIdFromBooking) {
+      transactItems.push({
+        Update: {
+          TableName: TABLE_ORDERS,
+          Key: { pk: `ORDER#${orderIdFromBooking}`, sk: "META" },
+          UpdateExpression:
+            "SET slotBooked=:sb, updatedAt=:u " +
+            "REMOVE slotId, slotDate, slotTime, slotVehicleType, mergeKey, locationId, mergedIntoOrderId, tripStatus, slotPos",
+          ExpressionAttributeValues: {
+            ":sb": false,
+            ":u": new Date().toISOString(),
+          },
+        },
+      });
+    }
+
+    await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
+
+    // ✅ Recompute tripStatus after cancel
     const after = await ddb.send(
       new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: mergeSk2 } })
     );
@@ -1742,8 +1792,7 @@ export async function managerCancelBooking({
     const threshold = rules.threshold;
 
     const finalTotal = Number(after?.Item?.totalAmount || 0);
-    const newTripStatus =
-      finalTotal >= threshold ? "READY_FOR_CONFIRM" : "PARTIAL";
+    const newTripStatus = finalTotal >= threshold ? "READY_FOR_CONFIRM" : "PARTIAL";
 
     await ddb.send(
       new UpdateCommand({
@@ -1758,12 +1807,17 @@ export async function managerCancelBooking({
       })
     );
 
-    return { ok: true, type: "HALF", tripStatus: newTripStatus, finalTotal };
+    return {
+      ok: true,
+      type: "HALF",
+      orderId: orderIdFromBooking,
+      tripStatus: newTripStatus,
+      finalTotal,
+    };
   }
 
   throw new Error("Invalid cancel payload");
 }
-
 /* ✅ DISABLE SLOT */
 export async function managerDisableSlot({
   companyCode,
@@ -1953,14 +2007,7 @@ export async function managerMoveBookingToMerge({
 }) {
   validateSlotDate(date);
 
-  if (
-    !companyCode ||
-    !date ||
-    !time ||
-    !bookingSk ||
-    !fromMergeKey ||
-    !toMergeKey
-  ) {
+  if (!companyCode || !date || !time || !bookingSk || !fromMergeKey || !toMergeKey) {
     throw new Error("Missing required fields");
   }
 
@@ -1968,39 +2015,24 @@ export async function managerMoveBookingToMerge({
   const fromSk = skForMergeSlot(time, fromMergeKey);
   const toSk = skForMergeSlot(time, toMergeKey);
 
-  const fromCap = await ddb.send(
-    new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: fromSk } })
-  );
-  if (
-    fromCap.Item &&
-    String(fromCap.Item.tripStatus || "").toUpperCase() === "FULL"
-  ) {
+  const [fromCap, toCap] = await Promise.all([
+    ddb.send(new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: fromSk } })),
+    ddb.send(new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: toSk } })),
+  ]);
+
+  if (fromCap.Item && String(fromCap.Item.tripStatus || "").toUpperCase() === "FULL") {
     throw new Error("❌ Source merge already CONFIRMED. Cancel & rebook.");
   }
-
-  const toCap = await ddb.send(
-    new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: toSk } })
-  );
-  if (
-    toCap.Item &&
-    String(toCap.Item.tripStatus || "").toUpperCase() === "FULL"
-  ) {
+  if (toCap.Item && String(toCap.Item.tripStatus || "").toUpperCase() === "FULL") {
     throw new Error("❌ Target merge already CONFIRMED. Cancel & rebook.");
   }
 
   const bookingRes = await ddb.send(
-    new GetCommand({
-      TableName: TABLE_BOOKINGS,
-      Key: { pk, sk: bookingSk },
-    })
+    new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSk } })
   );
-
   const booking = bookingRes.Item;
   if (!booking) throw new Error("Booking not found");
-
-  if (isConfirmedStatus(booking.status)) {
-    throw new Error("❌ Booking already CONFIRMED. Cancel & rebook.");
-  }
+  if (isConfirmedStatus(booking.status)) throw new Error("❌ Booking already CONFIRMED. Cancel & rebook.");
 
   const amt = Number(booking.amount || 0);
 
@@ -2011,26 +2043,17 @@ export async function managerMoveBookingToMerge({
           Update: {
             TableName: TABLE_CAPACITY,
             Key: { pk, sk: fromSk },
-            UpdateExpression:
-              "SET totalAmount = totalAmount - :a, updatedAt = :u",
+            UpdateExpression: "SET totalAmount = totalAmount - :a, updatedAt = :u",
             ConditionExpression: "totalAmount >= :a",
-            ExpressionAttributeValues: {
-              ":a": amt,
-              ":u": new Date().toISOString(),
-            },
+            ExpressionAttributeValues: { ":a": amt, ":u": new Date().toISOString() },
           },
         },
         {
           Update: {
             TableName: TABLE_CAPACITY,
             Key: { pk, sk: toSk },
-            UpdateExpression:
-              "SET totalAmount = if_not_exists(totalAmount, :z) + :a, updatedAt = :u",
-            ExpressionAttributeValues: {
-              ":z": 0,
-              ":a": amt,
-              ":u": new Date().toISOString(),
-            },
+            UpdateExpression: "SET totalAmount = if_not_exists(totalAmount, :z) + :a, updatedAt = :u",
+            ExpressionAttributeValues: { ":z": 0, ":a": amt, ":u": new Date().toISOString() },
           },
         },
         {
@@ -2049,13 +2072,7 @@ export async function managerMoveBookingToMerge({
     })
   );
 
-  return {
-    ok: true,
-    message: "✅ Booking moved successfully",
-    fromMergeKey,
-    toMergeKey,
-    movedAmount: amt,
-  };
+  return { ok: true, message: "✅ Booking moved successfully", fromMergeKey, toMergeKey, movedAmount: amt };
 }
 export async function managerManualCrossSessionMerge({
   companyCode,
