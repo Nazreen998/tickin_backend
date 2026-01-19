@@ -1649,78 +1649,85 @@ export async function managerCancelBooking(payload) {
   } = payload;
 
   const pk = pkFor(companyCode, date);
-  /* =========================
-     ✅ FULL cancel
-  ========================= */
-  if (pos && userId) {
-    const slotSk = skForSlot(time, "FULL", pos);
-    const bookingSK = skForBooking(time, "FULL", pos, userId);
+/* =========================
+   ✅ FULL cancel (userId optional)
+========================= */
+if (pos) {
+  const slotSk = skForSlot(time, "FULL", pos);
 
-    // ✅ resolve orderId (payload OR capacity OR booking)
-    let resolvedOrderId = orderId || null;
+  // ✅ only if userId present
+  const bookingSK = userId ? skForBooking(time, "FULL", pos, userId) : null;
 
-    if (!resolvedOrderId) {
-      const capRes = await ddb.send(
-        new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: slotSk } })
-      );
-      resolvedOrderId = capRes?.Item?.orderId || null;
-    }
+  // ✅ resolve orderId (payload OR capacity OR booking)
+  let resolvedOrderId = orderId || null;
 
-    if (!resolvedOrderId) {
-      const bookRes = await ddb.send(
-        new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSK } })
-      );
-      resolvedOrderId = bookRes?.Item?.orderId || null;
-    }
-
-    const lockSk = resolvedOrderId ? `ORDERLOCK#${resolvedOrderId}` : null;
-
-    const transactItems = [
-      {
-        Update: {
-          TableName: TABLE_CAPACITY,
-          Key: { pk, sk: slotSk },
-          UpdateExpression:
-            "SET #s = :avail REMOVE userId, distributorName, distributorCode, orderId, bookedBy, amount",
-          ExpressionAttributeNames: { "#s": "status" },
-          ExpressionAttributeValues: { ":avail": "AVAILABLE" },
-        },
-      },
-      {
-        Delete: {
-          TableName: TABLE_BOOKINGS,
-          Key: { pk, sk: bookingSK },
-        },
-      },
-    ];
-
-    if (lockSk) {
-      transactItems.push({
-        Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: lockSk } },
-      });
-    }
-
-    if (resolvedOrderId) {
-      transactItems.push({
-        Update: {
-          TableName: TABLE_ORDERS,
-          Key: { pk: `ORDER#${resolvedOrderId}`, sk: "META" },
-          UpdateExpression:
-            "SET slotBooked=:sb, updatedAt=:u " +
-            "REMOVE slotId, slotDate, slotTime, slotVehicleType, slotPos, mergeKey, locationId, mergedIntoOrderId, tripStatus",
-          ExpressionAttributeValues: {
-            ":sb": false,
-            ":u": new Date().toISOString(),
-          },
-        },
-      });
-    }
-
-    await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
-
-    return { ok: true, type: "FULL", orderId: resolvedOrderId };
+  // 1) capacity orderId 
+  if (!resolvedOrderId) {
+    const capRes = await ddb.send(
+      new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: slotSk } })
+    );
+    resolvedOrderId = capRes?.Item?.orderId || null;
   }
 
+  // 2) booking record orderId (only if bookingSK exists)
+  if (!resolvedOrderId && bookingSK) {
+    const bookRes = await ddb.send(
+      new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSK } })
+    );
+    resolvedOrderId = bookRes?.Item?.orderId || null;
+  }
+
+  const lockSk = resolvedOrderId ? `ORDERLOCK#${resolvedOrderId}` : null;
+
+  const transactItems = [
+    // ✅ free capacity slot
+    {
+      Update: {
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: slotSk },
+        UpdateExpression:
+          "SET #s = :avail REMOVE userId, distributorName, distributorCode, orderId, bookedBy, amount",
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: { ":avail": "AVAILABLE" },
+      },
+    },
+  ];
+
+  // ✅ delete FULL booking record only if we know bookingSK
+  if (bookingSK) {
+    transactItems.push({
+      Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSK } },
+    });
+  }
+
+  // ✅ delete order lock
+  if (lockSk) {
+    transactItems.push({
+      Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: lockSk } },
+    });
+  }
+
+  // ✅ reset order meta (THIS is what enables SLOT button)
+  if (resolvedOrderId) {
+    transactItems.push({
+      Update: {
+        TableName: TABLE_ORDERS,
+        Key: { pk: `ORDER#${resolvedOrderId}`, sk: "META" },
+        UpdateExpression:
+          "SET slotBooked=:sb, updatedAt=:u " +
+          "REMOVE slotId, slotDate, slotTime, slotVehicleType, slotPos, mergeKey, locationId, mergedIntoOrderId, tripStatus",
+        ExpressionAttributeValues: {
+          ":sb": false,
+          ":u": new Date().toISOString(),
+        },
+      },
+    });
+  }
+
+  await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
+
+  return { ok: true, type: "FULL", orderId: resolvedOrderId };
+}
   /* =========================
      ✅ HALF cancel (resolve bookingSk if missing)
   ========================= */
