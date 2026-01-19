@@ -1513,6 +1513,11 @@ export async function managerCancelConfirmedMerge({
   if (!pos) throw new Error("❌ Confirmed merge missing pos");
 
   const fullSlotSk = skForSlot(time, "FULL", pos);
+const fullCapRes = await ddb.send(
+  new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: fullSlotSk } })
+);
+
+const fullOrderId = fullCapRes?.Item?.orderId || null;
 
   // ✅ Fetch all bookings to delete FULL booking safely
   const allBookingsRes = await ddb.send(
@@ -1694,12 +1699,32 @@ if (pos) {
   ];
 
   // ✅ delete FULL booking record only if we know bookingSK
-  if (bookingSK) {
-    transactItems.push({
-      Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSK } },
-    });
-  }
+let fullBookingSkToDelete = bookingSK;
 
+if (!fullBookingSkToDelete) {
+  const allBookingsRes = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_BOOKINGS,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
+    })
+  );
+
+  const match = (allBookingsRes.Items || []).find(
+    (b) =>
+      String(b.vehicleType || "").toUpperCase() === "FULL" &&
+      String(b.slotTime || "") === String(time) &&
+      String(b.pos || "") === String(pos)
+  );
+
+  fullBookingSkToDelete = match?.sk || null;
+}
+
+if (fullBookingSkToDelete) {
+  transactItems.push({
+    Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: fullBookingSkToDelete } },
+  });
+}
   // ✅ delete order lock
   if (lockSk) {
     transactItems.push({
@@ -1725,6 +1750,14 @@ if (pos) {
   }
 
   await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
+if (fullOrderId) {
+  await ddb.send(
+    new DeleteCommand({
+      TableName: TABLE_ORDERS,
+      Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
+    })
+  );
+}
 
   return { ok: true, type: "FULL", orderId: resolvedOrderId };
 }
@@ -2129,8 +2162,18 @@ export async function managerManualCrossSessionMerge({
 
   /* 1️⃣ Fetch both bookings */
   const [b1Res, b2Res] = await Promise.all([
-    ddb.send(new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSk1 } })),
-    ddb.send(new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSk2 } })),
+    ddb.send(
+      new GetCommand({
+        TableName: TABLE_BOOKINGS,
+        Key: { pk, sk: bookingSk1 },
+      })
+    ),
+    ddb.send(
+      new GetCommand({
+        TableName: TABLE_BOOKINGS,
+        Key: { pk, sk: bookingSk2 },
+      })
+    ),
   ]);
 
   const b1 = b1Res.Item;
@@ -2140,29 +2183,35 @@ export async function managerManualCrossSessionMerge({
 
   /* 2️⃣ STRICT VALIDATIONS */
   if (
-    String(b1.vehicleType).toUpperCase() !== "HALF" ||
-    String(b2.vehicleType).toUpperCase() !== "HALF"
+    String(b1.vehicleType || "").toUpperCase() !== "HALF" ||
+    String(b2.vehicleType || "").toUpperCase() !== "HALF"
   ) {
     throw new Error("❌ Only HALF + HALF allowed");
   }
 
-  if (!isPendingOrWaitingStatus(b1.status) || !isPendingOrWaitingStatus(b2.status)) {
+  if (
+    !isPendingOrWaitingStatus(b1.status) ||
+    !isPendingOrWaitingStatus(b2.status)
+  ) {
     throw new Error("❌ Only PENDING / WAITING bookings allowed");
   }
 
   /* 3️⃣ Decide FINAL SESSION (later time wins) */
   const t1 = dayjs(b1.slotTime, "HH:mm");
   const t2 = dayjs(b2.slotTime, "HH:mm");
-
   const finalTime = t1.isAfter(t2) ? b1.slotTime : b2.slotTime;
 
-  /* 4️⃣ Find AVAILABLE FULL slot in finalTime */
+  /* 4️⃣ Find AVAILABLE FULL slot in finalTime (read-only check) */
   let chosenPos = null;
 
   for (const p of ALL_POSITIONS) {
     const slotSk = skForSlot(finalTime, "FULL", p);
+
     const cap = await ddb.send(
-      new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: slotSk } })
+      new GetCommand({
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: slotSk },
+      })
     );
 
     const st = String(cap?.Item?.status || "AVAILABLE").toUpperCase();
@@ -2180,20 +2229,26 @@ export async function managerManualCrossSessionMerge({
   const totalAmount = Number(b1.amount || 0) + Number(b2.amount || 0);
 
   const displayName = [b1.distributorName, b2.distributorName]
+    .map((x) => String(x || "").trim())
     .filter(Boolean)
     .join(" + ");
 
-  const displayCode = b1.distributorCode || b2.distributorCode || "MERGE";
+  const displayCode =
+    String(b1.distributorCode || "").trim() ||
+    String(b2.distributorCode || "").trim() ||
+    "MERGE";
 
   const fullOrderId = `ORD_FULL_${uuidv4().slice(0, 8)}`;
+
+  // keep bookingSk unique & deterministic enough
   const fullBookingSk = skForBooking(finalTime, "FULL", chosenPos, fullOrderId);
+
   const finalSlotId = `${companyCode}#${date}#${finalTime}#FULL#${chosenPos}`;
 
-  /* 6️⃣ TRANSACTION (atomic & safe) */
+  /* 6️⃣ TRANSACTION: Book FULL slot + create FULL booking record */
   await ddb.send(
     new TransactWriteCommand({
       TransactItems: [
-        /* FULL slot booking */
         {
           Update: {
             TableName: TABLE_CAPACITY,
@@ -2205,7 +2260,7 @@ export async function managerManualCrossSessionMerge({
             ExpressionAttributeValues: {
               ":avail": "AVAILABLE",
               ":b": "BOOKED",
-              ":dn": displayName,
+              ":dn": displayName || "MERGE",
               ":dc": displayCode,
               ":oid": fullOrderId,
               ":m": String(managerId || "MANAGER"),
@@ -2213,8 +2268,6 @@ export async function managerManualCrossSessionMerge({
             },
           },
         },
-
-        /* FULL booking record */
         {
           Put: {
             TableName: TABLE_BOOKINGS,
@@ -2227,11 +2280,35 @@ export async function managerManualCrossSessionMerge({
               pos: chosenPos,
               userId: fullOrderId,
               distributorCode: displayCode,
-              distributorName: displayName,
+              distributorName: displayName || "MERGE",
               amount: totalAmount,
               orderId: fullOrderId,
               status: "CONFIRMED",
               createdAt: new Date().toISOString(),
+            },
+          },
+        },
+        // ✅ create FULL order META (so cancel confirmed merge / reporting consistent)
+        {
+          Put: {
+            TableName: TABLE_ORDERS,
+            Item: {
+              pk: `ORDER#${fullOrderId}`,
+              sk: "META",
+              orderId: fullOrderId,
+              companyCode,
+              distributorId: displayCode,
+              distributorName: displayName || "MERGE",
+              mergedOrderIds: [b1.orderId, b2.orderId].filter(Boolean),
+              slotId: finalSlotId,
+              slotDate: date,
+              slotTime: finalTime,
+              slotVehicleType: "FULL",
+              slotPos: chosenPos,
+              totalAmount,
+              status: "SLOT_BOOKED",
+              createdAt: new Date().toISOString(),
+              createdBy: String(managerId || "MANAGER"),
             },
           },
         },
@@ -2291,3 +2368,4 @@ export async function managerManualCrossSessionMerge({
     mergedBookings: [b1.sk, b2.sk],
   };
 }
+
