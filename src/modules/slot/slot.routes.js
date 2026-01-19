@@ -15,6 +15,7 @@ import {
   managerSetSlotMax,
   managerEnableSlot,
   managerToggleLastSlot,
+  managerManualCrossSessionMerge,
   managerMergeOrdersToMergeKey,
   managerSetGlobalMax,
   getEligibleHalfBookings,
@@ -55,6 +56,22 @@ router.get(
   verifyToken,
   allowRoles("MANAGER"),
   getEligibleHalfBookings
+);
+router.post(
+  "/manager/manual-cross-session-merge",
+  verifyToken,
+  allowRoles(["MANAGER", "ADMIN"]),
+  async (req, res) => {
+    try {
+      const out = await managerManualCrossSessionMerge({
+        companyCode: req.user?.companyCode || req.body.companyCode,
+        ...req.body,
+      });
+      return res.json({ ok: true, ...out });
+    } catch (e) {
+      return res.status(400).json({ ok: false, message: e.message });
+    }
+  }
 );
 
 router.get(
