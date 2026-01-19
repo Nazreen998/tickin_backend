@@ -892,26 +892,24 @@ export async function bookSlot({
   }
 
   const slotId = `${companyCode}#${date}#${time}#HALF#KEY#${mergeKey}`;
-
-  await ddb.send(
-    new UpdateCommand({
-      TableName: TABLE_ORDERS,
-      Key: { pk: `ORDER#${orderId}`, sk: "META" },
-      UpdateExpression:
-        "SET slotBooked=:sb, slotId=:sid, slotDate=:d, slotTime=:t, slotVehicleType=:vt, mergeKey=:mk, locationId=:lid, updatedAt=:u",
-      ExpressionAttributeValues: {
-        ":sb": false,
-        ":sid": slotId,
-        ":d": date,
-        ":t": time,
-        ":vt": "HALF",
-        ":mk": mergeKey,
-        ":lid": rawLocationId,
-        ":u": new Date().toISOString(),
-      },
-    })
-  );
-
+await ddb.send(
+  new UpdateCommand({
+    TableName: TABLE_ORDERS,
+    Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    UpdateExpression:
+      "SET slotBooked=:sb, slotDate=:d, slotTime=:t, slotVehicleType=:vt, mergeKey=:mk, locationId=:lid, updatedAt=:u " +
+      "REMOVE slotId, slotPos, mergedIntoOrderId, tripStatus",
+    ExpressionAttributeValues: {
+      ":sb": false,
+      ":d": date,
+      ":t": time,
+      ":vt": "HALF",
+      ":mk": mergeKey,
+      ":lid": rawLocationId,
+      ":u": new Date().toISOString(),
+    },
+  })
+);
   const updated = await ddb.send(
     new GetCommand({
       TableName: TABLE_CAPACITY,
@@ -1638,6 +1636,7 @@ export async function managerCancelConfirmedMerge({
 }
 
 /* ✅ CANCEL BOOKING */
+/* ✅ CANCEL BOOKING */
 export async function managerCancelBooking({
   companyCode,
   date,
@@ -1723,15 +1722,42 @@ export async function managerCancelBooking({
   }
 
   /* =========================
+     ✅ HALF cancel (resolve bookingSk if missing)
+  ========================= */
+  let resolvedBookingSk = bookingSk || null;
+
+  // ✅ If bookingSk missing but mergeKey + orderId present, resolve bookingSk by orderId
+  if ((!resolvedBookingSk || resolvedBookingSk === "") && mergeKey && orderId) {
+    const allBookingsRes = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE_BOOKINGS,
+        KeyConditionExpression: "pk = :pk",
+        ExpressionAttributeValues: { ":pk": pk },
+      })
+    );
+
+    const match = (allBookingsRes.Items || []).find(
+      (b) =>
+        String(b.vehicleType || "").toUpperCase() === "HALF" &&
+        String(b.slotTime || "") === String(time) &&
+        String(b.mergeKey || "") === String(mergeKey) &&
+        String(b.orderId || "") === String(orderId)
+    );
+
+    if (!match) throw new Error("Booking not found for this orderId");
+    resolvedBookingSk = match.sk;
+  }
+
+  /* =========================
      ✅ HALF cancel
   ========================= */
-  if (bookingSk && mergeKey) {
+  if (resolvedBookingSk && mergeKey) {
     const mergeSk2 = skForMergeSlot(time, mergeKey);
 
     const bookingRes = await ddb.send(
       new GetCommand({
         TableName: TABLE_BOOKINGS,
-        Key: { pk, sk: bookingSk },
+        Key: { pk, sk: resolvedBookingSk },
       })
     );
 
@@ -1755,7 +1781,7 @@ export async function managerCancelBooking({
         },
       },
       {
-        Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSk } },
+        Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: resolvedBookingSk } },
       },
     ];
 
@@ -1792,7 +1818,8 @@ export async function managerCancelBooking({
     const threshold = rules.threshold;
 
     const finalTotal = Number(after?.Item?.totalAmount || 0);
-    const newTripStatus = finalTotal >= threshold ? "READY_FOR_CONFIRM" : "PARTIAL";
+    const newTripStatus =
+      finalTotal >= threshold ? "READY_FOR_CONFIRM" : "PARTIAL";
 
     await ddb.send(
       new UpdateCommand({
