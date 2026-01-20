@@ -624,7 +624,6 @@ export async function managerManualMergePickTime({
 
   // 3) Find AVAILABLE FULL slot in targetTime
   let chosenPos = null;
-
   for (const p of ALL_POSITIONS) {
     const fullSkTry = skForSlot(targetTime, "FULL", p);
 
@@ -662,42 +661,33 @@ export async function managerManualMergePickTime({
 
   const fullOrderId = `ORD_FULL_${uuidv4().slice(0, 8)}`;
   const finalSlotId = `${companyCode}#${date}#${targetTime}#FULL#${chosenPos}`;
+  const fullSk = skForSlot(targetTime, "FULL", chosenPos);
 
-  const baseCap =
-    existingCap.Item || {
-      pk,
-      sk: fullSk,
-      time: targetTime,
-      vehicleType: "FULL",
-      pos: chosenPos,
-    };
-
-  // 5) Transaction: PUT capacity override + FULL booking + FULL order
+  // 5) Transaction: UPDATE capacity (BOOKED) + FULL booking + FULL order
   await ddb.send(
     new TransactWriteCommand({
       TransactItems: [
-        // ✅ Put FULL capacity item (guaranteed create)
+        // ✅ BOOK capacity slot (always works even if item doesn't exist)
         {
-          Put: {
+          Update: {
             TableName: TABLE_CAPACITY,
-            Item: {
-              ...baseCap,
-              status: "BOOKED",
-              userId: fullOrderId, // ✅ IMPORTANT for grid
-              time: targetTime,
-              vehicleType: "FULL",
-              pos: chosenPos,
-              distributorName: displayName || "MERGE",
-              distributorCode: displayCode,
-              orderId: fullOrderId,
-              bookedBy: String(managerId || "MANAGER"),
-              amount: totalAmount,
-              updatedAt: new Date().toISOString(),
-            },
-            // ✅ don't overwrite if already BOOKED/DISABLED
-            ConditionExpression: "attribute_not_exists(sk) OR #s = :avail",
+            Key: { pk, sk: fullSk },
+            UpdateExpression:
+              "SET #s=:b, userId=:uid, time=:t, vehicleType=:vt, pos=:p, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:m, amount=:a, updatedAt=:u",
             ExpressionAttributeNames: { "#s": "status" },
-            ExpressionAttributeValues: { ":avail": "AVAILABLE" },
+            ExpressionAttributeValues: {
+              ":b": "BOOKED",
+              ":uid": fullOrderId,
+              ":t": targetTime,
+              ":vt": "FULL",
+              ":p": chosenPos,
+              ":dn": displayName || "MERGE",
+              ":dc": displayCode,
+              ":oid": fullOrderId,
+              ":m": String(managerId || "MANAGER"),
+              ":a": totalAmount,
+              ":u": new Date().toISOString(),
+            },
           },
         },
 
@@ -750,21 +740,8 @@ export async function managerManualMergePickTime({
       ],
     })
   );
-// ✅ DEBUG: confirm FULL slot actually written
-const fullSk = skForSlot(targetTime, "FULL", chosenPos);
 
-const check = await ddb.send(
-  new GetCommand({
-    TableName: TABLE_CAPACITY,
-    Key: { pk, sk: fullSk },
-  })
-);
-
-if (!check.Item || String(check.Item.status || "").toUpperCase() !== "BOOKED") {
-  throw new Error(`FULL slot not written. pk=${pk} sk=${fullSk}`);
-}
-
-  // ✅ hide old merge tiles (mark merge slots FULL)
+  // ✅ CLEANUP: delete old merge capacity records (orange tiles remove guaranteed)
   const touched = new Set();
   for (const b of bookingItems) {
     const mk = b.mergeKey;
@@ -779,14 +756,9 @@ if (!check.Item || String(check.Item.status || "").toUpperCase() !== "BOOKED") {
 
     try {
       await ddb.send(
-        new UpdateCommand({
+        new DeleteCommand({
           TableName: TABLE_CAPACITY,
           Key: { pk, sk: mergeSk },
-          UpdateExpression: "SET tripStatus=:s, updatedAt=:u",
-          ExpressionAttributeValues: {
-            ":s": "FULL",
-            ":u": new Date().toISOString(),
-          },
         })
       );
     } catch (_) {}
@@ -842,6 +814,7 @@ if (!check.Item || String(check.Item.status || "").toUpperCase() !== "BOOKED") {
     mergedBookings: bookingItems.map((b) => b.sk),
   };
 }
+
 /* ---------------- ORDERID DUPLICATE CHECK ---------------- */
 async function checkOrderAlreadyBooked(pk, orderId) {
   if (!orderId) return false;
