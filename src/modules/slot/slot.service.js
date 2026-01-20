@@ -204,6 +204,23 @@ function skForMergeSlot(time, mergeKey) {
 /* ---------------- RULES ---------------- */
 
 async function getRules(companyCode) {
+const DEFAULT_SLOT_TIMES = {
+  Morning: ["09:00","09:30","10:00","10:30"],
+  Afternoon: ["12:00","12:30","13:00","13:30"],
+  Evening: ["15:00","15:30","16:00","16:30"],
+  Night: ["18:00","18:30","19:00","19:30"],
+};
+
+function flattenSlotTimes(slotTimes) {
+  const st = slotTimes || DEFAULT_SLOT_TIMES;
+  return [
+    ...(st.Morning || []),
+    ...(st.Afternoon || []),
+    ...(st.Evening || []),
+    ...(st.Night || []),
+  ];
+}
+
   const res = await ddb.send(
     new GetCommand({
       TableName: TABLE_RULES,
@@ -212,11 +229,13 @@ async function getRules(companyCode) {
   );
 
   const rules = res.Item || {};
-  return {
-    threshold: Number(rules.threshold || DEFAULT_THRESHOLD),
-    lastSlotEnabled: Boolean(rules.lastSlotEnabled),
-    lastSlotOpenAfter: rules.lastSlotOpenAfter || "17:00",
-  };
+return {
+  threshold: Number(rules.threshold || DEFAULT_THRESHOLD),
+  lastSlotEnabled: Boolean(rules.lastSlotEnabled),
+  lastSlotOpenAfter: rules.lastSlotOpenAfter || "17:00",
+  slotTimes: rules.slotTimes || DEFAULT_SLOT_TIMES,
+};
+
 }
 
 async function updateRules(companyCode, patch) {
@@ -352,8 +371,6 @@ export async function getSlotGrid({ companyCode, date }) {
   validateSlotDate(date);
   const pk = pkFor(companyCode, date);
 
-  const rules = await getRules(companyCode);
-
   const res = await ddb.send(
     new QueryCommand({
       TableName: TABLE_CAPACITY,
@@ -383,23 +400,9 @@ export async function getSlotGrid({ companyCode, date }) {
   }
 
   const defaultSlots = [];
-  for (const time of DEFAULT_SLOTS) {
-    for (const pos of ALL_POSITIONS) {
-      let status = "AVAILABLE";
-      if (NIGHT_SLOTS.includes(time) && rules.lastSlotEnabled === false) {
-        status = "DISABLED";
-      }
+  const rules = await getRules(companyCode);
+const DEFAULT_SLOTS = flattenSlotTimes(rules.slotTimes);
 
-      defaultSlots.push({
-        pk,
-        sk: skForSlot(time, "FULL", pos),
-        time,
-        vehicleType: "FULL",
-        pos,
-        status,
-      });
-    }
-  }
 
   const finalSlots = defaultSlots.map((slot) => {
     // 1) capacity override merge
@@ -541,6 +544,7 @@ export async function getSlotGrid({ companyCode, date }) {
       maxAmount: rules.threshold,
       lastSlotEnabled: rules.lastSlotEnabled,
       lastSlotOpenAfter: rules.lastSlotOpenAfter,
+      slotTimes: rules.slotTimes, // ✅ add this
     },
   };
 }
