@@ -676,16 +676,17 @@ export async function managerManualMergePickTime({
               "SET #s=:b, userId=:uid, time=:t, vehicleType=:vt, pos=:p, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:m, amount=:a, updatedAt=:u",
             ExpressionAttributeNames: { "#s": "status" },
             ExpressionAttributeValues: {
+              ":avail": "AVAILABLE",
               ":b": "BOOKED",
               ":uid": fullOrderId,
-              ":t": targetTime,
-              ":vt": "FULL",
-              ":p": chosenPos,
               ":dn": displayName || "MERGE",
               ":dc": displayCode,
               ":oid": fullOrderId,
               ":m": String(managerId || "MANAGER"),
               ":a": totalAmount,
+              ":t": targetTime,
+              ":p": chosenPos,
+              ":vt": "FULL",
               ":u": new Date().toISOString(),
             },
           },
@@ -745,23 +746,36 @@ export async function managerManualMergePickTime({
   const touched = new Set();
   for (const b of bookingItems) {
     const mk = b.mergeKey;
-    const t = b.slotTime;
+  for (const key of touched) {
+  const [t, mk] = key.split("__");
+  const mergeSk = skForMergeSlot(t, mk);
+
+  try {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: mergeSk },
+        UpdateExpression: "SET tripStatus=:s, blink=:b, updatedAt=:u",
+        ExpressionAttributeValues: {
+          ":s": "FULL",
+          ":b": false,
+          ":u": new Date().toISOString(),
+        },
+      })
+    );
+
+    // ✅ delete override record so it will not appear in grid again
+    await ddb.send(
+      new DeleteCommand({
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: mergeSk },
+      })
+    );
+  } catch (_) {}
+}
+  const t = b.slotTime;
     if (!mk || !t) continue;
     touched.add(`${t}__${mk}`);
-  }
-
-  for (const key of touched) {
-    const [t, mk] = key.split("__");
-    const mergeSk = skForMergeSlot(t, mk);
-
-    try {
-      await ddb.send(
-        new DeleteCommand({
-          TableName: TABLE_CAPACITY,
-          Key: { pk, sk: mergeSk },
-        })
-      );
-    } catch (_) {}
   }
 
   // 6) Update each HALF booking + each HALF order META
