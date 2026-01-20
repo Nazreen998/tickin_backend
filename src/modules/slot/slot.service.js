@@ -662,19 +662,20 @@ export async function managerManualMergePickTime({
           Update: {
             TableName: TABLE_CAPACITY,
             Key: { pk, sk: skForSlot(targetTime, "FULL", chosenPos) },
-            ConditionExpression: "attribute_not_exists(#s) OR #s = :avail",
             UpdateExpression:
-              "SET #s=:b, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:m, amount=:a",
+  "SET #s=:b, time=:t, pos=:p, vehicleType=:vt, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:m, amount=:a",
             ExpressionAttributeNames: { "#s": "status" },
             ExpressionAttributeValues: {
-              ":avail": "AVAILABLE",
-              ":b": "BOOKED",
-              ":dn": displayName || "MERGE",
-              ":dc": displayCode,
-              ":oid": fullOrderId,
-              ":m": String(managerId || "MANAGER"),
-              ":a": totalAmount,
-            },
+  ":b": "BOOKED",
+  ":t": targetTime,
+  ":p": chosenPos,
+  ":vt": "FULL",
+  ":dn": displayName || "MERGE",
+  ":dc": displayCode,
+  ":oid": fullOrderId,
+  ":m": String(managerId || "MANAGER"),
+  ":a": totalAmount,
+},
           },
         },
         // create FULL booking record
@@ -725,6 +726,33 @@ export async function managerManualMergePickTime({
       ],
     })
   );
+// ✅ hide old merge tiles by marking their merge slots FULL (optional cleanup)
+const touched = new Set();
+for (const b of bookingItems) {
+  const mk = b.mergeKey;
+  const t = b.slotTime;
+  if (!mk || !t) continue;
+  touched.add(`${t}__${mk}`);
+}
+
+for (const key of touched) {
+  const [t, mk] = key.split("__");
+  const mergeSk = skForMergeSlot(t, mk);
+
+  try {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: mergeSk },
+        UpdateExpression: "SET tripStatus=:s, updatedAt=:u",
+        ExpressionAttributeValues: {
+          ":s": "FULL",
+          ":u": new Date().toISOString(),
+        },
+      })
+    );
+  } catch (_) {}
+}
 
   // 6) Update each HALF booking + each HALF order META
   for (const b of bookingItems) {
