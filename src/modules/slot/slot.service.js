@@ -497,6 +497,15 @@ export async function getSlotGrid({ companyCode, date }) {
         vehicleType: "HALF",
         mergeKey,
         participants,
+        // ✅ ADD THESE
+  canCancel: true,
+  canRebook: true,
+  canMerge: true,
+  orders: participants.map(p => ({
+    orderId: p.orderId,
+    distributorName: p.distributorName,
+    amount: p.amount,
+    bookingSk: p.bookingSk,  })),
         bookingCount: participants.length,
         distanceKm,
       };
@@ -1758,8 +1767,14 @@ if (fullOrderId) {
     })
   );
 }
+return {
+  ok: true,
+  slotType: "FULL",
+  orderId: resolvedOrderId,
+  time,
+  pos,
+};
 
-  return { ok: true, type: "FULL", orderId: resolvedOrderId };
 }
   /* =========================
      ✅ HALF cancel (resolve bookingSk if missing)
@@ -1873,14 +1888,15 @@ if (fullOrderId) {
         },
       })
     );
-
-    return {
-      ok: true,
-      type: "HALF",
-      orderId: orderIdFromBooking,
-      tripStatus: newTripStatus,
-      finalTotal,
-    };
+return {
+  ok: true,
+  slotType: "HALF",
+  orderId: orderIdFromBooking,
+  mergeKey,
+  time,
+  tripStatus: newTripStatus,
+  finalTotal,
+};
   }
 
   throw new Error("Invalid cancel payload");
