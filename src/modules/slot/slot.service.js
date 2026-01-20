@@ -372,6 +372,16 @@ export async function getSlotGrid({ companyCode, date }) {
   );
   const allBookings = bookingsRes.Items || [];
 
+  // ✅ quick index for FULL bookings by time+pos (fast & clean)
+  const fullBookingIndex = new Map();
+  for (const b of allBookings) {
+    if (String(b.vehicleType || "").toUpperCase() !== "FULL") continue;
+    const t = String(b.slotTime || "");
+    const p = String(b.pos || "");
+    if (!t || !p) continue;
+    fullBookingIndex.set(`${t}__${p}`, b);
+  }
+
   const defaultSlots = [];
   for (const time of DEFAULT_SLOTS) {
     for (const pos of ALL_POSITIONS) {
@@ -392,38 +402,31 @@ export async function getSlotGrid({ companyCode, date }) {
   }
 
   const finalSlots = defaultSlots.map((slot) => {
+    // 1) capacity override merge
     const override = overrides.find((o) => o.sk === slot.sk);
     const merged = override ? { ...slot, ...override } : { ...slot };
 
-    if (
-      merged.vehicleType === "FULL" &&
-      String(merged.status || "").toUpperCase() === "AVAILABLE" &&
-      merged.userId
-    ) {
+    // 2) ✅ Source of truth: BOOKINGS table (manual merge writes booking record)
+    const match = fullBookingIndex.get(`${String(merged.time)}__${String(merged.pos)}`);
+
+    if (match) {
       merged.status = "BOOKED";
-    }
+      merged.distributorName = match.distributorName || merged.distributorName || null;
+      merged.distributorCode = match.distributorCode || merged.distributorCode || null;
+      merged.orderId = match.orderId || merged.orderId || null;
+      merged.amount = Number(match?.amount ?? merged?.amount ?? merged?.totalAmount ?? 0);
+      merged.bookedBy = match.userId || merged.bookedBy || null;
 
-    if (
-      merged.vehicleType === "FULL" &&
-      String(merged.status || "").toUpperCase() === "BOOKED"
-    ) {
-      const match = allBookings.find(
-        (b) =>
-          String(b.vehicleType || "").toUpperCase() === "FULL" &&
-          String(b.slotTime || "") === String(merged.time) &&
-          String(b.pos || "") === String(merged.pos)
-      );
-
-      if (match) {
-        merged.distributorName =
-          match.distributorName || merged.distributorName || null;
-        merged.distributorCode =
-          match.distributorCode || merged.distributorCode || null;
-        merged.orderId = match.orderId || merged.orderId || null;
-        merged.amount = Number(
-          match?.amount ?? merged?.amount ?? merged?.totalAmount ?? 0
-        );
-        merged.bookedBy = match.userId || merged.bookedBy || null;
+      // ✅ important for old UI logic / fallback
+      merged.userId = merged.userId || match.userId || match.orderId || "BOOKED";
+    } else {
+      // fallback: old rule (capacity wrote userId but booking record missing)
+      if (
+        merged.vehicleType === "FULL" &&
+        String(merged.status || "").toUpperCase() === "AVAILABLE" &&
+        merged.userId
+      ) {
+        merged.status = "BOOKED";
       }
     }
 
@@ -497,15 +500,17 @@ export async function getSlotGrid({ companyCode, date }) {
         vehicleType: "HALF",
         mergeKey,
         participants,
-        // ✅ ADD THESE
-  canCancel: true,
-  canRebook: true,
-  canMerge: true,
-  orders: participants.map(p => ({
-    orderId: p.orderId,
-    distributorName: p.distributorName,
-    amount: p.amount,
-    bookingSk: p.bookingSk,  })),
+
+        canCancel: true,
+        canRebook: true,
+        canMerge: true,
+        orders: participants.map((p) => ({
+          orderId: p.orderId,
+          distributorName: p.distributorName,
+          amount: p.amount,
+          bookingSk: p.bookingSk,
+        })),
+
         bookingCount: participants.length,
         distanceKm,
       };
@@ -538,7 +543,7 @@ export async function getSlotGrid({ companyCode, date }) {
       lastSlotOpenAfter: rules.lastSlotOpenAfter,
     },
   };
-} // ✅ MUST END getSlotGrid HERE
+}
 export async function getAvailableFullTimes({ companyCode, date }) {
   validateSlotDate(date);
 
