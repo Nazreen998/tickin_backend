@@ -18,6 +18,8 @@ import {
   managerManualCrossSessionMerge,
   managerMergeOrdersToMergeKey,
   managerSetGlobalMax,
+  getAvailableFullTimes,
+  managerManualMergePickTime,
   getEligibleHalfBookings,
 } from "../slot/slot.service.js";
 
@@ -43,6 +45,38 @@ function extractSlotId(out) {
     null
   );
 }
+router.get(
+  "/available-full-times",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const { date } = req.query;
+      const companyCode = req.user?.companyCode || "VAGR_IT";
+      const out = await getAvailableFullTimes({ companyCode, date });
+      return res.json(out);
+    } catch (e) {
+      return res.status(400).json({ ok: false, message: e.message });
+    }
+  }
+);
+router.post(
+  "/merge/manual-pick-time",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const out = await managerManualMergePickTime({
+        companyCode: req.user?.companyCode || req.body.companyCode,
+        ...req.body,
+        managerId: req.user?.userId || req.user?.mobile || "MANAGER",
+      });
+      return res.json(out);
+    } catch (e) {
+      return res.status(400).json({ ok: false, message: e.message });
+    }
+  }
+);
 
 /* ✅ helper: extract orderId safely */
 function extractOrderId(out, body) {
