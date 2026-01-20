@@ -67,17 +67,19 @@ router.post(
   async (req, res) => {
     try {
       const out = await managerManualMergePickTime({
-        companyCode: req.user?.companyCode || req.body.companyCode,
-        ...req.body,
+        companyCode: req.user?.companyCode || req.body.companyCode || "VAGR_IT",
+        date: req.body.date,
+        bookingSks: req.body.bookingSks || [],
+        targetTime: req.body.targetTime,
         managerId: req.user?.userId || req.user?.mobile || "MANAGER",
       });
+
       return res.json(out);
     } catch (e) {
-      return res.status(400).json({ ok: false, message: e.message });
+      return res.status(400).json({ ok: false, message: e.message || String(e) });
     }
   }
 );
-
 /* ✅ helper: extract orderId safely */
 function extractOrderId(out, body) {
   if (!out && !body) return null;

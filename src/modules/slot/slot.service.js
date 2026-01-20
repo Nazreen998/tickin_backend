@@ -658,16 +658,6 @@ export async function managerManualMergePickTime({
   const fullOrderId = `ORD_FULL_${uuidv4().slice(0, 8)}`;
   const finalSlotId = `${companyCode}#${date}#${targetTime}#FULL#${chosenPos}`;
 
-  const fullSk = skForSlot(targetTime, "FULL", chosenPos);
-
-  // ✅ IMPORTANT: Build base capacity item (so PUT works always)
-  const existingCap = await ddb.send(
-    new GetCommand({
-      TableName: TABLE_CAPACITY,
-      Key: { pk, sk: fullSk },
-    })
-  );
-
   const baseCap =
     existingCap.Item || {
       pk,
@@ -755,6 +745,19 @@ export async function managerManualMergePickTime({
       ],
     })
   );
+// ✅ DEBUG: confirm FULL slot actually written
+const fullSk = skForSlot(targetTime, "FULL", chosenPos);
+
+const check = await ddb.send(
+  new GetCommand({
+    TableName: TABLE_CAPACITY,
+    Key: { pk, sk: fullSk },
+  })
+);
+
+if (!check.Item || String(check.Item.status || "").toUpperCase() !== "BOOKED") {
+  throw new Error(`FULL slot not written. pk=${pk} sk=${fullSk}`);
+}
 
   // ✅ hide old merge tiles (mark merge slots FULL)
   const touched = new Set();
