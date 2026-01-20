@@ -597,7 +597,7 @@ export async function managerManualMergePickTime({
 
   const pk = pkFor(companyCode, date);
 
-  // 1) Fetch all selected bookings
+  // 1) Fetch selected bookings
   const bookingItems = [];
   for (const sk of bookingSks) {
     const bRes = await ddb.send(
@@ -619,24 +619,29 @@ export async function managerManualMergePickTime({
 
   // 3) Find AVAILABLE FULL slot in targetTime
   let chosenPos = null;
+
   for (const p of ALL_POSITIONS) {
-    const cap = await ddb.send(
+    const fullSkTry = skForSlot(targetTime, "FULL", p);
+
+    const capRes = await ddb.send(
       new GetCommand({
         TableName: TABLE_CAPACITY,
-        Key: { pk, sk: skForSlot(targetTime, "FULL", p) },
+        Key: { pk, sk: fullSkTry },
       })
     );
-    const st = String(cap?.Item?.status || "AVAILABLE").toUpperCase();
+
+    const st = String(capRes?.Item?.status || "AVAILABLE").toUpperCase();
     if (st === "AVAILABLE") {
       chosenPos = p;
       break;
     }
   }
+
   if (!chosenPos) {
     throw new Error(`No FULL slot available in ${targetTime}`);
   }
 
-  // 4) Total amount
+  // 4) Total amount + display
   const totalAmount = bookingItems.reduce(
     (sum, b) => sum + Number(b.amount || 0),
     0
@@ -653,31 +658,54 @@ export async function managerManualMergePickTime({
   const fullOrderId = `ORD_FULL_${uuidv4().slice(0, 8)}`;
   const finalSlotId = `${companyCode}#${date}#${targetTime}#FULL#${chosenPos}`;
 
-  // 5) Book FULL slot + create FULL booking + create FULL order
+  const fullSk = skForSlot(targetTime, "FULL", chosenPos);
+
+  // ✅ IMPORTANT: Build base capacity item (so PUT works always)
+  const existingCap = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: fullSk },
+    })
+  );
+
+  const baseCap =
+    existingCap.Item || {
+      pk,
+      sk: fullSk,
+      time: targetTime,
+      vehicleType: "FULL",
+      pos: chosenPos,
+    };
+
+  // 5) Transaction: PUT capacity override + FULL booking + FULL order
   await ddb.send(
     new TransactWriteCommand({
       TransactItems: [
-        // book FULL capacity
+        // ✅ Put FULL capacity item (guaranteed create)
         {
-          Update: {
+          Put: {
             TableName: TABLE_CAPACITY,
-            Key: { pk, sk: skForSlot(targetTime, "FULL", chosenPos) },
-            UpdateExpression:
-  "SET #s=:b, time=:t, pos=:p, vehicleType=:vt, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:m, amount=:a",
+            Item: {
+              ...baseCap,
+              status: "BOOKED",
+              userId: fullOrderId, // ✅ IMPORTANT for grid
+              time: targetTime,
+              vehicleType: "FULL",
+              pos: chosenPos,
+              distributorName: displayName || "MERGE",
+              distributorCode: displayCode,
+              orderId: fullOrderId,
+              bookedBy: String(managerId || "MANAGER"),
+              amount: totalAmount,
+              updatedAt: new Date().toISOString(),
+            },
+            // ✅ don't overwrite if already BOOKED/DISABLED
+            ConditionExpression: "attribute_not_exists(sk) OR #s = :avail",
             ExpressionAttributeNames: { "#s": "status" },
-            ExpressionAttributeValues: {
-  ":b": "BOOKED",
-  ":t": targetTime,
-  ":p": chosenPos,
-  ":vt": "FULL",
-  ":dn": displayName || "MERGE",
-  ":dc": displayCode,
-  ":oid": fullOrderId,
-  ":m": String(managerId || "MANAGER"),
-  ":a": totalAmount,
-},
+            ExpressionAttributeValues: { ":avail": "AVAILABLE" },
           },
         },
+
         // create FULL booking record
         {
           Put: {
@@ -699,6 +727,7 @@ export async function managerManualMergePickTime({
             },
           },
         },
+
         // create FULL order META
         {
           Put: {
@@ -726,33 +755,34 @@ export async function managerManualMergePickTime({
       ],
     })
   );
-// ✅ hide old merge tiles by marking their merge slots FULL (optional cleanup)
-const touched = new Set();
-for (const b of bookingItems) {
-  const mk = b.mergeKey;
-  const t = b.slotTime;
-  if (!mk || !t) continue;
-  touched.add(`${t}__${mk}`);
-}
 
-for (const key of touched) {
-  const [t, mk] = key.split("__");
-  const mergeSk = skForMergeSlot(t, mk);
+  // ✅ hide old merge tiles (mark merge slots FULL)
+  const touched = new Set();
+  for (const b of bookingItems) {
+    const mk = b.mergeKey;
+    const t = b.slotTime;
+    if (!mk || !t) continue;
+    touched.add(`${t}__${mk}`);
+  }
 
-  try {
-    await ddb.send(
-      new UpdateCommand({
-        TableName: TABLE_CAPACITY,
-        Key: { pk, sk: mergeSk },
-        UpdateExpression: "SET tripStatus=:s, updatedAt=:u",
-        ExpressionAttributeValues: {
-          ":s": "FULL",
-          ":u": new Date().toISOString(),
-        },
-      })
-    );
-  } catch (_) {}
-}
+  for (const key of touched) {
+    const [t, mk] = key.split("__");
+    const mergeSk = skForMergeSlot(t, mk);
+
+    try {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: TABLE_CAPACITY,
+          Key: { pk, sk: mergeSk },
+          UpdateExpression: "SET tripStatus=:s, updatedAt=:u",
+          ExpressionAttributeValues: {
+            ":s": "FULL",
+            ":u": new Date().toISOString(),
+          },
+        })
+      );
+    } catch (_) {}
+  }
 
   // 6) Update each HALF booking + each HALF order META
   for (const b of bookingItems) {
@@ -804,7 +834,6 @@ for (const key of touched) {
     mergedBookings: bookingItems.map((b) => b.sk),
   };
 }
-
 /* ---------------- ORDERID DUPLICATE CHECK ---------------- */
 async function checkOrderAlreadyBooked(pk, orderId) {
   if (!orderId) return false;
