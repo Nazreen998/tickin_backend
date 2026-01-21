@@ -1,7 +1,7 @@
 import express from "express";
 import { verifyToken } from "../../middleware/auth.middleware.js";
 import { allowRoles } from "../../middleware/role.middleware.js";
-
+import { forceResetOrderSlotMeta } from "./orders.service.js"; // ✅ ADD THIS
 import {
   getPendingOrders,
   getTodayOrders,
@@ -177,7 +177,20 @@ router.get(
     }
   }
 );
-
+router.post(
+  "/force-reset/:orderId",
+  verifyToken,
+  allowRoles("MASTER", "MANAGER"),
+  async (req, res) => {
+    try {
+      const { orderId } = req.params;
+      const out = await forceResetOrderSlotMeta(orderId);
+      return res.json(out);
+    } catch (e) {
+      return res.status(500).json({ ok: false, message: e.message });
+    }
+  }
+);
 // ✅ Manager / Master view all orders
 router.get(
   "/all",

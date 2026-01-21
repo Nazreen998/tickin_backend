@@ -2117,13 +2117,14 @@ export async function managerCancelBooking(payload) {
           ExpressionAttributeValues: { ":pk": pk },
         })
       );
+const match = (allBookingsRes.Items || []).find(
+  (b) =>
+    String(b.vehicleType || "").toUpperCase() === "FULL" &&
+    String(b.slotTime || "") === String(time) &&
+    String(b.pos || "") === String(pos)
+);
 
-      const match = (allBookingsRes.Items || []).find(
-        (b) =>
-          String(b.vehicleType || "").toUpperCase() === "FULL" &&
-          String(b.slotTime || "") === String(time) &&
-          String(b.pos || "") === String(pos)
-      );
+fullBookingSkToDelete = match?.sk || null;
 
       fullBookingSkToDelete = match?.sk || null;
     }
@@ -2222,17 +2223,25 @@ export async function managerCancelBooking(payload) {
         ExpressionAttributeValues: { ":pk": pk },
       })
     );
+const candidates = (allBookingsRes.Items || []).filter(
+  (b) =>
+    String(b.vehicleType || "").toUpperCase() === "HALF" &&
+    String(b.mergeKey || "") === String(mergeKey) &&
+    String(b.orderId || "") === String(originalOrderId) &&
+    (!time || String(b.slotTime || "") === String(time))
+);
 
-    const match = (allBookingsRes.Items || []).find(
-      (b) =>
-        String(b.vehicleType || "").toUpperCase() === "HALF" &&
-        String(b.slotTime || "") === String(time) &&
-        String(b.mergeKey || "") === String(mergeKey) &&
-        String(b.orderId || "") === String(originalOrderId)
-    );
+if (candidates.length === 0) throw new Error("Booking not found for this orderId");
 
-    if (!match) throw new Error("Booking not found for this orderId");
-    resolvedBookingSk = match.sk;
+// time UI-ல இருந்து வரலனா, booking-ல இருந்து எடுத்துக்கோ
+if (!time) time = candidates[0].slotTime;
+
+// duplicates இருந்தா latest record pick பண்ணு (createdAt இல்லனா sk sort works usually)
+const match = candidates.sort((a, b) =>
+  String(b.createdAt || b.sk || "").localeCompare(String(a.createdAt || a.sk || ""))
+)[0];
+
+resolvedBookingSk = match.sk;
   }
 
   // HALF cancel
