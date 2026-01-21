@@ -15,6 +15,7 @@ import {
   getOrderById,
   confirmDraftOrder,
   deleteOrder,
+  cancelOrderSlot,
   getOrdersByMergeKey,
   getSlotConfirmedOrders,
   getAssignedOrdersByDriver
@@ -232,7 +233,7 @@ router.post(
   allowRoles("MANAGER", "MASTER"),
   loadingEnd
 );
-
+router.patch("/:orderId/cancel-slot", verifyToken, cancelOrderSlot);
 // ✅ Assign Driver
 router.post(
   "/assign-driver",

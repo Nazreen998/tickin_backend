@@ -15,16 +15,21 @@ import {
   managerSetSlotMax,
   managerEnableSlot,
   managerToggleLastSlot,
+  managerManualCrossSessionMerge,
   managerMergeOrdersToMergeKey,
   managerSetGlobalMax,
+  getAvailableFullTimes,
+  managerManualMergePickTime,
   getEligibleHalfBookings,
 } from "../slot/slot.service.js";
 
 // ✅ NEW: Slot Timeline writer
 import { addTimelineEvent, addSlotTimelineEvent } from "../timeline/timeline.helper.js";
-
+import { BUILD_TAG } from "./slot.service.js";
 const router = express.Router();
-
+router.get("/build", (req, res) => {
+  res.json({ ok: true, build: BUILD_TAG });
+});
 /* ✅ helper: extract slotId safely from any response */
 function extractSlotId(out) {
   if (!out) return null;
@@ -40,7 +45,41 @@ function extractSlotId(out) {
     null
   );
 }
+router.get(
+  "/available-full-times",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const { date } = req.query;
+      const companyCode = req.user?.companyCode || "VAGR_IT";
+      const out = await getAvailableFullTimes({ companyCode, date });
+      return res.json(out);
+    } catch (e) {
+      return res.status(400).json({ ok: false, message: e.message });
+    }
+  }
+);
+router.post(
+  "/merge/manual-pick-time",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const out = await managerManualMergePickTime({
+        companyCode: req.user?.companyCode || req.body.companyCode || "VAGR_IT",
+        date: req.body.date,
+        bookingSks: req.body.bookingSks || [],
+        targetTime: req.body.targetTime,
+        managerId: req.user?.userId || req.user?.mobile || "MANAGER",
+      });
 
+      return res.json(out);
+    } catch (e) {
+      return res.status(400).json({ ok: false, message: e.message || String(e) });
+    }
+  }
+);
 /* ✅ helper: extract orderId safely */
 function extractOrderId(out, body) {
   if (!out && !body) return null;
@@ -53,6 +92,22 @@ router.get(
   verifyToken,
   allowRoles("MANAGER"),
   getEligibleHalfBookings
+);
+router.post(
+  "/manager/manual-cross-session-merge",
+  verifyToken,
+  allowRoles(["MANAGER", "ADMIN"]),
+  async (req, res) => {
+    try {
+      const out = await managerManualCrossSessionMerge({
+        companyCode: req.user?.companyCode || req.body.companyCode,
+        ...req.body,
+      });
+      return res.json({ ok: true, ...out });
+    } catch (e) {
+      return res.status(400).json({ ok: false, message: e.message });
+    }
+  }
 );
 
 router.get(

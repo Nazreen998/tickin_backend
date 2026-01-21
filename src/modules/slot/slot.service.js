@@ -18,6 +18,7 @@ import {
 
 import utc from "dayjs/plugin/utc.js";
 import timezone from "dayjs/plugin/timezone.js";
+export const BUILD_TAG = `slots_fix_${new Date().toISOString()}`;
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -29,15 +30,25 @@ const TABLE_QUEUE = process.env.TABLE_QUEUE || "tickin_slot_waiting_queue";
 const TABLE_RULES = process.env.TABLE_RULES || "tickin_slot_rules";
 const TABLE_ORDERS = process.env.ORDERS_TABLE || "tickin_orders";
 
-const DEFAULT_SLOTS = [
-  "09:00", "09:30", "10:00", "10:30",
-  "12:00", "12:30", "13:00", "13:30",
-  "15:00", "15:30", "16:00", "16:30",
-  "18:00", "18:30", "19:00", "19:30",
-];
+const DEFAULT_SLOT_TIMES = {
+  Morning: ["09:00","09:30","10:00","10:30"],
+  Afternoon: ["12:00","12:30","13:00","13:30"],
+  Evening: ["15:00","15:30","16:00","16:30"],
+  Night: ["18:00","18:30","19:00","19:30"],
+};
+
+function flattenSlotTimes(slotTimes) {
+  const st = (slotTimes && typeof slotTimes === "object") ? slotTimes : DEFAULT_SLOT_TIMES;
+
+  return [
+    ...(st.Morning || []),
+    ...(st.Afternoon || []),
+    ...(st.Evening || []),
+    ...(st.Night || []),
+  ];
+}
 
 const ALL_POSITIONS = ["A", "B", "C", "D"];
-const NIGHT_SLOTS = ["18:00", "18:30", "19:00", "19:30"];
 
 const DEFAULT_THRESHOLD = Number(process.env.DEFAULT_MAX_AMOUNT || 80000);
 const MERGE_RADIUS_KM = Number(process.env.MERGE_RADIUS_KM || 25);
@@ -211,11 +222,13 @@ async function getRules(companyCode) {
   );
 
   const rules = res.Item || {};
-  return {
-    threshold: Number(rules.threshold || DEFAULT_THRESHOLD),
-    lastSlotEnabled: Boolean(rules.lastSlotEnabled),
-    lastSlotOpenAfter: rules.lastSlotOpenAfter || "17:00",
-  };
+return {
+  threshold: Number(rules.threshold || DEFAULT_THRESHOLD),
+  lastSlotEnabled: Boolean(rules.lastSlotEnabled),
+  lastSlotOpenAfter: rules.lastSlotOpenAfter || "17:00",
+  slotTimes: rules.slotTimes || DEFAULT_SLOT_TIMES,
+};
+
 }
 
 async function updateRules(companyCode, patch) {
@@ -351,8 +364,6 @@ export async function getSlotGrid({ companyCode, date }) {
   validateSlotDate(date);
   const pk = pkFor(companyCode, date);
 
-  const rules = await getRules(companyCode);
-
   const res = await ddb.send(
     new QueryCommand({
       TableName: TABLE_CAPACITY,
@@ -371,58 +382,65 @@ export async function getSlotGrid({ companyCode, date }) {
   );
   const allBookings = bookingsRes.Items || [];
 
-  const defaultSlots = [];
-  for (const time of DEFAULT_SLOTS) {
-    for (const pos of ALL_POSITIONS) {
-      let status = "AVAILABLE";
-      if (NIGHT_SLOTS.includes(time) && rules.lastSlotEnabled === false) {
-        status = "DISABLED";
-      }
-
-      defaultSlots.push({
-        pk,
-        sk: skForSlot(time, "FULL", pos),
-        time,
-        vehicleType: "FULL",
-        pos,
-        status,
-      });
-    }
+  // ✅ quick index for FULL bookings by time+pos (fast & clean)
+  const fullBookingIndex = new Map();
+  for (const b of allBookings) {
+    if (String(b.vehicleType || "").toUpperCase() !== "FULL") continue;
+    const t = String(b.slotTime || "");
+    const p = String(b.pos || "");
+    if (!t || !p) continue;
+    fullBookingIndex.set(`${t}__${p}`, b);
   }
 
+  const defaultSlots = [];
+  const rules = await getRules(companyCode);
+const DEFAULT_SLOTS = flattenSlotTimes(rules.slotTimes);
+  const NIGHT_SLOTS = rules.slotTimes?.Night || []; 
+for (const time of DEFAULT_SLOTS) {
+  for (const pos of ALL_POSITIONS) {
+    let status = "AVAILABLE";
+    if (NIGHT_SLOTS.includes(time) && rules.lastSlotEnabled === false) {
+      status = "DISABLED";
+    }
+
+    defaultSlots.push({
+      pk,
+      sk: skForSlot(time, "FULL", pos),
+      time,
+      vehicleType: "FULL",
+      pos,
+      status,
+    });
+  }
+}
+
+
   const finalSlots = defaultSlots.map((slot) => {
+    // 1) capacity override merge
     const override = overrides.find((o) => o.sk === slot.sk);
     const merged = override ? { ...slot, ...override } : { ...slot };
 
-    if (
-      merged.vehicleType === "FULL" &&
-      String(merged.status || "").toUpperCase() === "AVAILABLE" &&
-      merged.userId
-    ) {
+    // 2) ✅ Source of truth: BOOKINGS table (manual merge writes booking record)
+    const match = fullBookingIndex.get(`${String(merged.time)}__${String(merged.pos)}`);
+
+    if (match) {
       merged.status = "BOOKED";
-    }
+      merged.distributorName = match.distributorName || merged.distributorName || null;
+      merged.distributorCode = match.distributorCode || merged.distributorCode || null;
+      merged.orderId = match.orderId || merged.orderId || null;
+      merged.amount = Number(match?.amount ?? merged?.amount ?? merged?.totalAmount ?? 0);
+      merged.bookedBy = match.userId || merged.bookedBy || null;
 
-    if (
-      merged.vehicleType === "FULL" &&
-      String(merged.status || "").toUpperCase() === "BOOKED"
-    ) {
-      const match = allBookings.find(
-        (b) =>
-          String(b.vehicleType || "").toUpperCase() === "FULL" &&
-          String(b.slotTime || "") === String(merged.time) &&
-          String(b.pos || "") === String(merged.pos)
-      );
-
-      if (match) {
-        merged.distributorName =
-          match.distributorName || merged.distributorName || null;
-        merged.distributorCode =
-          match.distributorCode || merged.distributorCode || null;
-        merged.orderId = match.orderId || merged.orderId || null;
-        merged.amount = Number(
-          match?.amount ?? merged?.amount ?? merged?.totalAmount ?? 0
-        );
-        merged.bookedBy = match.userId || merged.bookedBy || null;
+      // ✅ important for old UI logic / fallback
+      merged.userId = merged.userId || match.userId || match.orderId || "BOOKED";
+    } else {
+      // fallback: old rule (capacity wrote userId but booking record missing)
+      if (
+        merged.vehicleType === "FULL" &&
+        String(merged.status || "").toUpperCase() === "AVAILABLE" &&
+        merged.userId
+      ) {
+        merged.status = "BOOKED";
       }
     }
 
@@ -496,6 +514,17 @@ export async function getSlotGrid({ companyCode, date }) {
         vehicleType: "HALF",
         mergeKey,
         participants,
+
+        canCancel: true,
+        canRebook: true,
+        canMerge: true,
+        orders: participants.map((p) => ({
+          orderId: p.orderId,
+          distributorName: p.distributorName,
+          amount: p.amount,
+          bookingSk: p.bookingSk,
+        })),
+
         bookingCount: participants.length,
         distanceKm,
       };
@@ -526,9 +555,301 @@ export async function getSlotGrid({ companyCode, date }) {
       maxAmount: rules.threshold,
       lastSlotEnabled: rules.lastSlotEnabled,
       lastSlotOpenAfter: rules.lastSlotOpenAfter,
+      slotTimes: rules.slotTimes, // ✅ add this
     },
   };
-} // ✅ MUST END getSlotGrid HERE
+}
+export async function getAvailableFullTimes({ companyCode, date }) {
+  validateSlotDate(date);
+
+  const pk = pkFor(companyCode, date);
+
+  // ✅ MUST come first
+  const rules = await getRules(companyCode);
+  const DEFAULT_SLOTS = flattenSlotTimes(rules.slotTimes);
+  const NIGHT_SLOTS = rules.slotTimes?.Night || [];
+
+  // if night disabled, don't show night times
+  const allowedTimes =
+    rules.lastSlotEnabled ? DEFAULT_SLOTS : DEFAULT_SLOTS.filter((t) => !NIGHT_SLOTS.includes(t));
+
+  // read capacity table for this date
+  const res = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_CAPACITY,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
+    })
+  );
+
+  const items = res.Items || [];
+  const times = [];
+
+  for (const t of allowedTimes) {
+    let hasAvailable = false;
+
+    for (const p of ALL_POSITIONS) {
+      const sk = skForSlot(t, "FULL", p);
+      const found = items.find((x) => x.sk === sk);
+      const st = String(found?.status || "AVAILABLE").toUpperCase();
+
+      if (st === "AVAILABLE") {
+        hasAvailable = true;
+        break;
+      }
+    }
+
+    if (hasAvailable) times.push(t);
+  }
+
+  return { ok: true, date, times };
+}
+
+export async function managerManualMergePickTime({
+  companyCode,
+  date,
+  bookingSks = [],
+  targetTime,
+  managerId,
+}) {
+  validateSlotDate(date);
+
+  if (!companyCode || !date || !targetTime) {
+    throw new Error("companyCode, date, targetTime required");
+  }
+
+  if (!Array.isArray(bookingSks) || bookingSks.length < 2) {
+    throw new Error("Select at least 2 bookings");
+  }
+
+  const pk = pkFor(companyCode, date);
+
+  // 1) Fetch selected bookings
+  const bookingItems = [];
+  for (const sk of bookingSks) {
+    const bRes = await ddb.send(
+      new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk } })
+    );
+    if (!bRes.Item) throw new Error(`Booking not found: ${sk}`);
+    bookingItems.push(bRes.Item);
+  }
+
+  // 2) Validate all are HALF + pending/waiting
+  for (const b of bookingItems) {
+    if (String(b.vehicleType || "").toUpperCase() !== "HALF") {
+      throw new Error("Only HALF bookings can be merged");
+    }
+    if (!isPendingOrWaitingStatus(b.status)) {
+      throw new Error("Only PENDING / WAITING bookings allowed");
+    }
+  }
+
+  // 3) Find AVAILABLE FULL slot in targetTime
+  let chosenPos = null;
+  for (const p of ALL_POSITIONS) {
+    const fullSkTry = skForSlot(targetTime, "FULL", p);
+
+    const capRes = await ddb.send(
+      new GetCommand({
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: fullSkTry },
+      })
+    );
+
+    const st = String(capRes?.Item?.status || "AVAILABLE").toUpperCase();
+    if (st === "AVAILABLE") {
+      chosenPos = p;
+      break;
+    }
+  }
+
+  if (!chosenPos) {
+    throw new Error(`No FULL slot available in ${targetTime}`);
+  }
+
+  // 4) Total amount + display
+  const totalAmount = bookingItems.reduce(
+    (sum, b) => sum + Number(b.amount || 0),
+    0
+  );
+
+  const displayName = bookingItems
+    .map((b) => String(b.distributorName || "").trim())
+    .filter(Boolean)
+    .join(" + ");
+
+  const displayCode =
+    String(bookingItems[0].distributorCode || "").trim() || "MERGE";
+
+  const fullOrderId = `ORD_FULL_${uuidv4().slice(0, 8)}`;
+  const finalSlotId = `${companyCode}#${date}#${targetTime}#FULL#${chosenPos}`;
+  const fullSk = skForSlot(targetTime, "FULL", chosenPos);
+
+  // 5) Transaction: UPDATE capacity (BOOKED) + FULL booking + FULL order
+  await ddb.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        // ✅ BOOK capacity slot (always works even if item doesn't exist)
+        {
+          Update: {
+            TableName: TABLE_CAPACITY,
+            Key: { pk, sk: fullSk },
+            UpdateExpression:
+              "SET #s=:b, userId=:uid, time=:t, vehicleType=:vt, pos=:p, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:m, amount=:a, updatedAt=:u",
+            ExpressionAttributeNames: { "#s": "status" },
+            ExpressionAttributeValues: {
+              ":avail": "AVAILABLE",
+              ":b": "BOOKED",
+              ":uid": fullOrderId,
+              ":dn": displayName || "MERGE",
+              ":dc": displayCode,
+              ":oid": fullOrderId,
+              ":m": String(managerId || "MANAGER"),
+              ":a": totalAmount,
+              ":t": targetTime,
+              ":p": chosenPos,
+              ":vt": "FULL",
+              ":u": new Date().toISOString(),
+            },
+          },
+        },
+
+        // create FULL booking record
+        {
+          Put: {
+            TableName: TABLE_BOOKINGS,
+            Item: {
+              pk,
+              sk: skForBooking(targetTime, "FULL", chosenPos, fullOrderId),
+              bookingId: uuidv4(),
+              slotTime: targetTime,
+              vehicleType: "FULL",
+              pos: chosenPos,
+              userId: fullOrderId,
+              distributorCode: displayCode,
+              distributorName: displayName || "MERGE",
+              amount: totalAmount,
+              orderId: fullOrderId,
+              status: "CONFIRMED",
+              createdAt: new Date().toISOString(),
+            },
+          },
+        },
+
+        // create FULL order META
+        {
+          Put: {
+            TableName: TABLE_ORDERS,
+            Item: {
+              pk: `ORDER#${fullOrderId}`,
+              sk: "META",
+              orderId: fullOrderId,
+              companyCode,
+              distributorId: displayCode,
+              distributorName: displayName || "MERGE",
+              mergedOrderIds: bookingItems.map((b) => b.orderId).filter(Boolean),
+              slotId: finalSlotId,
+              slotDate: date,
+              slotTime: targetTime,
+              slotVehicleType: "FULL",
+              slotPos: chosenPos,
+              totalAmount,
+              status: "SLOT_BOOKED",
+              createdAt: new Date().toISOString(),
+              createdBy: String(managerId || "MANAGER"),
+            },
+          },
+        },
+      ],
+    })
+  );
+// ✅ CLEANUP: delete old merge capacity records (orange tiles remove guaranteed)
+const touched = new Set();
+
+for (const b of bookingItems) {
+  const mk = b.mergeKey;
+  const t = b.slotTime;
+  if (!mk || !t) continue;
+  touched.add(`${t}__${mk}`);
+}
+
+for (const key of touched) {
+  const [t, mk] = key.split("__");
+  const mergeSk = skForMergeSlot(t, mk);
+
+  try {
+    // mark FULL (optional)
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: mergeSk },
+        UpdateExpression: "SET tripStatus=:s, blink=:b, updatedAt=:u",
+        ExpressionAttributeValues: {
+          ":s": "FULL",
+          ":b": false,
+          ":u": new Date().toISOString(),
+        },
+      })
+    );
+
+    // ✅ delete override record so it will not appear in grid again
+    await ddb.send(
+      new DeleteCommand({
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: mergeSk },
+      })
+    );
+  } catch (_) {}
+}
+  // 6) Update each HALF booking + each HALF order META
+  for (const b of bookingItems) {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_BOOKINGS,
+        Key: { pk, sk: b.sk },
+        UpdateExpression:
+          "SET #st=:m, mergedIntoOrderId=:fo, slotVehicleType=:vt, slotTime=:t, slotPos=:p, confirmedAt=:c",
+        ExpressionAttributeNames: { "#st": "status" },
+        ExpressionAttributeValues: {
+          ":m": "MERGED",
+          ":fo": fullOrderId,
+          ":vt": "FULL",
+          ":t": targetTime,
+          ":p": chosenPos,
+          ":c": new Date().toISOString(),
+        },
+      })
+    );
+
+    if (b.orderId) {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: TABLE_ORDERS,
+          Key: { pk: `ORDER#${b.orderId}`, sk: "META" },
+          UpdateExpression:
+            "SET mergedIntoOrderId=:fo, slotId=:sid, slotVehicleType=:vt, slotPos=:p, tripStatus=:ts, updatedAt=:u",
+          ExpressionAttributeValues: {
+            ":fo": fullOrderId,
+            ":sid": finalSlotId,
+            ":vt": "FULL",
+            ":p": chosenPos,
+            ":ts": "CONFIRMED",
+            ":u": new Date().toISOString(),
+          },
+        })
+      );
+    }
+  }
+  return {
+    ok: true,
+    message: "✅ Manual merge completed",
+    fullOrderId,
+    slotId: finalSlotId,
+    targetTime,
+    pos: chosenPos,
+    mergedBookings: bookingItems.map((b) => b.sk),
+  };
+}
 /* ---------------- ORDERID DUPLICATE CHECK ---------------- */
 async function checkOrderAlreadyBooked(pk, orderId) {
   if (!orderId) return false;
@@ -614,6 +935,7 @@ export async function bookSlot({
 
   const rules = await getRules(companyCode);
   const threshold = rules.threshold;
+  const NIGHT_SLOTS = rules.slotTimes?.Night || [];
 
   const uid = userId ? String(userId).trim() : uuidv4();
   const amt = Number(amount || 0);
@@ -892,26 +1214,24 @@ export async function bookSlot({
   }
 
   const slotId = `${companyCode}#${date}#${time}#HALF#KEY#${mergeKey}`;
-
-  await ddb.send(
-    new UpdateCommand({
-      TableName: TABLE_ORDERS,
-      Key: { pk: `ORDER#${orderId}`, sk: "META" },
-      UpdateExpression:
-        "SET slotBooked=:sb, slotId=:sid, slotDate=:d, slotTime=:t, slotVehicleType=:vt, mergeKey=:mk, locationId=:lid, updatedAt=:u",
-      ExpressionAttributeValues: {
-        ":sb": false,
-        ":sid": slotId,
-        ":d": date,
-        ":t": time,
-        ":vt": "HALF",
-        ":mk": mergeKey,
-        ":lid": rawLocationId,
-        ":u": new Date().toISOString(),
-      },
-    })
-  );
-
+await ddb.send(
+  new UpdateCommand({
+    TableName: TABLE_ORDERS,
+    Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    UpdateExpression:
+      "SET slotBooked=:sb, slotDate=:d, slotTime=:t, slotVehicleType=:vt, mergeKey=:mk, locationId=:lid, updatedAt=:u " +
+      "REMOVE slotId, slotPos, mergedIntoOrderId, tripStatus",
+    ExpressionAttributeValues: {
+      ":sb": false,
+      ":d": date,
+      ":t": time,
+      ":vt": "HALF",
+      ":mk": mergeKey,
+      ":lid": rawLocationId,
+      ":u": new Date().toISOString(),
+    },
+  })
+);
   const updated = await ddb.send(
     new GetCommand({
       TableName: TABLE_CAPACITY,
@@ -1117,7 +1437,6 @@ const displayName =
   // ✅ Create FULL master OrderId
   const fullOrderId = `ORD_FULL_${uuidv4().slice(0, 8)}`;
   const mergedOrderIds = bookings.map((b) => String(b.orderId)).filter(Boolean);
-
   // ✅ Book FULL slot (include amount + orderId also)
   await ddb.send(
     new UpdateCommand({
@@ -1514,6 +1833,11 @@ export async function managerCancelConfirmedMerge({
   if (!pos) throw new Error("❌ Confirmed merge missing pos");
 
   const fullSlotSk = skForSlot(time, "FULL", pos);
+const fullCapRes = await ddb.send(
+  new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: fullSlotSk } })
+);
+
+const fullOrderId = fullCapRes?.Item?.orderId || null;
 
   // ✅ Fetch all bookings to delete FULL booking safely
   const allBookingsRes = await ddb.send(
@@ -1636,104 +1960,344 @@ export async function managerCancelConfirmedMerge({
     cancelledBy: String(managerId || "MANAGER"),
   };
 }
-
 /* ✅ CANCEL BOOKING */
-export async function managerCancelBooking({
-  companyCode,
-  date,
-  time,
-  pos,
-  userId,
-  bookingSk,
-  mergeKey,
-  orderId, // ✅ NEW
-}) {
+export async function managerCancelBooking(payload) {
+  let {
+    companyCode,
+    date,
+    time,
+    pos,
+    userId,
+    bookingSk,
+    mergeKey,
+    orderId,
+  } = payload;
+
+  if (!companyCode) throw new Error("companyCode required");
+  if (!date) throw new Error("date required");
+
+  // ✅ preserve original orderId (child) that UI clicked
+  const originalOrderId = orderId || null;
+
+  // helper: read order meta
+  async function readOrderMeta(oid) {
+    if (!oid) return null;
+    const res = await ddb.send(
+      new GetCommand({
+        TableName: TABLE_ORDERS,
+        Key: { pk: `ORDER#${oid}`, sk: "META" },
+      })
+    );
+    return res?.Item || null;
+  }
+
+  /* ======================================================
+     ✅ NORMALIZE cancel target:
+     - If child has mergedIntoOrderId -> switch to ORD_FULL_*
+     - Derive date/time/pos from META (slotDate/slotId)
+  ====================================================== */
+
+  let cancelOrderId = orderId || null;
+
+  // 1) if child merged → use master
+  if (cancelOrderId && !String(cancelOrderId).startsWith("ORD_FULL_")) {
+    const childMeta = await readOrderMeta(cancelOrderId);
+    const masterId = childMeta?.mergedIntoOrderId || null;
+    if (masterId && String(masterId).startsWith("ORD_FULL_")) {
+      cancelOrderId = masterId;
+    }
+  }
+
+  // 2) read meta (master preferred)
+  let meta = await readOrderMeta(cancelOrderId);
+  if (!meta && originalOrderId) meta = await readOrderMeta(originalOrderId);
+
+  // 3) derive correct date/time/pos
+  if (meta) {
+    // IMPORTANT: pkFor must use slotDate (not today)
+    date = meta.slotDate || date;
+
+    // Prefer explicit fields
+    time = time || meta.slotTime || null;
+    pos = pos || meta.slotPos || null;
+
+    // Fallback: parse slotId => COMPANY#DATE#TIME#FULL#POS
+    if ((!time || !pos) && meta.slotId) {
+      const parts = String(meta.slotId).split("#");
+      if (!date && parts.length >= 2) date = parts[1];
+      if (!time && parts.length >= 3) time = parts[2];
+      if (!pos && parts.length >= 5) pos = parts[4];
+    }
+  }
+
+  // apply normalized cancel order id
+  orderId = cancelOrderId;
+
   const pk = pkFor(companyCode, date);
 
-  // ✅ FULL cancel
-  if (pos && userId) {
+  /* =========================
+     ✅ FULL cancel (works even if UI didn't send pos/time)
+  ========================= */
+  const shouldFullCancel = Boolean(time && pos);
+
+  if (shouldFullCancel) {
     const slotSk = skForSlot(time, "FULL", pos);
-    const bookingSK = skForBooking(time, "FULL", pos, userId);
 
-    // ✅ delete lock also
-    const lockSk = orderId ? `ORDERLOCK#${orderId}` : null;
+    // booking sk if userId available
+    const bookingSK = userId ? skForBooking(time, "FULL", pos, userId) : null;
 
-    const items = [
+    // resolve orderId from payload/capacity/booking
+    let resolvedOrderId = orderId || null;
+
+    if (!resolvedOrderId) {
+      const capRes = await ddb.send(
+        new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: slotSk } })
+      );
+      resolvedOrderId = capRes?.Item?.orderId || null;
+    }
+
+    if (!resolvedOrderId && bookingSK) {
+      const bookRes = await ddb.send(
+        new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSK } })
+      );
+      resolvedOrderId = bookRes?.Item?.orderId || null;
+    }
+
+    // ✅ if resolved is child -> switch to master if merged
+    if (resolvedOrderId && !String(resolvedOrderId).startsWith("ORD_FULL_")) {
+      const childMeta = await readOrderMeta(resolvedOrderId);
+      const masterId = childMeta?.mergedIntoOrderId || null;
+      if (masterId && String(masterId).startsWith("ORD_FULL_")) {
+        resolvedOrderId = masterId;
+      }
+    }
+
+    // ✅ get mergedOrderIds from master meta
+    let mergedOrderIds = [];
+    if (resolvedOrderId && String(resolvedOrderId).startsWith("ORD_FULL_")) {
+      const fullMeta = await readOrderMeta(resolvedOrderId);
+      mergedOrderIds = fullMeta?.mergedOrderIds || [];
+    }
+
+    // ✅ fallback: at least reset the clicked child order
+    if (
+      (!Array.isArray(mergedOrderIds) || mergedOrderIds.length === 0) &&
+      originalOrderId &&
+      !String(originalOrderId).startsWith("ORD_FULL_")
+    ) {
+      mergedOrderIds = [originalOrderId];
+    }
+
+    const lockSk = resolvedOrderId ? `ORDERLOCK#${resolvedOrderId}` : null;
+
+    const transactItems = [
+      // free capacity slot
       {
         Update: {
           TableName: TABLE_CAPACITY,
           Key: { pk, sk: slotSk },
           UpdateExpression:
-            "SET #s = :avail REMOVE userId, distributorName, distributorCode, orderId, bookedBy",
+            "SET #s = :avail REMOVE userId, distributorName, distributorCode, orderId, bookedBy, amount",
           ExpressionAttributeNames: { "#s": "status" },
           ExpressionAttributeValues: { ":avail": "AVAILABLE" },
         },
       },
-      { Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSK } } },
     ];
 
+    // delete FULL booking record (resolve if missing)
+    let fullBookingSkToDelete = bookingSK;
+
+    if (!fullBookingSkToDelete) {
+      const allBookingsRes = await ddb.send(
+        new QueryCommand({
+          TableName: TABLE_BOOKINGS,
+          KeyConditionExpression: "pk = :pk",
+          ExpressionAttributeValues: { ":pk": pk },
+        })
+      );
+
+      const match = (allBookingsRes.Items || []).find(
+        (b) =>
+          String(b.vehicleType || "").toUpperCase() === "FULL" &&
+          String(b.slotTime || "") === String(time) &&
+          String(b.pos || "") === String(pos)
+      );
+
+      fullBookingSkToDelete = match?.sk || null;
+    }
+
+    if (fullBookingSkToDelete) {
+      transactItems.push({
+        Delete: {
+          TableName: TABLE_BOOKINGS,
+          Key: { pk, sk: fullBookingSkToDelete },
+        },
+      });
+    }
+
+    // delete order lock for master
     if (lockSk) {
-      items.push({
+      transactItems.push({
         Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: lockSk } },
       });
     }
 
-    await ddb.send(
-      new TransactWriteCommand({
-        TransactItems: items,
+    // reset master order meta if it's a real customer order (not ORD_FULL_*)
+    if (resolvedOrderId && !String(resolvedOrderId).startsWith("ORD_FULL_")) {
+      transactItems.push({
+        Update: {
+          TableName: TABLE_ORDERS,
+          Key: { pk: `ORDER#${resolvedOrderId}`, sk: "META" },
+          UpdateExpression:
+            "SET slotBooked=:sb, updatedAt=:u " +
+            "REMOVE slotId, slotDate, slotTime, slotVehicleType, slotPos, mergeKey, locationId, mergedIntoOrderId, tripStatus",
+          ExpressionAttributeValues: {
+            ":sb": false,
+            ":u": new Date().toISOString(),
+          },
+        },
+      });
+    }
+
+    // ✅ reset child orders (this re-enables SLOT button)
+    for (const childId of mergedOrderIds) {
+      transactItems.push({
+        Update: {
+          TableName: TABLE_ORDERS,
+          Key: { pk: `ORDER#${childId}`, sk: "META" },
+          UpdateExpression:
+            "SET slotBooked=:sb, updatedAt=:u " +
+            "REMOVE slotId, slotDate, slotTime, slotVehicleType, slotPos, mergeKey, locationId, mergedIntoOrderId, tripStatus",
+          ExpressionAttributeValues: {
+            ":sb": false,
+            ":u": new Date().toISOString(),
+          },
+        },
+      });
+
+      transactItems.push({
+        Delete: {
+          TableName: TABLE_BOOKINGS,
+          Key: { pk, sk: `ORDERLOCK#${childId}` },
+        },
+      });
+    }
+
+    // delete FULL master META (optional)
+    if (resolvedOrderId && String(resolvedOrderId).startsWith("ORD_FULL_")) {
+      transactItems.push({
+        Delete: {
+          TableName: TABLE_ORDERS,
+          Key: { pk: `ORDER#${resolvedOrderId}`, sk: "META" },
+        },
+      });
+    }
+
+    await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
+
+    return {
+      ok: true,
+      slotType: "FULL",
+      orderId: resolvedOrderId,
+      date,
+      time,
+      pos,
+      resetOrders: mergedOrderIds,
+    };
+  }
+
+  /* =========================
+     ✅ HALF cancel (resolve bookingSk if missing)
+  ========================= */
+  let resolvedBookingSk = bookingSk || null;
+
+  // If bookingSk missing but mergeKey + orderId present, resolve bookingSk by orderId
+  if ((!resolvedBookingSk || resolvedBookingSk === "") && mergeKey && originalOrderId) {
+    const allBookingsRes = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE_BOOKINGS,
+        KeyConditionExpression: "pk = :pk",
+        ExpressionAttributeValues: { ":pk": pk },
       })
     );
 
-    return { ok: true, type: "FULL" };
+    const match = (allBookingsRes.Items || []).find(
+      (b) =>
+        String(b.vehicleType || "").toUpperCase() === "HALF" &&
+        String(b.slotTime || "") === String(time) &&
+        String(b.mergeKey || "") === String(mergeKey) &&
+        String(b.orderId || "") === String(originalOrderId)
+    );
+
+    if (!match) throw new Error("Booking not found for this orderId");
+    resolvedBookingSk = match.sk;
   }
 
-  // ✅ HALF cancel
-  if (bookingSk && mergeKey) {
+  // HALF cancel
+  if (resolvedBookingSk && mergeKey) {
+    if (!time) throw new Error("time required for HALF cancel");
+
     const mergeSk2 = skForMergeSlot(time, mergeKey);
 
     const bookingRes = await ddb.send(
       new GetCommand({
         TableName: TABLE_BOOKINGS,
-        Key: { pk, sk: bookingSk },
+        Key: { pk, sk: resolvedBookingSk },
       })
     );
 
     if (!bookingRes.Item) throw new Error("Booking not found");
-    const amt = Number(bookingRes.Item.amount || 0);
 
-    const orderIdFromBooking = bookingRes.Item.orderId;
+    const amt = Number(bookingRes.Item.amount || 0);
+    const orderIdFromBooking = bookingRes.Item.orderId || null;
     const lockSk = orderIdFromBooking ? `ORDERLOCK#${orderIdFromBooking}` : null;
 
-    await ddb.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Update: {
-              TableName: TABLE_CAPACITY,
-              Key: { pk, sk: mergeSk2 },
-              UpdateExpression:
-                "SET totalAmount = totalAmount - :a, updatedAt = :u",
-              ConditionExpression: "totalAmount >= :a",
-              ExpressionAttributeValues: {
-                ":a": amt,
-                ":u": new Date().toISOString(),
-              },
-            },
+    const transactItems = [
+      {
+        Update: {
+          TableName: TABLE_CAPACITY,
+          Key: { pk, sk: mergeSk2 },
+          UpdateExpression: "SET totalAmount = totalAmount - :a, updatedAt = :u",
+          ConditionExpression: "totalAmount >= :a",
+          ExpressionAttributeValues: {
+            ":a": amt,
+            ":u": new Date().toISOString(),
           },
-          {
-            Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSk } },
-          },
-          ...(lockSk
-            ? [
-                {
-                  Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: lockSk } },
-                },
-              ]
-            : []),
-        ],
-      })
-    );
+        },
+      },
+      {
+        Delete: {
+          TableName: TABLE_BOOKINGS,
+          Key: { pk, sk: resolvedBookingSk },
+        },
+      },
+    ];
 
+    if (lockSk) {
+      transactItems.push({
+        Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: lockSk } },
+      });
+    }
+
+    if (orderIdFromBooking) {
+      transactItems.push({
+        Update: {
+          TableName: TABLE_ORDERS,
+          Key: { pk: `ORDER#${orderIdFromBooking}`, sk: "META" },
+          UpdateExpression:
+            "SET slotBooked=:sb, updatedAt=:u " +
+            "REMOVE slotId, slotDate, slotTime, slotVehicleType, mergeKey, locationId, mergedIntoOrderId, tripStatus, slotPos",
+          ExpressionAttributeValues: {
+            ":sb": false,
+            ":u": new Date().toISOString(),
+          },
+        },
+      });
+    }
+
+    await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
+
+    // recompute tripStatus after cancel
     const after = await ddb.send(
       new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: mergeSk2 } })
     );
@@ -1742,8 +2306,7 @@ export async function managerCancelBooking({
     const threshold = rules.threshold;
 
     const finalTotal = Number(after?.Item?.totalAmount || 0);
-    const newTripStatus =
-      finalTotal >= threshold ? "READY_FOR_CONFIRM" : "PARTIAL";
+    const newTripStatus = finalTotal >= threshold ? "READY_FOR_CONFIRM" : "PARTIAL";
 
     await ddb.send(
       new UpdateCommand({
@@ -1758,12 +2321,19 @@ export async function managerCancelBooking({
       })
     );
 
-    return { ok: true, type: "HALF", tripStatus: newTripStatus, finalTotal };
+    return {
+      ok: true,
+      slotType: "HALF",
+      orderId: orderIdFromBooking,
+      mergeKey,
+      time,
+      tripStatus: newTripStatus,
+      finalTotal,
+    };
   }
 
   throw new Error("Invalid cancel payload");
 }
-
 /* ✅ DISABLE SLOT */
 export async function managerDisableSlot({
   companyCode,
@@ -1953,14 +2523,7 @@ export async function managerMoveBookingToMerge({
 }) {
   validateSlotDate(date);
 
-  if (
-    !companyCode ||
-    !date ||
-    !time ||
-    !bookingSk ||
-    !fromMergeKey ||
-    !toMergeKey
-  ) {
+  if (!companyCode || !date || !time || !bookingSk || !fromMergeKey || !toMergeKey) {
     throw new Error("Missing required fields");
   }
 
@@ -1968,39 +2531,24 @@ export async function managerMoveBookingToMerge({
   const fromSk = skForMergeSlot(time, fromMergeKey);
   const toSk = skForMergeSlot(time, toMergeKey);
 
-  const fromCap = await ddb.send(
-    new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: fromSk } })
-  );
-  if (
-    fromCap.Item &&
-    String(fromCap.Item.tripStatus || "").toUpperCase() === "FULL"
-  ) {
+  const [fromCap, toCap] = await Promise.all([
+    ddb.send(new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: fromSk } })),
+    ddb.send(new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: toSk } })),
+  ]);
+
+  if (fromCap.Item && String(fromCap.Item.tripStatus || "").toUpperCase() === "FULL") {
     throw new Error("❌ Source merge already CONFIRMED. Cancel & rebook.");
   }
-
-  const toCap = await ddb.send(
-    new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: toSk } })
-  );
-  if (
-    toCap.Item &&
-    String(toCap.Item.tripStatus || "").toUpperCase() === "FULL"
-  ) {
+  if (toCap.Item && String(toCap.Item.tripStatus || "").toUpperCase() === "FULL") {
     throw new Error("❌ Target merge already CONFIRMED. Cancel & rebook.");
   }
 
   const bookingRes = await ddb.send(
-    new GetCommand({
-      TableName: TABLE_BOOKINGS,
-      Key: { pk, sk: bookingSk },
-    })
+    new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSk } })
   );
-
   const booking = bookingRes.Item;
   if (!booking) throw new Error("Booking not found");
-
-  if (isConfirmedStatus(booking.status)) {
-    throw new Error("❌ Booking already CONFIRMED. Cancel & rebook.");
-  }
+  if (isConfirmedStatus(booking.status)) throw new Error("❌ Booking already CONFIRMED. Cancel & rebook.");
 
   const amt = Number(booking.amount || 0);
 
@@ -2011,26 +2559,17 @@ export async function managerMoveBookingToMerge({
           Update: {
             TableName: TABLE_CAPACITY,
             Key: { pk, sk: fromSk },
-            UpdateExpression:
-              "SET totalAmount = totalAmount - :a, updatedAt = :u",
+            UpdateExpression: "SET totalAmount = totalAmount - :a, updatedAt = :u",
             ConditionExpression: "totalAmount >= :a",
-            ExpressionAttributeValues: {
-              ":a": amt,
-              ":u": new Date().toISOString(),
-            },
+            ExpressionAttributeValues: { ":a": amt, ":u": new Date().toISOString() },
           },
         },
         {
           Update: {
             TableName: TABLE_CAPACITY,
             Key: { pk, sk: toSk },
-            UpdateExpression:
-              "SET totalAmount = if_not_exists(totalAmount, :z) + :a, updatedAt = :u",
-            ExpressionAttributeValues: {
-              ":z": 0,
-              ":a": amt,
-              ":u": new Date().toISOString(),
-            },
+            UpdateExpression: "SET totalAmount = if_not_exists(totalAmount, :z) + :a, updatedAt = :u",
+            ExpressionAttributeValues: { ":z": 0, ":a": amt, ":u": new Date().toISOString() },
           },
         },
         {
@@ -2049,13 +2588,7 @@ export async function managerMoveBookingToMerge({
     })
   );
 
-  return {
-    ok: true,
-    message: "✅ Booking moved successfully",
-    fromMergeKey,
-    toMergeKey,
-    movedAmount: amt,
-  };
+  return { ok: true, message: "✅ Booking moved successfully", fromMergeKey, toMergeKey, movedAmount: amt };
 }
 export async function managerManualCrossSessionMerge({
   companyCode,
@@ -2078,8 +2611,18 @@ export async function managerManualCrossSessionMerge({
 
   /* 1️⃣ Fetch both bookings */
   const [b1Res, b2Res] = await Promise.all([
-    ddb.send(new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSk1 } })),
-    ddb.send(new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSk2 } })),
+    ddb.send(
+      new GetCommand({
+        TableName: TABLE_BOOKINGS,
+        Key: { pk, sk: bookingSk1 },
+      })
+    ),
+    ddb.send(
+      new GetCommand({
+        TableName: TABLE_BOOKINGS,
+        Key: { pk, sk: bookingSk2 },
+      })
+    ),
   ]);
 
   const b1 = b1Res.Item;
@@ -2089,29 +2632,35 @@ export async function managerManualCrossSessionMerge({
 
   /* 2️⃣ STRICT VALIDATIONS */
   if (
-    String(b1.vehicleType).toUpperCase() !== "HALF" ||
-    String(b2.vehicleType).toUpperCase() !== "HALF"
+    String(b1.vehicleType || "").toUpperCase() !== "HALF" ||
+    String(b2.vehicleType || "").toUpperCase() !== "HALF"
   ) {
     throw new Error("❌ Only HALF + HALF allowed");
   }
 
-  if (!isPendingOrWaitingStatus(b1.status) || !isPendingOrWaitingStatus(b2.status)) {
+  if (
+    !isPendingOrWaitingStatus(b1.status) ||
+    !isPendingOrWaitingStatus(b2.status)
+  ) {
     throw new Error("❌ Only PENDING / WAITING bookings allowed");
   }
 
   /* 3️⃣ Decide FINAL SESSION (later time wins) */
   const t1 = dayjs(b1.slotTime, "HH:mm");
   const t2 = dayjs(b2.slotTime, "HH:mm");
-
   const finalTime = t1.isAfter(t2) ? b1.slotTime : b2.slotTime;
 
-  /* 4️⃣ Find AVAILABLE FULL slot in finalTime */
+  /* 4️⃣ Find AVAILABLE FULL slot in finalTime (read-only check) */
   let chosenPos = null;
 
   for (const p of ALL_POSITIONS) {
     const slotSk = skForSlot(finalTime, "FULL", p);
+
     const cap = await ddb.send(
-      new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: slotSk } })
+      new GetCommand({
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: slotSk },
+      })
     );
 
     const st = String(cap?.Item?.status || "AVAILABLE").toUpperCase();
@@ -2129,20 +2678,26 @@ export async function managerManualCrossSessionMerge({
   const totalAmount = Number(b1.amount || 0) + Number(b2.amount || 0);
 
   const displayName = [b1.distributorName, b2.distributorName]
+    .map((x) => String(x || "").trim())
     .filter(Boolean)
     .join(" + ");
 
-  const displayCode = b1.distributorCode || b2.distributorCode || "MERGE";
+  const displayCode =
+    String(b1.distributorCode || "").trim() ||
+    String(b2.distributorCode || "").trim() ||
+    "MERGE";
 
   const fullOrderId = `ORD_FULL_${uuidv4().slice(0, 8)}`;
+
+  // keep bookingSk unique & deterministic enough
   const fullBookingSk = skForBooking(finalTime, "FULL", chosenPos, fullOrderId);
+
   const finalSlotId = `${companyCode}#${date}#${finalTime}#FULL#${chosenPos}`;
 
-  /* 6️⃣ TRANSACTION (atomic & safe) */
+  /* 6️⃣ TRANSACTION: Book FULL slot + create FULL booking record */
   await ddb.send(
     new TransactWriteCommand({
       TransactItems: [
-        /* FULL slot booking */
         {
           Update: {
             TableName: TABLE_CAPACITY,
@@ -2154,7 +2709,7 @@ export async function managerManualCrossSessionMerge({
             ExpressionAttributeValues: {
               ":avail": "AVAILABLE",
               ":b": "BOOKED",
-              ":dn": displayName,
+              ":dn": displayName || "MERGE",
               ":dc": displayCode,
               ":oid": fullOrderId,
               ":m": String(managerId || "MANAGER"),
@@ -2162,8 +2717,6 @@ export async function managerManualCrossSessionMerge({
             },
           },
         },
-
-        /* FULL booking record */
         {
           Put: {
             TableName: TABLE_BOOKINGS,
@@ -2176,11 +2729,35 @@ export async function managerManualCrossSessionMerge({
               pos: chosenPos,
               userId: fullOrderId,
               distributorCode: displayCode,
-              distributorName: displayName,
+              distributorName: displayName || "MERGE",
               amount: totalAmount,
               orderId: fullOrderId,
               status: "CONFIRMED",
               createdAt: new Date().toISOString(),
+            },
+          },
+        },
+        // ✅ create FULL order META (so cancel confirmed merge / reporting consistent)
+        {
+          Put: {
+            TableName: TABLE_ORDERS,
+            Item: {
+              pk: `ORDER#${fullOrderId}`,
+              sk: "META",
+              orderId: fullOrderId,
+              companyCode,
+              distributorId: displayCode,
+              distributorName: displayName || "MERGE",
+              mergedOrderIds: [b1.orderId, b2.orderId].filter(Boolean),
+              slotId: finalSlotId,
+              slotDate: date,
+              slotTime: finalTime,
+              slotVehicleType: "FULL",
+              slotPos: chosenPos,
+              totalAmount,
+              status: "SLOT_BOOKED",
+              createdAt: new Date().toISOString(),
+              createdBy: String(managerId || "MANAGER"),
             },
           },
         },
@@ -2229,7 +2806,6 @@ export async function managerManualCrossSessionMerge({
       );
     }
   }
-
   return {
     ok: true,
     message: "✅ Cross-session HALF + HALF merged to FULL",

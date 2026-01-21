@@ -637,7 +637,7 @@ export const confirmOrder = async (req, res) => {
 
     const order = orderRes.Item;
     const role = String(user.role || "").trim().toUpperCase();
-
+    const isAdmin = ["MASTER", "MANAGER", "DISTRIBUTOR", "SALESMAN", "SALES OFFICER"].includes(role);
     // // ✅ Only MANAGER can confirm (as you requested)
     // if (role !== "MANAGER") {
     //   return res.status(403).json({ message: "Access denied (MANAGER only)" });
@@ -652,21 +652,28 @@ export const confirmOrder = async (req, res) => {
 
     // ✅ 2) Confirm Order status => CONFIRMED, slotBooked false initially
     await ddb.send(
-      new UpdateCommand({
-        TableName: ORDERS_TABLE,
-        Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression:
-          "SET #st = :c, confirmedBy = :u, confirmedAt = :t, slotBooked = :sb",
-        ExpressionAttributeNames: { "#st": "status" },
-        ExpressionAttributeValues: {
-          ":c": "CONFIRMED",
-          ":u": user.mobile,
-          ":t": new Date().toISOString(),
-          ":sb": false,
-        },
-      })
-    );
-
+  new UpdateCommand({
+    TableName: ORDERS_TABLE,
+    Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    UpdateExpression: `
+      SET #st = :c,
+          confirmedBy = :u,
+          confirmedAt = :t,
+          slotBooked = :sb,
+          updatedAt = :t
+      REMOVE cancelledAt, cancelledBy,
+             slotId, slotDate, slotTime, slotPos, slotVehicleType,
+             slot
+    `,
+    ExpressionAttributeNames: { "#st": "status" },
+    ExpressionAttributeValues: {
+      ":c": "CONFIRMED",
+      ":u": user.mobile,
+      ":t": new Date().toISOString(),
+      ":sb": false,
+    },
+  })
+);
     await addTimelineEvent({
       orderId,
       event: "ORDER_CONFIRMED",
@@ -705,18 +712,40 @@ export const confirmOrder = async (req, res) => {
       };
 
       // ✅ Store slot + slotBooked in order
-      await ddb.send(
-        new UpdateCommand({
-          TableName: ORDERS_TABLE,
-          Key: { pk: `ORDER#${orderId}`, sk: "META" },
-          UpdateExpression: "SET slotBooked = :sb, slot = :slot",
-          ExpressionAttributeValues: {
-            ":sb": true,
-            ":slot": slotDetails,
-          },
-        })
-      );
+      const now = new Date().toISOString();
 
+// slotId: உங்கள் existing format வேண்டும்னா bookSlot return-ல இருந்து build பண்ணலாம்
+const slotIdValue =
+  slotDetails?.bookingId ||
+  booked?.bookingId ||
+  `${companyCode}#${slot.date}#${slot.time}#${slotDetails?.vehicleType || "FULL"}#${slot.pos}`;
+
+await ddb.send(
+  new UpdateCommand({
+    TableName: ORDERS_TABLE,
+    Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    UpdateExpression: `
+      SET slotBooked = :sb,
+          slot = :slot,
+          slotDate = :sd,
+          slotTime = :st,
+          slotPos = :sp,
+          slotVehicleType = :svt,
+          slotId = :sid,
+          updatedAt = :u
+    `,
+    ExpressionAttributeValues: {
+      ":sb": true,
+      ":slot": slotDetails,
+      ":sd": slot.date,
+      ":st": slot.time,
+      ":sp": slot.pos,
+      ":svt": slotDetails?.vehicleType || booked?.type || null,
+      ":sid": slotIdValue,
+      ":u": now,
+    },
+  })
+);
       // ✅ Create trip record (tickin_trips)
       const tripId = "TRP" + crypto.randomBytes(4).toString("hex").toUpperCase();
 
@@ -943,19 +972,29 @@ if (!isAdmin && order.status !== "PENDING") {
     });
 
     // ✅ Mark cancelled
-    await ddb.send(
-      new UpdateCommand({
-        TableName: "tickin_orders",
-        Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        UpdateExpression: "SET #st = :c, cancelledAt = :t, cancelledBy = :u",
-        ExpressionAttributeNames: { "#st": "status" },
-        ExpressionAttributeValues: {
-          ":c": "CANCELLED",
-          ":t": new Date().toISOString(),
-          ":u": user.mobile,
-        },
-      })
-    );
+    const now = new Date().toISOString();
+
+await ddb.send(
+  new UpdateCommand({
+    TableName: "tickin_orders",
+    Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    UpdateExpression: `
+      SET #st = :c,
+          cancelledAt = :t,
+          cancelledBy = :u,
+          slotBooked = :sb,
+          updatedAt = :t
+      REMOVE slot, slotId, slotDate, slotTime, slotPos, slotVehicleType
+    `,
+    ExpressionAttributeNames: { "#st": "status" },
+    ExpressionAttributeValues: {
+      ":c": "CANCELLED",
+      ":t": now,
+      ":u": user.mobile,
+      ":sb": false,
+    },
+  })
+);
 
     await addTimelineEvent({
       orderId,
@@ -968,6 +1007,68 @@ if (!isAdmin && order.status !== "PENDING") {
       message: "✅ Order cancelled + goal restored (product-wise)",
       orderId,
       status: "CANCELLED",
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Error", error: err.message });
+  }
+};
+export const cancelOrderSlot = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const user = req.user;
+
+    const existing = await ddb.send(
+      new GetCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${orderId}`, sk: "META" },
+      })
+    );
+
+    if (!existing.Item) return res.status(404).json({ message: "Order not found" });
+
+    const order = existing.Item;
+
+    // ✅ allow only MANAGER/MASTER (optional)
+    const role = String(user.role || "").toUpperCase();
+    const isAdmin = role === "MANAGER" || role === "MASTER";
+    if (!isAdmin) return res.status(403).json({ message: "Access denied" });
+
+    // ✅ If no slot booked, nothing to cancel
+    if (!order.slotBooked) {
+      return res.json({ ok: true, message: "No slot booked already", orderId });
+    }
+
+    const now = new Date().toISOString();
+
+    await ddb.send(
+      new UpdateCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${orderId}`, sk: "META" },
+        UpdateExpression: `
+          SET slotBooked = :sb,
+              updatedAt = :u
+          REMOVE slot, slotId, slotDate, slotTime, slotPos, slotVehicleType
+        `,
+        ExpressionAttributeValues: {
+          ":sb": false,
+          ":u": now,
+        },
+      })
+    );
+
+    await addTimelineEvent({
+      orderId,
+      event: "SLOT_CANCELLED",
+      by: user.mobile,
+      extra: { role: user.role, note: "Slot cancelled only (order kept)" },
+    });
+
+    return res.json({
+      ok: true,
+      message: "✅ Slot cancelled (order kept CONFIRMED)",
+      orderId,
+      slotBooked: false,
     });
   } catch (err) {
     console.error(err);
