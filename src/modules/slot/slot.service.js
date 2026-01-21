@@ -1974,158 +1974,213 @@ export async function managerCancelBooking(payload) {
     orderId,
   } = payload;
 
-  const pk = pkFor(companyCode, date);
-/* =========================
-   ✅ FULL cancel (userId optional)
-========================= */
-if (pos) {
-  const slotSk = skForSlot(time, "FULL", pos);
+  if (!companyCode) throw new Error("companyCode required");
+  if (!date) throw new Error("date required");
 
-  // booking sk if userId available
-  const bookingSK = userId ? skForBooking(time, "FULL", pos, userId) : null;
-
-  // resolve orderId from payload/capacity/booking
-  let resolvedOrderId = orderId || null;
-
-  if (!resolvedOrderId) {
-    const capRes = await ddb.send(
-      new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: slotSk } })
-    );
-    resolvedOrderId = capRes?.Item?.orderId || null;
-  }
-
-  if (!resolvedOrderId && bookingSK) {
-    const bookRes = await ddb.send(
-      new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSK } })
-    );
-    resolvedOrderId = bookRes?.Item?.orderId || null;
-  }
-
-  // ✅ if this is ORD_FULL_*, reset its child orders too
-  let mergedOrderIds = [];
-  if (resolvedOrderId && String(resolvedOrderId).startsWith("ORD_FULL_")) {
-    const fullMeta = await ddb.send(
+  // helper: read order meta
+  async function readOrderMeta(oid) {
+    if (!oid) return null;
+    const res = await ddb.send(
       new GetCommand({
         TableName: TABLE_ORDERS,
-        Key: { pk: `ORDER#${resolvedOrderId}`, sk: "META" },
+        Key: { pk: `ORDER#${oid}`, sk: "META" },
       })
     );
-    mergedOrderIds = fullMeta?.Item?.mergedOrderIds || [];
+    return res?.Item || null;
   }
 
-  const lockSk = resolvedOrderId ? `ORDERLOCK#${resolvedOrderId}` : null;
-
-  const transactItems = [
-    // free capacity slot
-    {
-      Update: {
-        TableName: TABLE_CAPACITY,
-        Key: { pk, sk: slotSk },
-        UpdateExpression:
-          "SET #s = :avail REMOVE userId, distributorName, distributorCode, orderId, bookedBy, amount",
-        ExpressionAttributeNames: { "#s": "status" },
-        ExpressionAttributeValues: { ":avail": "AVAILABLE" },
-      },
-    },
-  ];
-
-  // delete FULL booking record (resolve if missing)
-  let fullBookingSkToDelete = bookingSK;
-
-  if (!fullBookingSkToDelete) {
-    const allBookingsRes = await ddb.send(
-      new QueryCommand({
-        TableName: TABLE_BOOKINGS,
-        KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: { ":pk": pk },
-      })
-    );
-
-    const match = (allBookingsRes.Items || []).find(
-      (b) =>
-        String(b.vehicleType || "").toUpperCase() === "FULL" &&
-        String(b.slotTime || "") === String(time) &&
-        String(b.pos || "") === String(pos)
-    );
-
-    fullBookingSkToDelete = match?.sk || null;
+  // ✅ 0) If this is a child order merged into ORD_FULL_*, switch cancel target to master
+  // (This is the KEY fix for "cancel but slot still disabled")
+  if (orderId && !String(orderId).startsWith("ORD_FULL_")) {
+    const childMeta = await readOrderMeta(orderId);
+    const masterId = childMeta?.mergedIntoOrderId || null;
+    if (masterId && String(masterId).startsWith("ORD_FULL_")) {
+      orderId = masterId; // cancel the master FULL booking
+    }
   }
 
-  if (fullBookingSkToDelete) {
-    transactItems.push({
-      Delete: {
-        TableName: TABLE_BOOKINGS,
-        Key: { pk, sk: fullBookingSkToDelete },
-      },
-    });
+  // ✅ 1) If orderId is ORD_FULL_* and pos/time missing, derive from master meta (or slotId)
+  if (orderId && String(orderId).startsWith("ORD_FULL_") && (!pos || !time)) {
+    const masterMeta = await readOrderMeta(orderId);
+
+    if (!masterMeta) {
+      throw new Error("Master FULL order META not found");
+    }
+
+    // Prefer explicit fields
+    time = time || masterMeta.slotTime || null;
+    pos = pos || masterMeta.slotPos || null;
+
+    // Fallback: parse slotId => COMPANY#DATE#TIME#FULL#POS
+    if ((!time || !pos) && masterMeta.slotId) {
+      const parts = String(masterMeta.slotId).split("#");
+      // [0]=companyCode [1]=date [2]=time [3]=FULL [4]=pos
+      if (!time && parts.length >= 3) time = parts[2];
+      if (!pos && parts.length >= 5) pos = parts[4];
+    }
   }
 
-  // delete order lock for master
-  if (lockSk) {
-    transactItems.push({
-      Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: lockSk } },
-    });
-  }
+  const pk = pkFor(companyCode, date);
 
-  // reset master order meta if it's a real customer order (not ORD_FULL_*)
-  if (resolvedOrderId && !String(resolvedOrderId).startsWith("ORD_FULL_")) {
-    transactItems.push({
-      Update: {
-        TableName: TABLE_ORDERS,
-        Key: { pk: `ORDER#${resolvedOrderId}`, sk: "META" },
-        UpdateExpression:
-          "SET slotBooked=:sb, updatedAt=:u " +
-          "REMOVE slotId, slotDate, slotTime, slotVehicleType, slotPos, mergeKey, locationId, mergedIntoOrderId, tripStatus",
-        ExpressionAttributeValues: {
-          ":sb": false,
-          ":u": new Date().toISOString(),
+  /* =========================
+     ✅ FULL cancel (supports: pos/time direct OR master orderId)
+  ========================= */
+  const shouldFullCancel = Boolean(pos && time); // now pos/time can be auto-derived
+  if (shouldFullCancel) {
+    const slotSk = skForSlot(time, "FULL", pos);
+
+    // booking sk if userId available
+    const bookingSK = userId ? skForBooking(time, "FULL", pos, userId) : null;
+
+    // resolve orderId from payload/capacity/booking
+    let resolvedOrderId = orderId || null;
+
+    if (!resolvedOrderId) {
+      const capRes = await ddb.send(
+        new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: slotSk } })
+      );
+      resolvedOrderId = capRes?.Item?.orderId || null;
+    }
+
+    if (!resolvedOrderId && bookingSK) {
+      const bookRes = await ddb.send(
+        new GetCommand({ TableName: TABLE_BOOKINGS, Key: { pk, sk: bookingSK } })
+      );
+      resolvedOrderId = bookRes?.Item?.orderId || null;
+    }
+
+    // ✅ if this FULL belongs to child order merged into master, switch to master
+    if (resolvedOrderId && !String(resolvedOrderId).startsWith("ORD_FULL_")) {
+      const meta = await readOrderMeta(resolvedOrderId);
+      const masterId = meta?.mergedIntoOrderId || null;
+      if (masterId && String(masterId).startsWith("ORD_FULL_")) {
+        resolvedOrderId = masterId;
+      }
+    }
+
+    // ✅ if this is ORD_FULL_*, reset its child orders too
+    let mergedOrderIds = [];
+    if (resolvedOrderId && String(resolvedOrderId).startsWith("ORD_FULL_")) {
+      const fullMeta = await readOrderMeta(resolvedOrderId);
+      mergedOrderIds = fullMeta?.mergedOrderIds || [];
+    }
+
+    const lockSk = resolvedOrderId ? `ORDERLOCK#${resolvedOrderId}` : null;
+
+    const transactItems = [
+      // free capacity slot
+      {
+        Update: {
+          TableName: TABLE_CAPACITY,
+          Key: { pk, sk: slotSk },
+          UpdateExpression:
+            "SET #s = :avail REMOVE userId, distributorName, distributorCode, orderId, bookedBy, amount",
+          ExpressionAttributeNames: { "#s": "status" },
+          ExpressionAttributeValues: { ":avail": "AVAILABLE" },
         },
       },
-    });
-  }
+    ];
 
-  // ✅ reset child orders (this is what re-enables SLOT button in All Orders)
-  for (const childId of mergedOrderIds) {
-    transactItems.push({
-      Update: {
-        TableName: TABLE_ORDERS,
-        Key: { pk: `ORDER#${childId}`, sk: "META" },
-        UpdateExpression:
-          "SET slotBooked=:sb, updatedAt=:u " +
-          "REMOVE slotId, slotDate, slotTime, slotVehicleType, slotPos, mergeKey, locationId, mergedIntoOrderId, tripStatus",
-        ExpressionAttributeValues: {
-          ":sb": false,
-          ":u": new Date().toISOString(),
+    // delete FULL booking record (resolve if missing)
+    let fullBookingSkToDelete = bookingSK;
+
+    if (!fullBookingSkToDelete) {
+      const allBookingsRes = await ddb.send(
+        new QueryCommand({
+          TableName: TABLE_BOOKINGS,
+          KeyConditionExpression: "pk = :pk",
+          ExpressionAttributeValues: { ":pk": pk },
+        })
+      );
+
+      const match = (allBookingsRes.Items || []).find(
+        (b) =>
+          String(b.vehicleType || "").toUpperCase() === "FULL" &&
+          String(b.slotTime || "") === String(time) &&
+          String(b.pos || "") === String(pos)
+      );
+
+      fullBookingSkToDelete = match?.sk || null;
+    }
+
+    if (fullBookingSkToDelete) {
+      transactItems.push({
+        Delete: {
+          TableName: TABLE_BOOKINGS,
+          Key: { pk, sk: fullBookingSkToDelete },
         },
-      },
-    });
+      });
+    }
 
-    transactItems.push({
-      Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: `ORDERLOCK#${childId}` } },
-    });
+    // delete order lock for master
+    if (lockSk) {
+      transactItems.push({
+        Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: lockSk } },
+      });
+    }
+
+    // reset master order meta if it's a real customer order (not ORD_FULL_*)
+    if (resolvedOrderId && !String(resolvedOrderId).startsWith("ORD_FULL_")) {
+      transactItems.push({
+        Update: {
+          TableName: TABLE_ORDERS,
+          Key: { pk: `ORDER#${resolvedOrderId}`, sk: "META" },
+          UpdateExpression:
+            "SET slotBooked=:sb, updatedAt=:u " +
+            "REMOVE slotId, slotDate, slotTime, slotVehicleType, slotPos, mergeKey, locationId, mergedIntoOrderId, tripStatus",
+          ExpressionAttributeValues: {
+            ":sb": false,
+            ":u": new Date().toISOString(),
+          },
+        },
+      });
+    }
+
+    // ✅ reset child orders (this is what re-enables SLOT button in All Orders)
+    for (const childId of mergedOrderIds) {
+      transactItems.push({
+        Update: {
+          TableName: TABLE_ORDERS,
+          Key: { pk: `ORDER#${childId}`, sk: "META" },
+          UpdateExpression:
+            "SET slotBooked=:sb, updatedAt=:u " +
+            "REMOVE slotId, slotDate, slotTime, slotVehicleType, slotPos, mergeKey, locationId, mergedIntoOrderId, tripStatus",
+          ExpressionAttributeValues: {
+            ":sb": false,
+            ":u": new Date().toISOString(),
+          },
+        },
+      });
+
+      transactItems.push({
+        Delete: {
+          TableName: TABLE_BOOKINGS,
+          Key: { pk, sk: `ORDERLOCK#${childId}` },
+        },
+      });
+    }
+
+    // ✅ delete FULL master META (optional but clean)
+    if (resolvedOrderId && String(resolvedOrderId).startsWith("ORD_FULL_")) {
+      transactItems.push({
+        Delete: {
+          TableName: TABLE_ORDERS,
+          Key: { pk: `ORDER#${resolvedOrderId}`, sk: "META" },
+        },
+      });
+    }
+
+    await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
+
+    return {
+      ok: true,
+      slotType: "FULL",
+      orderId: resolvedOrderId,
+      time,
+      pos,
+      resetOrders: mergedOrderIds,
+    };
   }
-
-  // ✅ delete FULL master META (optional but clean)
-  if (resolvedOrderId && String(resolvedOrderId).startsWith("ORD_FULL_")) {
-    transactItems.push({
-      Delete: {
-        TableName: TABLE_ORDERS,
-        Key: { pk: `ORDER#${resolvedOrderId}`, sk: "META" },
-      },
-    });
-  }
-
-  await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
-
-  return {
-    ok: true,
-    slotType: "FULL",
-    orderId: resolvedOrderId,
-    time,
-    pos,
-    resetOrders: mergedOrderIds,
-  };
-}
 
   /* =========================
      ✅ HALF cancel (resolve bookingSk if missing)
@@ -2154,10 +2209,10 @@ if (pos) {
     resolvedBookingSk = match.sk;
   }
 
-  /* =========================
-     ✅ HALF cancel
-  ========================= */
+  // ✅ HALF cancel
   if (resolvedBookingSk && mergeKey) {
+    if (!time) throw new Error("time required for HALF cancel");
+
     const mergeSk2 = skForMergeSlot(time, mergeKey);
 
     const bookingRes = await ddb.send(
@@ -2187,7 +2242,10 @@ if (pos) {
         },
       },
       {
-        Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: resolvedBookingSk } },
+        Delete: {
+          TableName: TABLE_BOOKINGS,
+          Key: { pk, sk: resolvedBookingSk },
+        },
       },
     ];
 
@@ -2224,8 +2282,7 @@ if (pos) {
     const threshold = rules.threshold;
 
     const finalTotal = Number(after?.Item?.totalAmount || 0);
-    const newTripStatus =
-      finalTotal >= threshold ? "READY_FOR_CONFIRM" : "PARTIAL";
+    const newTripStatus = finalTotal >= threshold ? "READY_FOR_CONFIRM" : "PARTIAL";
 
     await ddb.send(
       new UpdateCommand({
@@ -2239,15 +2296,16 @@ if (pos) {
         },
       })
     );
-return {
-  ok: true,
-  slotType: "HALF",
-  orderId: orderIdFromBooking,
-  mergeKey,
-  time,
-  tripStatus: newTripStatus,
-  finalTotal,
-};
+
+    return {
+      ok: true,
+      slotType: "HALF",
+      orderId: orderIdFromBooking,
+      mergeKey,
+      time,
+      tripStatus: newTripStatus,
+      finalTotal,
+    };
   }
 
   throw new Error("Invalid cancel payload");
