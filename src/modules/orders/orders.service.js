@@ -158,6 +158,26 @@ export const getSlotConfirmedOrders = async (req, res) => {
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
+export async function forceResetOrderSlotMeta(orderId) {
+  if (!orderId) throw new Error("orderId required");
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_ORDERS,
+      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+      UpdateExpression:
+        "SET slotBooked = :sb, updatedAt = :u " +
+        "REMOVE slotId, slotDate, slotTime, slotVehicleType, slotPos, mergeKey, locationId, mergedIntoOrderId, tripStatus",
+      ExpressionAttributeValues: {
+        ":sb": false,
+        ":u": new Date().toISOString(),
+      },
+    })
+  );
+
+  return { ok: true, message: "FORCE RESET DONE", orderId };
+}
+
 /*FLOW KEY*/ 
 export const getOrderFlowByKey = async (req, res) => {
   try {

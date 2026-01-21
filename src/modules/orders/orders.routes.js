@@ -233,6 +233,16 @@ router.post(
   allowRoles("MANAGER", "MASTER"),
   loadingEnd
 );
+router.post("/orders/force-reset/:orderId", async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const out = await forceResetOrderSlotMeta(orderId);
+    return res.json(out);
+  } catch (e) {
+    return res.status(500).json({ ok: false, message: e.message });
+  }
+});
+
 router.patch("/:orderId/cancel-slot", verifyToken, cancelOrderSlot);
 // ✅ Assign Driver
 router.post(
