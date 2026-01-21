@@ -1386,6 +1386,18 @@ await ddb.send(
       ExpressionAttributeValues: { ":s": tripStatus },
     })
   );
+// ✅ ALSO update DAY-level bucket tripStatus (for blink tile)
+await ddb.send(
+  new UpdateCommand({
+    TableName: TABLE_CAPACITY,
+    Key: { pk, sk: skForMergeDay(mergeKey) },
+    UpdateExpression: "SET tripStatus = :s, updatedAt=:u",
+    ExpressionAttributeValues: {
+      ":s": tripStatus,
+      ":u": new Date().toISOString(),
+    },
+  })
+);
 
   // ✅ AUTO CONFIRM if READY
   if (tripStatus === "READY_FOR_CONFIRM") {
