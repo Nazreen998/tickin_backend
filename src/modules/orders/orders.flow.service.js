@@ -32,11 +32,30 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
   const key = String(flowKey || "").trim();
   if (!key) return [];
 
-  // ✅ orderId direct
+  // ✅ SPECIAL: If ORD_FULL_* flowKey => expand to child orders
+  if (key.startsWith("ORD_FULL_")) {
+    const fullMeta = await ddb.send(
+      new GetCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${key}`, sk: "META" },
+      })
+    );
+
+    const merged = Array.isArray(fullMeta?.Item?.mergedOrderIds)
+      ? fullMeta.Item.mergedOrderIds
+      : [];
+
+    const all = [key, ...merged].map(normalizeOrderId).filter(Boolean);
+
+    // unique
+    return [...new Set(all)];
+  }
+
+  // ✅ orderId direct (normal orders)
   if (key.startsWith("ORD")) return [key];
   if (/^\d+$/.test(key)) return [`ORD${key}`];
 
-  // ✅ 1) Try BOOKINGS table (GEO_* usually comes from slot booking flow)
+  // ✅ 1) Try BOOKINGS table (GEO_* flows)
   const bRes = await ddb.send(
     new ScanCommand({
       TableName: BOOKINGS_TABLE,
@@ -50,7 +69,7 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
     .map((x) => normalizeOrderId(x.orderId))
     .filter(Boolean);
 
-  // ✅ 2) Also scan ORDERS table by mergeKey (may include ORD_FULL_ master meta)
+  // ✅ 2) Also scan ORDERS table by mergeKey (may include ORD_FULL_ meta)
   const scanRes = await ddb.send(
     new ScanCommand({
       TableName: ORDERS_TABLE,
@@ -61,14 +80,15 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
   );
 
   const ids = (scanRes.Items || [])
-    .map((x) => normalizeOrderId(x.orderId || (x.pk ? x.pk.replace("ORDER#", "") : null)))
+    .map((x) =>
+      normalizeOrderId(x.orderId || (x.pk ? x.pk.replace("ORDER#", "") : null))
+    )
     .filter(Boolean);
 
-  // ✅ combine + unique (after normalization)
   const all = [...bIds, ...ids].filter(Boolean);
   const uniq = [...new Set(all)];
 
-  // ✅ keep FULL order first (only for tracking/master id)
+  // keep FULL order first (optional)
   uniq.sort((a, b) => {
     const af = String(a).startsWith("ORD_FULL_") ? 0 : 1;
     const bf = String(b).startsWith("ORD_FULL_") ? 0 : 1;

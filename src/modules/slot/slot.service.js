@@ -692,26 +692,28 @@ export async function managerManualMergePickTime({
         // ✅ BOOK capacity slot (always works even if item doesn't exist)
         {
           Update: {
-            TableName: TABLE_CAPACITY,
-            Key: { pk, sk: fullSk },
-            UpdateExpression:
-              "SET #s=:b, userId=:uid, time=:t, vehicleType=:vt, pos=:p, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:m, amount=:a, updatedAt=:u",
-            ExpressionAttributeNames: { "#s": "status" },
-            ExpressionAttributeValues: {
-              ":avail": "AVAILABLE",
-              ":b": "BOOKED",
-              ":uid": fullOrderId,
-              ":dn": displayName || "MERGE",
-              ":dc": displayCode,
-              ":oid": fullOrderId,
-              ":m": String(managerId || "MANAGER"),
-              ":a": totalAmount,
-              ":t": targetTime,
-              ":p": chosenPos,
-              ":vt": "FULL",
-              ":u": new Date().toISOString(),
-            },
-          },
+  TableName: TABLE_CAPACITY,
+  Key: { pk, sk: fullSk },
+  UpdateExpression:
+    "SET #s=:b, userId=:uid, #tm=:t, vehicleType=:vt, pos=:p, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:m, amount=:a, updatedAt=:u",
+  ExpressionAttributeNames: {
+    "#s": "status",
+    "#tm": "time"
+  },
+  ExpressionAttributeValues: {
+    ":b": "BOOKED",
+    ":uid": fullOrderId,
+    ":dn": displayName || "MERGE",
+    ":dc": displayCode,
+    ":oid": fullOrderId,
+    ":m": String(managerId || "MANAGER"),
+    ":a": totalAmount,
+    ":t": targetTime,
+    ":p": chosenPos,
+    ":vt": "FULL",
+    ":u": new Date().toISOString()
+  }
+},
         },
 
         // create FULL booking record
@@ -854,7 +856,28 @@ for (const key of touched) {
 async function checkOrderAlreadyBooked(pk, orderId) {
   if (!orderId) return false;
 
-  const res = await ddb.send(
+  /* =========================
+     1️⃣ Read ORDER META
+  ========================= */
+  const metaRes = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_ORDERS,
+      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    })
+  );
+
+  const meta = metaRes?.Item;
+
+  // If system itself says not booked → allow booking
+  if (!meta || meta.slotBooked !== true) {
+    return false;
+  }
+
+  /* =========================
+     2️⃣ Check BOOKINGS table
+     (ignore ORDERLOCK rows)
+  ========================= */
+  const bookRes = await ddb.send(
     new QueryCommand({
       TableName: TABLE_BOOKINGS,
       KeyConditionExpression: "pk = :pk",
@@ -862,10 +885,41 @@ async function checkOrderAlreadyBooked(pk, orderId) {
     })
   );
 
-  const items = res.Items || [];
-  return items.some((x) => String(x.orderId || "") === String(orderId));
-}
+  const hasRealBooking = (bookRes.Items || []).some(
+    (b) =>
+      String(b.orderId || "") === String(orderId) &&
+      String(b.sk || "").startsWith("BOOKING#") // 👈 IMPORTANT
+  );
 
+  if (hasRealBooking) {
+    return true;
+  }
+
+  /* =========================
+     3️⃣ Check CAPACITY table
+  ========================= */
+  const capRes = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_CAPACITY,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
+    })
+  );
+
+  const hasCapacityLink = (capRes.Items || []).some(
+    (c) => String(c.orderId || "") === String(orderId)
+  );
+
+  if (hasCapacityLink) {
+    return true;
+  }
+
+  /* =========================
+     ❌ No real booking
+     → stale state
+  ========================= */
+  return false;
+}
 async function resolveDistributorDetails({
   distributorCode,
   distributorName,
@@ -929,9 +983,11 @@ export async function bookSlot({
   }
 
   const pk = pkFor(companyCode, date);
-
-  const already = await checkOrderAlreadyBooked(pk, orderId);
-  if (already) throw new Error("❌ This Order already booked a slot");
+  // ✅ SELF HEAL: stale slotBooked / orderlock clear pannum
+await reconcileOrderSlotState({
+  companyCode,
+  orderId,
+});
 
   const rules = await getRules(companyCode);
   const threshold = rules.threshold;
@@ -2033,7 +2089,19 @@ export async function managerCancelBooking(payload) {
   // apply normalized cancel order id
   orderId = cancelOrderId;
 
-  const pk = pkFor(companyCode, date);
+  // ✅ For HALF cancels, make sure date/time/mergeKey are from ORDER META (prevents pk mismatch)
+if (originalOrderId) {
+  const om = await readOrderMeta(originalOrderId);
+  if (om) {
+    date = om.slotDate || date;
+    time = time || om.slotTime || null;
+    mergeKey = mergeKey || om.mergeKey || null;
+    pos = pos || om.slotPos || null;
+  }
+}
+
+
+  let pk = pkFor(companyCode, date);
 
   /* =========================
      ✅ FULL cancel (works even if UI didn't send pos/time)
@@ -2115,13 +2183,14 @@ export async function managerCancelBooking(payload) {
           ExpressionAttributeValues: { ":pk": pk },
         })
       );
+const match = (allBookingsRes.Items || []).find(
+  (b) =>
+    String(b.vehicleType || "").toUpperCase() === "FULL" &&
+    String(b.slotTime || "") === String(time) &&
+    String(b.pos || "") === String(pos)
+);
 
-      const match = (allBookingsRes.Items || []).find(
-        (b) =>
-          String(b.vehicleType || "").toUpperCase() === "FULL" &&
-          String(b.slotTime || "") === String(time) &&
-          String(b.pos || "") === String(pos)
-      );
+fullBookingSkToDelete = match?.sk || null;
 
       fullBookingSkToDelete = match?.sk || null;
     }
@@ -2212,27 +2281,74 @@ export async function managerCancelBooking(payload) {
   let resolvedBookingSk = bookingSk || null;
 
   // If bookingSk missing but mergeKey + orderId present, resolve bookingSk by orderId
-  if ((!resolvedBookingSk || resolvedBookingSk === "") && mergeKey && originalOrderId) {
-    const allBookingsRes = await ddb.send(
-      new QueryCommand({
-        TableName: TABLE_BOOKINGS,
-        KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: { ":pk": pk },
-      })
-    );
+// If bookingSk missing but mergeKey + orderId present, resolve bookingSk by orderId
+if ((!resolvedBookingSk || resolvedBookingSk === "") && mergeKey && originalOrderId) {
+  // 1) Try within current pk (fast path)
+  const allBookingsRes = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_BOOKINGS,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
+    })
+  );
 
-    const match = (allBookingsRes.Items || []).find(
-      (b) =>
-        String(b.vehicleType || "").toUpperCase() === "HALF" &&
-        String(b.slotTime || "") === String(time) &&
-        String(b.mergeKey || "") === String(mergeKey) &&
-        String(b.orderId || "") === String(originalOrderId)
-    );
+  let candidates = (allBookingsRes.Items || []).filter(
+    (b) =>
+      String(b.vehicleType || "").toUpperCase() === "HALF" &&
+      String(b.mergeKey || "") === String(mergeKey) &&
+      String(b.orderId || "") === String(originalOrderId) &&
+      (!time || String(b.slotTime || "") === String(time))
+  );
 
-    if (!match) throw new Error("Booking not found for this orderId");
+  // 2) Fallback: if not found in pk, Scan the table by orderId+mergeKey (slow but fixes pk mismatch)
+  if (candidates.length === 0) {
+    let lastKey = undefined;
+    let found = null;
+
+    do {
+      const scanRes = await ddb.send(
+        new ScanCommand({
+          TableName: TABLE_BOOKINGS,
+          ExclusiveStartKey: lastKey,
+          Limit: 200,
+          FilterExpression:
+            "#vt = :half AND #mk = :mk AND #oid = :oid",
+          ExpressionAttributeNames: {
+            "#vt": "vehicleType",
+            "#mk": "mergeKey",
+            "#oid": "orderId",
+          },
+          ExpressionAttributeValues: {
+            ":half": "HALF",
+            ":mk": String(mergeKey),
+            ":oid": String(originalOrderId),
+          },
+        })
+      );
+
+      found = (scanRes.Items || [])[0] || null;
+      lastKey = scanRes.LastEvaluatedKey;
+    } while (!found && lastKey);
+
+    if (!found) throw new Error("Booking not found for this orderId");
+
+    // ✅ IMPORTANT: switch to the real pk where the booking exists
+    pk = found.pk;
+
+    // derive time if missing
+    if (!time) time = found.slotTime || null;
+
+    resolvedBookingSk = found.sk;
+  } else {
+    // pick latest if duplicates exist
+    const match = candidates.sort((a, b) =>
+      String(b.createdAt || b.sk || "").localeCompare(String(a.createdAt || a.sk || ""))
+    )[0];
+
+    if (!time) time = match.slotTime || null;
     resolvedBookingSk = match.sk;
   }
-
+}
   // HALF cancel
   if (resolvedBookingSk && mergeKey) {
     if (!time) throw new Error("time required for HALF cancel");
