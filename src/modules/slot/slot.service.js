@@ -692,26 +692,28 @@ export async function managerManualMergePickTime({
         // ✅ BOOK capacity slot (always works even if item doesn't exist)
         {
           Update: {
-            TableName: TABLE_CAPACITY,
-            Key: { pk, sk: fullSk },
-            UpdateExpression:
-              "SET #s=:b, userId=:uid, time=:t, vehicleType=:vt, pos=:p, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:m, amount=:a, updatedAt=:u",
-            ExpressionAttributeNames: { "#s": "status", "#tm": "time",},
-            ExpressionAttributeValues: {
-              ":avail": "AVAILABLE",
-              ":b": "BOOKED",
-              ":uid": fullOrderId,
-              ":dn": displayName || "MERGE",
-              ":dc": displayCode,
-              ":oid": fullOrderId,
-              ":m": String(managerId || "MANAGER"),
-              ":a": totalAmount,
-              ":t": targetTime,
-              ":p": chosenPos,
-              ":vt": "FULL",
-              ":u": new Date().toISOString(),
-            },
-          },
+  TableName: TABLE_CAPACITY,
+  Key: { pk, sk: fullSk },
+  UpdateExpression:
+    "SET #s=:b, userId=:uid, #tm=:t, vehicleType=:vt, pos=:p, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:m, amount=:a, updatedAt=:u",
+  ExpressionAttributeNames: {
+    "#s": "status",
+    "#tm": "time"
+  },
+  ExpressionAttributeValues: {
+    ":b": "BOOKED",
+    ":uid": fullOrderId,
+    ":dn": displayName || "MERGE",
+    ":dc": displayCode,
+    ":oid": fullOrderId,
+    ":m": String(managerId || "MANAGER"),
+    ":a": totalAmount,
+    ":t": targetTime,
+    ":p": chosenPos,
+    ":vt": "FULL",
+    ":u": new Date().toISOString()
+  }
+},
         },
 
         // create FULL booking record
