@@ -958,6 +958,81 @@ async function resolveDistributorDetails({
 
   return { resolvedName, safeLat, safeLng };
 }
+async function reconcileOrderSlotState({ companyCode, orderId }) {
+  if (!orderId) return;
+
+  const metaRes = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_ORDERS,
+      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    })
+  );
+
+  const meta = metaRes?.Item;
+  if (!meta || meta.slotBooked !== true) return;
+
+  const slotDate = meta.slotDate;
+  if (!slotDate) return;
+
+  const pk = pkFor(companyCode, slotDate);
+
+  // check real booking rows
+  const bookRes = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_BOOKINGS,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
+    })
+  );
+
+  const hasBooking = (bookRes.Items || []).some(
+    (b) =>
+      String(b.orderId || "") === String(orderId) &&
+      String(b.sk || "").startsWith("BOOKING#")
+  );
+
+  // check capacity
+  const capRes = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_CAPACITY,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
+    })
+  );
+
+  const hasCapacity = (capRes.Items || []).some(
+    (c) => String(c.orderId || "") === String(orderId)
+  );
+
+  // if no real booking → clear stale state
+  if (!hasBooking && !hasCapacity) {
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Update: {
+              TableName: TABLE_ORDERS,
+              Key: { pk: `ORDER#${orderId}`, sk: "META" },
+              UpdateExpression:
+                "SET slotBooked=:sb, updatedAt=:u " +
+                "REMOVE slotId, slotDate, slotTime, slotVehicleType, slotPos, mergeKey, mergedIntoOrderId, tripStatus",
+              ExpressionAttributeValues: {
+                ":sb": false,
+                ":u": new Date().toISOString(),
+              },
+            },
+          },
+          {
+            Delete: {
+              TableName: TABLE_BOOKINGS,
+              Key: { pk, sk: `ORDERLOCK#${orderId}` },
+            },
+          },
+        ],
+      })
+    );
+  }
+}
 export async function bookSlot({
   companyCode,
   date,
