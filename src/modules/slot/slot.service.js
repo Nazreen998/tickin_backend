@@ -2035,7 +2035,19 @@ export async function managerCancelBooking(payload) {
   // apply normalized cancel order id
   orderId = cancelOrderId;
 
-  const pk = pkFor(companyCode, date);
+  // ✅ For HALF cancels, make sure date/time/mergeKey are from ORDER META (prevents pk mismatch)
+if (originalOrderId) {
+  const om = await readOrderMeta(originalOrderId);
+  if (om) {
+    date = om.slotDate || date;
+    time = time || om.slotTime || null;
+    mergeKey = mergeKey || om.mergeKey || null;
+    pos = pos || om.slotPos || null;
+  }
+}
+
+
+  let pk = pkFor(companyCode, date);
 
   /* =========================
      ✅ FULL cancel (works even if UI didn't send pos/time)
