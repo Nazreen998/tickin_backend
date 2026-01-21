@@ -2227,35 +2227,74 @@ fullBookingSkToDelete = match?.sk || null;
   let resolvedBookingSk = bookingSk || null;
 
   // If bookingSk missing but mergeKey + orderId present, resolve bookingSk by orderId
-  if ((!resolvedBookingSk || resolvedBookingSk === "") && mergeKey && originalOrderId) {
-    const allBookingsRes = await ddb.send(
-      new QueryCommand({
-        TableName: TABLE_BOOKINGS,
-        KeyConditionExpression: "pk = :pk",
-        ExpressionAttributeValues: { ":pk": pk },
-      })
-    );
-const candidates = (allBookingsRes.Items || []).filter(
-  (b) =>
-    String(b.vehicleType || "").toUpperCase() === "HALF" &&
-    String(b.mergeKey || "") === String(mergeKey) &&
-    String(b.orderId || "") === String(originalOrderId) &&
-    (!time || String(b.slotTime || "") === String(time))
-);
+// If bookingSk missing but mergeKey + orderId present, resolve bookingSk by orderId
+if ((!resolvedBookingSk || resolvedBookingSk === "") && mergeKey && originalOrderId) {
+  // 1) Try within current pk (fast path)
+  const allBookingsRes = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_BOOKINGS,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
+    })
+  );
 
-if (candidates.length === 0) throw new Error("Booking not found for this orderId");
+  let candidates = (allBookingsRes.Items || []).filter(
+    (b) =>
+      String(b.vehicleType || "").toUpperCase() === "HALF" &&
+      String(b.mergeKey || "") === String(mergeKey) &&
+      String(b.orderId || "") === String(originalOrderId) &&
+      (!time || String(b.slotTime || "") === String(time))
+  );
 
-// time UI-ல இருந்து வரலனா, booking-ல இருந்து எடுத்துக்கோ
-if (!time) time = candidates[0].slotTime;
+  // 2) Fallback: if not found in pk, Scan the table by orderId+mergeKey (slow but fixes pk mismatch)
+  if (candidates.length === 0) {
+    let lastKey = undefined;
+    let found = null;
 
-// duplicates இருந்தா latest record pick பண்ணு (createdAt இல்லனா sk sort works usually)
-const match = candidates.sort((a, b) =>
-  String(b.createdAt || b.sk || "").localeCompare(String(a.createdAt || a.sk || ""))
-)[0];
+    do {
+      const scanRes = await ddb.send(
+        new ScanCommand({
+          TableName: TABLE_BOOKINGS,
+          ExclusiveStartKey: lastKey,
+          Limit: 200,
+          FilterExpression:
+            "#vt = :half AND #mk = :mk AND #oid = :oid",
+          ExpressionAttributeNames: {
+            "#vt": "vehicleType",
+            "#mk": "mergeKey",
+            "#oid": "orderId",
+          },
+          ExpressionAttributeValues: {
+            ":half": "HALF",
+            ":mk": String(mergeKey),
+            ":oid": String(originalOrderId),
+          },
+        })
+      );
 
-resolvedBookingSk = match.sk;
+      found = (scanRes.Items || [])[0] || null;
+      lastKey = scanRes.LastEvaluatedKey;
+    } while (!found && lastKey);
+
+    if (!found) throw new Error("Booking not found for this orderId");
+
+    // ✅ IMPORTANT: switch to the real pk where the booking exists
+    pk = found.pk;
+
+    // derive time if missing
+    if (!time) time = found.slotTime || null;
+
+    resolvedBookingSk = found.sk;
+  } else {
+    // pick latest if duplicates exist
+    const match = candidates.sort((a, b) =>
+      String(b.createdAt || b.sk || "").localeCompare(String(a.createdAt || a.sk || ""))
+    )[0];
+
+    if (!time) time = match.slotTime || null;
+    resolvedBookingSk = match.sk;
   }
-
+}
   // HALF cancel
   if (resolvedBookingSk && mergeKey) {
     if (!time) throw new Error("time required for HALF cancel");

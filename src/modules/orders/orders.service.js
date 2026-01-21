@@ -74,60 +74,70 @@ export const getSlotConfirmedOrders = async (req, res) => {
       );
       if (orderRes.Item) ordersMeta.push(orderRes.Item);
     }
+// ✅ 4) group by FULL master if merged, else by mergeKey, else by orderId
+const grouped = {};
 
-    // ✅ 4) group by mergeKey (if exists) else by orderId
-    const grouped = {};
+for (const order of ordersMeta) {
+  const oid = order.orderId;
+  const booking = bookingByOrderId[oid];
+  if (!booking) continue;
 
-    for (const order of ordersMeta) {
-      const oid = order.orderId;
-      const booking = bookingByOrderId[oid];
-      if (!booking) continue;
+  // ✅ choose flowKey
+  const masterId =
+    (order.mergedIntoOrderId && String(order.mergedIntoOrderId).startsWith("ORD_FULL_"))
+      ? order.mergedIntoOrderId
+      : (booking.mergedIntoOrderId && String(booking.mergedIntoOrderId).startsWith("ORD_FULL_"))
+        ? booking.mergedIntoOrderId
+        : null;
 
-      const mk = booking.mergeKey || order.mergeKey || null;
-      const flowKey = mk ? mk : oid;
+  const mk = booking.mergeKey || order.mergeKey || null;
 
-      if (!grouped[flowKey]) {
-        grouped[flowKey] = {
-          flowKey,
-          mergeKey: mk,
-          date,
-          slotTime: booking.slotTime,
-          pos: booking.slotPos || booking.pos || null,
-          vehicleType: booking.vehicleType,
-          orderIds: [],
-          distributors: [],
-          totalQty: 0,
-          grandAmount: 0,
-          status: "CONFIRMED",
-        };
-      }
+  // ✅ priority: ORD_FULL_ > GEO mergeKey > orderId
+  const flowKey = masterId || mk || oid;
 
-      // ✅ ensure orderIds unique inside each group
-      if (!grouped[flowKey].orderIds.includes(oid)) {
-        grouped[flowKey].orderIds.push(oid);
-      }
+  if (!grouped[flowKey]) {
+    grouped[flowKey] = {
+      flowKey,
+      mergeKey: mk,
+      date,
+      slotTime: booking.slotTime,
+      pos: booking.slotPos || booking.pos || null,
+      vehicleType: masterId ? "FULL" : booking.vehicleType, // ✅ if master, show FULL
+      orderIds: [],
+      distributors: [],
+      totalQty: 0,
+      grandAmount: 0,
+      status: "CONFIRMED",
+    };
+  }
 
-      // ✅ push distributor only if not already added (prevents D3)
-      const already = grouped[flowKey].distributors.some((d) => d.orderId === oid);
-      if (!already) {
-        grouped[flowKey].distributors.push({
-          orderId: oid,
-          distributorName: booking.distributorName || order.distributorName,
-          distributorId: booking.distributorCode || order.distributorId,
-        });
-      }
+  // ✅ unique orderIds
+  if (!grouped[flowKey].orderIds.includes(oid)) {
+    grouped[flowKey].orderIds.push(oid);
+  }
 
-      // ✅ Qty from order (correct)
-      grouped[flowKey].totalQty += Number(order.totalQty || 0);
+  // ✅ distributors unique by orderId
+  const already = grouped[flowKey].distributors.some((d) => d.orderId === oid);
+  if (!already) {
+    grouped[flowKey].distributors.push({
+      orderId: oid,
+      distributorName: booking.distributorName || order.distributorName,
+      distributorId: booking.distributorCode || order.distributorId,
+    });
+  }
 
-      // ✅ Amount ONLY from booking (prevents double/merged issues)
-      grouped[flowKey].grandAmount += Number(booking.amount || 0);
+  // ✅ Qty from child orders only (ignore ORD_FULL_ meta)
+  if (!String(oid).startsWith("ORD_FULL_")) {
+    grouped[flowKey].totalQty += Number(order.totalQty || order.qty || 0);
+  }
 
-      // ✅ take latest status if any order progressed
-      const st = String(order.status || "CONFIRMED").toUpperCase();
-      if (st !== "CONFIRMED") grouped[flowKey].status = st;
-    }
+  // ✅ Amount ONLY from booking (already good)
+  grouped[flowKey].grandAmount += Number(booking.amount || 0);
 
+  // ✅ status upgrade if progressed
+  const st = String(order.status || "CONFIRMED").toUpperCase();
+  if (st !== "CONFIRMED") grouped[flowKey].status = st;
+}
     // ✅ 5) Final shaping: only D1/D2 needed
     const finalOrders = Object.values(grouped).map((g) => {
       // keep only first 2 distributors
