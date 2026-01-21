@@ -1437,7 +1437,6 @@ const displayName =
   // ✅ Create FULL master OrderId
   const fullOrderId = `ORD_FULL_${uuidv4().slice(0, 8)}`;
   const mergedOrderIds = bookings.map((b) => String(b.orderId)).filter(Boolean);
-
   // ✅ Book FULL slot (include amount + orderId also)
   await ddb.send(
     new UpdateCommand({
@@ -1977,6 +1976,9 @@ export async function managerCancelBooking(payload) {
   if (!companyCode) throw new Error("companyCode required");
   if (!date) throw new Error("date required");
 
+  // ✅ preserve original orderId (child) that UI clicked
+  const originalOrderId = orderId || null;
+
   // helper: read order meta
   async function readOrderMeta(oid) {
     if (!oid) return null;
@@ -1989,43 +1991,55 @@ export async function managerCancelBooking(payload) {
     return res?.Item || null;
   }
 
-  // ✅ 0) If this is a child order merged into ORD_FULL_*, switch cancel target to master
-  // (This is the KEY fix for "cancel but slot still disabled")
-  if (orderId && !String(orderId).startsWith("ORD_FULL_")) {
-    const childMeta = await readOrderMeta(orderId);
+  /* ======================================================
+     ✅ NORMALIZE cancel target:
+     - If child has mergedIntoOrderId -> switch to ORD_FULL_*
+     - Derive date/time/pos from META (slotDate/slotId)
+  ====================================================== */
+
+  let cancelOrderId = orderId || null;
+
+  // 1) if child merged → use master
+  if (cancelOrderId && !String(cancelOrderId).startsWith("ORD_FULL_")) {
+    const childMeta = await readOrderMeta(cancelOrderId);
     const masterId = childMeta?.mergedIntoOrderId || null;
     if (masterId && String(masterId).startsWith("ORD_FULL_")) {
-      orderId = masterId; // cancel the master FULL booking
+      cancelOrderId = masterId;
     }
   }
 
-  // ✅ 1) If orderId is ORD_FULL_* and pos/time missing, derive from master meta (or slotId)
-  if (orderId && String(orderId).startsWith("ORD_FULL_") && (!pos || !time)) {
-    const masterMeta = await readOrderMeta(orderId);
+  // 2) read meta (master preferred)
+  let meta = await readOrderMeta(cancelOrderId);
+  if (!meta && originalOrderId) meta = await readOrderMeta(originalOrderId);
 
-    if (!masterMeta) {
-      throw new Error("Master FULL order META not found");
-    }
+  // 3) derive correct date/time/pos
+  if (meta) {
+    // IMPORTANT: pkFor must use slotDate (not today)
+    date = meta.slotDate || date;
 
     // Prefer explicit fields
-    time = time || masterMeta.slotTime || null;
-    pos = pos || masterMeta.slotPos || null;
+    time = time || meta.slotTime || null;
+    pos = pos || meta.slotPos || null;
 
     // Fallback: parse slotId => COMPANY#DATE#TIME#FULL#POS
-    if ((!time || !pos) && masterMeta.slotId) {
-      const parts = String(masterMeta.slotId).split("#");
-      // [0]=companyCode [1]=date [2]=time [3]=FULL [4]=pos
+    if ((!time || !pos) && meta.slotId) {
+      const parts = String(meta.slotId).split("#");
+      if (!date && parts.length >= 2) date = parts[1];
       if (!time && parts.length >= 3) time = parts[2];
       if (!pos && parts.length >= 5) pos = parts[4];
     }
   }
 
+  // apply normalized cancel order id
+  orderId = cancelOrderId;
+
   const pk = pkFor(companyCode, date);
 
   /* =========================
-     ✅ FULL cancel (supports: pos/time direct OR master orderId)
+     ✅ FULL cancel (works even if UI didn't send pos/time)
   ========================= */
-  const shouldFullCancel = Boolean(pos && time); // now pos/time can be auto-derived
+  const shouldFullCancel = Boolean(time && pos);
+
   if (shouldFullCancel) {
     const slotSk = skForSlot(time, "FULL", pos);
 
@@ -2049,20 +2063,29 @@ export async function managerCancelBooking(payload) {
       resolvedOrderId = bookRes?.Item?.orderId || null;
     }
 
-    // ✅ if this FULL belongs to child order merged into master, switch to master
+    // ✅ if resolved is child -> switch to master if merged
     if (resolvedOrderId && !String(resolvedOrderId).startsWith("ORD_FULL_")) {
-      const meta = await readOrderMeta(resolvedOrderId);
-      const masterId = meta?.mergedIntoOrderId || null;
+      const childMeta = await readOrderMeta(resolvedOrderId);
+      const masterId = childMeta?.mergedIntoOrderId || null;
       if (masterId && String(masterId).startsWith("ORD_FULL_")) {
         resolvedOrderId = masterId;
       }
     }
 
-    // ✅ if this is ORD_FULL_*, reset its child orders too
+    // ✅ get mergedOrderIds from master meta
     let mergedOrderIds = [];
     if (resolvedOrderId && String(resolvedOrderId).startsWith("ORD_FULL_")) {
       const fullMeta = await readOrderMeta(resolvedOrderId);
       mergedOrderIds = fullMeta?.mergedOrderIds || [];
+    }
+
+    // ✅ fallback: at least reset the clicked child order
+    if (
+      (!Array.isArray(mergedOrderIds) || mergedOrderIds.length === 0) &&
+      originalOrderId &&
+      !String(originalOrderId).startsWith("ORD_FULL_")
+    ) {
+      mergedOrderIds = [originalOrderId];
     }
 
     const lockSk = resolvedOrderId ? `ORDERLOCK#${resolvedOrderId}` : null;
@@ -2136,7 +2159,7 @@ export async function managerCancelBooking(payload) {
       });
     }
 
-    // ✅ reset child orders (this is what re-enables SLOT button in All Orders)
+    // ✅ reset child orders (this re-enables SLOT button)
     for (const childId of mergedOrderIds) {
       transactItems.push({
         Update: {
@@ -2160,7 +2183,7 @@ export async function managerCancelBooking(payload) {
       });
     }
 
-    // ✅ delete FULL master META (optional but clean)
+    // delete FULL master META (optional)
     if (resolvedOrderId && String(resolvedOrderId).startsWith("ORD_FULL_")) {
       transactItems.push({
         Delete: {
@@ -2176,6 +2199,7 @@ export async function managerCancelBooking(payload) {
       ok: true,
       slotType: "FULL",
       orderId: resolvedOrderId,
+      date,
       time,
       pos,
       resetOrders: mergedOrderIds,
@@ -2187,8 +2211,8 @@ export async function managerCancelBooking(payload) {
   ========================= */
   let resolvedBookingSk = bookingSk || null;
 
-  // ✅ If bookingSk missing but mergeKey + orderId present, resolve bookingSk by orderId
-  if ((!resolvedBookingSk || resolvedBookingSk === "") && mergeKey && orderId) {
+  // If bookingSk missing but mergeKey + orderId present, resolve bookingSk by orderId
+  if ((!resolvedBookingSk || resolvedBookingSk === "") && mergeKey && originalOrderId) {
     const allBookingsRes = await ddb.send(
       new QueryCommand({
         TableName: TABLE_BOOKINGS,
@@ -2202,14 +2226,14 @@ export async function managerCancelBooking(payload) {
         String(b.vehicleType || "").toUpperCase() === "HALF" &&
         String(b.slotTime || "") === String(time) &&
         String(b.mergeKey || "") === String(mergeKey) &&
-        String(b.orderId || "") === String(orderId)
+        String(b.orderId || "") === String(originalOrderId)
     );
 
     if (!match) throw new Error("Booking not found for this orderId");
     resolvedBookingSk = match.sk;
   }
 
-  // ✅ HALF cancel
+  // HALF cancel
   if (resolvedBookingSk && mergeKey) {
     if (!time) throw new Error("time required for HALF cancel");
 
@@ -2273,7 +2297,7 @@ export async function managerCancelBooking(payload) {
 
     await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
 
-    // ✅ Recompute tripStatus after cancel
+    // recompute tripStatus after cancel
     const after = await ddb.send(
       new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: mergeSk2 } })
     );
