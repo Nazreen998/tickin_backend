@@ -11,13 +11,13 @@ import { getDistributorsByCodes, getAllDistributors } from "./sales.service.js";
 router.get(
   "/home",
   verifyToken,
-  allowRoles("SALES OFFICER", "MANAGER"),
+  allowRoles("SALES OFFICER", "MANAGER","SALES OFFICER VNR"),
   async (req, res) => {
     try {
       let distributors = [];
 
       // ✅ SALES OFFICER → only mapped distributors
-      if (req.user.role === "SALES OFFICER") {
+      if (req.user.role === "SALES OFFICER" || req.user.role === "SALES OFFICER VNR") {
         const allowedCodes = req.user.allowedDistributorCodes || [];
 
         if (!allowedCodes.length) {
