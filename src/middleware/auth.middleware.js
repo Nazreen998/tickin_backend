@@ -2,16 +2,24 @@ import jwt from "jsonwebtoken";
 import { ddb } from "../config/dynamo.js";
 import { QueryCommand } from "@aws-sdk/lib-dynamodb";
 
+function normalizeRole(role) {
+  return String(role || "")
+    .trim()
+    .toUpperCase()
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ");
+}
+
 async function attachAllowedDistributors(decoded) {
   try {
-    const role = String(decoded?.role || "").trim().toUpperCase();
+    const role = normalizeRole(decoded?.role);
 
     const isSales =
       role === "SALES OFFICER" ||
+      role === "SALES OFFICER VNR" ||
       role === "SALESMAN" ||
       role === "DISTRIBUTOR" ||
-      role === "SALES_OFFICER" ||
-      role === "SALES_OFFICE";
+      role === "SALES OFFICE";
 
     if (!isSales) return decoded;
 
