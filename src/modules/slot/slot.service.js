@@ -696,7 +696,7 @@ export async function managerManualMergePickTime({
             Key: { pk, sk: fullSk },
             UpdateExpression:
               "SET #s=:b, userId=:uid, time=:t, vehicleType=:vt, pos=:p, distributorName=:dn, distributorCode=:dc, orderId=:oid, bookedBy=:m, amount=:a, updatedAt=:u",
-            ExpressionAttributeNames: { "#s": "status" },
+            ExpressionAttributeNames: { "#s": "status", "#tm": "time",},
             ExpressionAttributeValues: {
               ":avail": "AVAILABLE",
               ":b": "BOOKED",
