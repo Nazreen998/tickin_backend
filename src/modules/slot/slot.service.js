@@ -856,7 +856,28 @@ for (const key of touched) {
 async function checkOrderAlreadyBooked(pk, orderId) {
   if (!orderId) return false;
 
-  const res = await ddb.send(
+  /* =========================
+     1️⃣ Read ORDER META
+  ========================= */
+  const metaRes = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_ORDERS,
+      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    })
+  );
+
+  const meta = metaRes?.Item;
+
+  // If system itself says not booked → allow booking
+  if (!meta || meta.slotBooked !== true) {
+    return false;
+  }
+
+  /* =========================
+     2️⃣ Check BOOKINGS table
+     (ignore ORDERLOCK rows)
+  ========================= */
+  const bookRes = await ddb.send(
     new QueryCommand({
       TableName: TABLE_BOOKINGS,
       KeyConditionExpression: "pk = :pk",
@@ -864,10 +885,41 @@ async function checkOrderAlreadyBooked(pk, orderId) {
     })
   );
 
-  const items = res.Items || [];
-  return items.some((x) => String(x.orderId || "") === String(orderId));
-}
+  const hasRealBooking = (bookRes.Items || []).some(
+    (b) =>
+      String(b.orderId || "") === String(orderId) &&
+      String(b.sk || "").startsWith("BOOKING#") // 👈 IMPORTANT
+  );
 
+  if (hasRealBooking) {
+    return true;
+  }
+
+  /* =========================
+     3️⃣ Check CAPACITY table
+  ========================= */
+  const capRes = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_CAPACITY,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
+    })
+  );
+
+  const hasCapacityLink = (capRes.Items || []).some(
+    (c) => String(c.orderId || "") === String(orderId)
+  );
+
+  if (hasCapacityLink) {
+    return true;
+  }
+
+  /* =========================
+     ❌ No real booking
+     → stale state
+  ========================= */
+  return false;
+}
 async function resolveDistributorDetails({
   distributorCode,
   distributorName,
@@ -931,9 +983,11 @@ export async function bookSlot({
   }
 
   const pk = pkFor(companyCode, date);
-
-  const already = await checkOrderAlreadyBooked(pk, orderId);
-  if (already) throw new Error("❌ This Order already booked a slot");
+  // ✅ SELF HEAL: stale slotBooked / orderlock clear pannum
+await reconcileOrderSlotState({
+  companyCode,
+  orderId,
+});
 
   const rules = await getRules(companyCode);
   const threshold = rules.threshold;
