@@ -1223,9 +1223,9 @@ let rawLocationId =
   locationId && String(locationId).trim() !== ""
     ? String(parseInt(String(locationId).trim(), 10))
     : null;
-
-if (!rawLocationId || !/^[1-6]$/.test(rawLocationId)) {
-  throw new Error("❌ locationId (1–6) required for HALF merge");
+// locationId already stored in distributor / order
+if (!rawLocationId) {
+  throw new Error("❌ locationId missing in order data");
 }
 
 const mergeKey = `LOC#${rawLocationId}`; // ex: LOC#2
@@ -1244,22 +1244,6 @@ const mergeKey = `LOC#${rawLocationId}`; // ex: LOC#2
   }
 
   // ✅ get existing HALF bookings for blink
-  const allBookingsRes = await ddb.send(
-    new QueryCommand({
-      TableName: TABLE_BOOKINGS,
-      KeyConditionExpression: "pk = :pk",
-      ExpressionAttributeValues: { ":pk": pk },
-    })
-  );
-
-  const alreadyBookings = (allBookingsRes.Items || []).filter(
-    (b) =>
-      String(b.mergeKey || "") === String(mergeKey) &&
-      String(b.slotTime || "") === String(time) &&
-      String(b.vehicleType || "").toUpperCase() === "HALF"
-  );
-
-  const bookingCountBefore = alreadyBookings.length;
   const blink = true; // ✅ date-level location blink (same date)
   const bookingId = uuidv4();
   const bookingSk = `BOOKING#${time}#KEY#${mergeKey}#USER#${uid}#${bookingId}`;
