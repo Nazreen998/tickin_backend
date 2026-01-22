@@ -133,7 +133,7 @@ router.patch(
 router.post(
   "/confirm-draft/:orderId",
   verifyToken,
-  allowRoles("SALES OFFICER", "SALESMAN"),
+  allowRoles("SALES OFFICER", "SALESMAN", "SALES OFFICER VNR"),
   confirmDraftOrder
 );
 
