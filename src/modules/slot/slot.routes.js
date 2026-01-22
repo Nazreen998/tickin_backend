@@ -11,6 +11,8 @@ import {
   managerCancelConfirmedMerge,
   managerMoveBookingToMerge,
   getWaitingHalfBookingsByDate,
+  getBlinkGroupsByDateLocation,
+  managerConfirmDayMerge,
   managerEditSlotTime,
   managerSetSlotMax,
   managerEnableSlot,
@@ -115,6 +117,13 @@ router.get(
   verifyToken,
   allowRoles("MANAGER"),
   getWaitingHalfBookingsByDate
+);
+/* ✅ Blink groups by Date + Location (MANAGER) */
+router.get(
+  "/blink-groups",
+  verifyToken,
+  allowRoles("MANAGER"),
+  getBlinkGroupsByDateLocation
 );
 
 /* ✅ GET GRID */
@@ -427,6 +436,60 @@ router.post(
     }
   }
 );
+/* ✅ MANAGER CONFIRM DAY MERGE (ignore HALF times; choose targetTime) */
+router.post(
+  "/merge/confirm-day",
+  verifyToken,
+  allowRoles("MANAGER"),
+  async (req, res) => {
+    try {
+      const user = req.user || {};
+
+      const out = await managerConfirmDayMerge({
+        companyCode: req.user?.companyCode || req.body.companyCode || "VAGR_IT",
+        date: req.body.date,
+        mergeKey: req.body.mergeKey,       // ex: "LOC#2"
+        targetTime: req.body.targetTime,   // ex: "15:00"
+        managerId: user.userId || user.mobile || "MANAGER",
+      });
+
+      // ✅ slot timeline event
+      const slotId = extractSlotId(out);
+      if (slotId) {
+        await addSlotTimelineEvent({
+          slotId,
+          orderId: out?.fullOrderId || null,
+          event: "DAY_MERGE_CONFIRMED",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          distributorName: null,
+          amount: Number(out?.totalAmount || 0),
+          data: { originalBody: req.body || {} },
+        });
+      }
+
+      // ✅ update child orders timeline
+      const mergedOrderIds = out?.mergedOrderIds || [];
+      for (const oid of mergedOrderIds) {
+        if (!oid) continue;
+        await addTimelineEvent({
+          orderId: String(oid),
+          event: "SLOT_BOOKING_COMPLETED",
+          by: user.mobile || user.userId || "SYSTEM",
+          byUserName: user.name || user.userName || null,
+          role: user.role || null,
+          data: { slotId, mergeKey: out?.mergeKey || null },
+        });
+      }
+
+      return res.json(out);
+    } catch (err) {
+      return res.status(400).json({ ok: false, message: err.message });
+    }
+  }
+);
+
 /* ✅ MANAGER CANCEL CONFIRMED MERGE */
 router.post(
   "/merge/cancel-confirm",
