@@ -1229,21 +1229,46 @@ const orderMetaRes = await ddb.send(
 const orderMeta = orderMetaRes?.Item || {};
 
 // ✅ Step 1: resolve locationId
-let rawLocationId =
-  locationId && String(locationId).trim() !== ""
-    ? String(parseInt(String(locationId).trim(), 10))
-    : (orderMeta.locationId ? String(parseInt(String(orderMeta.locationId), 10)) : null);
+let rawLocationId = null;
 
-// ✅ fallback: if order already has mergeKey like "LOC#2"
-if (!rawLocationId && orderMeta.mergeKey && String(orderMeta.mergeKey).startsWith("LOC#")) {
-  rawLocationId = String(orderMeta.mergeKey).split("#")[1] || null;
+/* 1️⃣ If UI explicitly passed numeric locationId */
+if (locationId && !isNaN(Number(locationId))) {
+  rawLocationId = String(Number(locationId));
 }
 
+/* 2️⃣ Fallback: ORDER META */
+else if (orderMeta.locationId && !isNaN(Number(orderMeta.locationId))) {
+  rawLocationId = String(Number(orderMeta.locationId));
+}
+
+/* 3️⃣ MAIN SOURCE: distributorCode → DB */
+if (!rawLocationId && distributorCode) {
+  try {
+    const dist = await getDistributorByCode(distributorCode);
+
+    if (dist?.locationId && !isNaN(Number(dist.locationId))) {
+      rawLocationId = String(Number(dist.locationId));
+    }
+  } catch (e) {
+    console.error("Distributor lookup failed", distributorCode, e);
+  }
+}
+
+/* 4️⃣ LAST fallback: old mergeKey */
+if (
+  !rawLocationId &&
+  orderMeta.mergeKey &&
+  String(orderMeta.mergeKey).startsWith("LOC#")
+) {
+  rawLocationId = String(orderMeta.mergeKey).split("#")[1];
+}
+
+/* ❌ HARD FAIL if still missing */
 if (!rawLocationId) {
-  throw new Error("❌ locationId missing in order data");
+  throw new Error("❌ locationId missing for distributor");
 }
 
-const mergeKey = `LOC#${rawLocationId}`; // ex: LOC#2
+const mergeKey = `LOC#${rawLocationId}`;
 
 // ✅ Step 2: TIME-level merge slot sk + DAY-level sk
 const mergeSk = skForMergeSlot(time, mergeKey);      // ex: MERGE#TIME#.. (your helper)
