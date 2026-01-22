@@ -1272,11 +1272,13 @@ const mergeKey = `LOC#${rawLocationId}`; // ex: LOC#2
               TableName: TABLE_CAPACITY,
               Key: { pk, sk: mergeSk },
               UpdateExpression:
-                "SET totalAmount = if_not_exists(totalAmount, :z) + :a, " +
-                "mergeKey = :mk, locationId=:lid, lat = :lat, lng = :lng, blink = :b, updatedAt = :u",
+  "SET totalAmount = if_not_exists(totalAmount, :z) + :a, " +
+  "bookingCount = if_not_exists(bookingCount,:z) + :one, " +
+  "mergeKey = :mk, locationId=:lid, lat = :lat, lng = :lng, blink = :b, updatedAt = :u",
               ExpressionAttributeValues: {
                 ":z": 0,
                 ":a": amt,
+                ":one": 1,
                 ":mk": mergeKey,
                 ":lid": rawLocationId,
                 ":lat": safeLat,
@@ -1371,7 +1373,8 @@ await ddb.send(
   );
 
   const finalTotal = Number(updated?.Item?.totalAmount || 0);
-  const bookingCountAfter = bookingCountBefore + 1;
+  const bookingCountBefore = Number(updated?.Item?.bookingCount || 0);
+const bookingCountAfter = bookingCountBefore + 1;
 
   const tripStatus =
     bookingCountAfter >= 2 && finalTotal >= threshold
