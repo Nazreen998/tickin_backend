@@ -16,6 +16,7 @@ async function attachAllowedDistributors(decoded) {
 
     const isSales =
       role === "SALES OFFICER" ||
+      role === "SALES_OFFICER_VNR" ||
       role === "SALES OFFICER VNR" ||
       role === "SALESMAN" ||
       role === "DISTRIBUTOR" ||
