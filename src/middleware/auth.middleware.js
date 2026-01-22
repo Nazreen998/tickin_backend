@@ -54,6 +54,7 @@ async function attachAllowedDistributors(decoded) {
       .filter(Boolean);
 
     if (allowed.length > 0) {
+      decoded.allowedDistributorCodes = allowed; 
       decoded.allowedDistributors = allowed;
 
       if (!decoded.distributorCode) {
