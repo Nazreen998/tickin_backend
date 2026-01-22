@@ -183,6 +183,20 @@ function sanitizeLatLng(v) {
   if (Math.abs(n) < 0.0001) return null;
   return n;
 }
+function normalizeLocationId(v) {
+  if (v === null || v === undefined) return null;
+
+  const s = String(v).trim();
+  if (!s) return null;
+
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+
+  const id = String(parseInt(s, 10));
+  if (!id || id === "NaN") return null;
+
+  return id;
+}
 
 function isPendingOrWaitingStatus(st) {
   const s = String(st || "").toUpperCase();
@@ -452,7 +466,15 @@ for (const time of DEFAULT_SLOTS) {
 
     return merged;
   });
-
+const dayMergeGroups = overrides
+  .filter((o) => String(o.sk || "").startsWith("MERGE_DAY#KEY#") && o.blink === true)
+  .map((d) => ({
+    ...d,
+    mergeKey: d.mergeKey || (String(d.sk).split("MERGE_DAY#KEY#")[1] || null),
+    vehicleType: "HALF",
+    tripStatus: d.tripStatus || "PARTIAL",
+    blink: true,
+  }));
   const mergeSlots = overrides
     .filter((o) => {
       if (!String(o.sk || "").startsWith("MERGE_SLOT#")) return false;
@@ -511,7 +533,6 @@ for (const time of DEFAULT_SLOTS) {
           distanceKm = Number(distanceKm.toFixed(2));
         }
       }
-
       return {
         ...m,
         time,
@@ -556,6 +577,7 @@ for (const time of DEFAULT_SLOTS) {
 
   return {
     slots: [finalSlots, mergeSlots],
+    dayMergeGroups, 
     waitingHalfBookings,
     rules: {
       maxAmount: rules.threshold,
@@ -935,21 +957,22 @@ async function resolveDistributorDetails({
   let resolvedName = distributorName || null;
   let resolvedLat = lat ?? null;
   let resolvedLng = lng ?? null;
-
+  let resolvedLocationId = null;
   const excelDist = findDistributorFromPairingMap(distributorCode);
   if (excelDist) {
     if (!resolvedName)
       resolvedName = excelDist.agencyName || excelDist["Agency Name"] || null;
     if (resolvedLat == null || resolvedLat === "") resolvedLat = excelDist.lat;
     if (resolvedLng == null || resolvedLng === "") resolvedLng = excelDist.lng;
+      resolvedLocationId = normalizeLocationId(excelDist.locationId || excelDist["Location Id"]);
   }
-
-  if (resolvedLat == null || resolvedLng == null || !resolvedName) {
     try {
       const dist = await getDistributorByCode(distributorCode);
 
       if (!resolvedName) resolvedName = dist.agencyName || null;
-
+if (!resolvedLocationId) {
+      resolvedLocationId = normalizeLocationId(dist.locationId || dist.location_id || dist.location);
+    }
       if (resolvedLat == null || resolvedLng == null) {
         const url = dist.final_url || dist.finalUrl || dist.finalURL;
         const parsed = extractLatLngFromFinalUrl(url);
@@ -957,12 +980,12 @@ async function resolveDistributorDetails({
         if (resolvedLng == null) resolvedLng = parsed.lng;
       }
     } catch (_) {}
-  }
 
   const safeLat = sanitizeLatLng(resolvedLat);
   const safeLng = sanitizeLatLng(resolvedLng);
 
-  return { resolvedName, safeLat, safeLng };
+  return { resolvedName, safeLat, safeLng, resolvedLocationId };
+
 }
 async function reconcileOrderSlotState({ companyCode, orderId }) {
   if (!orderId) return;
@@ -1077,14 +1100,13 @@ export async function bookSlot({
 
   const uid = userId ? String(userId).trim() : uuidv4();
   const amt = Number(amount || 0);
-
-  const { resolvedName, safeLat, safeLng } = await resolveDistributorDetails({
+const { resolvedName, safeLat, safeLng, resolvedLocationId } =
+  await resolveDistributorDetails({
     distributorCode,
     distributorName,
     lat,
     lng,
   });
-
   const vehicleType = amt >= threshold ? "FULL" : "HALF";
   const lockSk = `ORDERLOCK#${orderId}`;
 
@@ -1227,47 +1249,29 @@ const orderMetaRes = await ddb.send(
   })
 );
 const orderMeta = orderMetaRes?.Item || {};
+let rawLocationId =
+  normalizeLocationId(locationId) ||
+  normalizeLocationId(orderMeta.locationId) ||
+  normalizeLocationId(resolvedLocationId);
 
-// ✅ Step 1: resolve locationId
-let rawLocationId = null;
-
-/* 1️⃣ If UI explicitly passed numeric locationId */
-if (locationId && !isNaN(Number(locationId))) {
-  rawLocationId = String(Number(locationId));
-}
-
-/* 2️⃣ Fallback: ORDER META */
-else if (orderMeta.locationId && !isNaN(Number(orderMeta.locationId))) {
-  rawLocationId = String(Number(orderMeta.locationId));
-}
-
-/* 3️⃣ MAIN SOURCE: distributorCode → DB */
+// fallback: DB lookup (if still not found)
 if (!rawLocationId && distributorCode) {
   try {
     const dist = await getDistributorByCode(distributorCode);
-
-    if (dist?.locationId && !isNaN(Number(dist.locationId))) {
-      rawLocationId = String(Number(dist.locationId));
-    }
+    rawLocationId = normalizeLocationId(dist?.locationId || dist?.location_id || dist?.location);
   } catch (e) {
     console.error("Distributor lookup failed", distributorCode, e);
   }
 }
 
-/* 4️⃣ LAST fallback: old mergeKey */
-if (
-  !rawLocationId &&
-  orderMeta.mergeKey &&
-  String(orderMeta.mergeKey).startsWith("LOC#")
-) {
-  rawLocationId = String(orderMeta.mergeKey).split("#")[1];
+// fallback: old mergeKey
+if (!rawLocationId && orderMeta.mergeKey && String(orderMeta.mergeKey).startsWith("LOC#")) {
+  rawLocationId = normalizeLocationId(String(orderMeta.mergeKey).split("#")[1]);
 }
 
-/* ❌ HARD FAIL if still missing */
 if (!rawLocationId) {
   throw new Error("❌ locationId missing for distributor");
 }
-
 const mergeKey = `LOC#${rawLocationId}`;
 
 // ✅ Step 2: TIME-level merge slot sk + DAY-level sk
@@ -1763,7 +1767,23 @@ const displayName =
     fullOrderId,
     childOrderIds: mergedOrderIds,
   });
-
+  // ✅ turn off DATE-level blink also
+try {
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: skForMergeDay(mergeKey) },
+      UpdateExpression: "SET blink=:b, tripStatus=:s, confirmedAt=:t, confirmedBy=:m, updatedAt=:u",
+      ExpressionAttributeValues: {
+        ":b": false,
+        ":s": "FULL",
+        ":t": new Date().toISOString(),
+        ":m": String(managerId || "MANAGER"),
+        ":u": new Date().toISOString(),
+      },
+    })
+  );
+} catch (_) {}
   return {
     ok: true,
     mergeKey,
