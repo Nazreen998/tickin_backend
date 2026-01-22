@@ -8,7 +8,7 @@ import {
   managerCancelBooking,
   managerDisableSlot,
   managerConfirmMerge,
-  managerCancelConfirmedMerge,
+  managerCancelConfirmedDayMerge,
   managerMoveBookingToMerge,
   getWaitingHalfBookingsByDate,
   getBlinkGroupsByDateLocation,
@@ -26,12 +26,10 @@ import {
 } from "../slot/slot.service.js";
 
 // ✅ NEW: Slot Timeline writer
+import { requireAuth as auth } from "../../middleware/auth.middleware.js";
 import { addTimelineEvent, addSlotTimelineEvent } from "../timeline/timeline.helper.js";
-import { BUILD_TAG } from "./slot.service.js";
 const router = express.Router();
-router.get("/build", (req, res) => {
-  res.json({ ok: true, build: BUILD_TAG });
-});
+
 /* ✅ helper: extract slotId safely from any response */
 function extractSlotId(out) {
   if (!out) return null;
@@ -111,6 +109,33 @@ router.post(
     }
   }
 );
+// TIME-based confirmed merge cancel (existing)
+router.post("/manager/cancel-confirmed-merge", auth, async (req, res) => {
+  try {
+    const out = await managerCancelConfirmedMerge({
+      companyCode: req.user.companyCode,
+      ...req.body,
+      managerId: req.user.userId,
+    });
+    res.json(out);
+  } catch (e) {
+    res.status(400).json({ ok: false, message: e.message });
+  }
+});
+
+// ✅ DAY-based confirmed merge cancel (NEW)
+router.post("/manager/cancel-confirmed-day-merge", auth, async (req, res) => {
+  try {
+    const out = await managerCancelConfirmedDayMerge({
+      companyCode: req.user.companyCode,
+      ...req.body,
+      managerId: req.user.userId,
+    });
+    res.json(out);
+  } catch (e) {
+    res.status(400).json({ ok: false, message: e.message });
+  }
+});
 
 router.get(
   "/waiting-half-by-date",
