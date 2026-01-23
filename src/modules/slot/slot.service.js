@@ -1147,7 +1147,7 @@ const { resolvedName, safeLat, safeLng, resolvedLocationId } =
 
     // ✅ Night slots closed unless manager enabled
     const NIGHT_SLOTS = rules.slotTimes?.Night || [];
-  if (NIGHT_SLOTS.includes(targetTime) && rules.lastSlotEnabled === false) {
+  if (NIGHT_SLOTS.includes(time) && rules.lastSlotEnabled === false) {
     throw new Error("❌ Night slots are closed");
   }
     const slotSk = skForSlot(time, "FULL", pos);
