@@ -1415,6 +1415,24 @@ const tripStatus =
     : bookingCount >= 2
     ? "WAITING_MANAGER_CONFIRM"
     : "PARTIAL";
+// ✅ SYNC TIME-LEVEL bookingCount when READY
+if (tripStatus === "READY_FOR_CONFIRM") {
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: mergeSk }, // TIME-level slot
+      UpdateExpression:
+        "SET bookingCount=:c, totalAmount=:t, tripStatus=:s, blink=:b, updatedAt=:u",
+      ExpressionAttributeValues: {
+        ":c": bookingCount,      // 👈 2
+        ":t": finalTotal,        // 👈 sum of both
+        ":s": tripStatus,
+        ":b": true,
+        ":u": new Date().toISOString(),
+      },
+    })
+  );
+}
 
 // ✅ update both TIME + DAY tripStatus (blink stays true until confirmed/cancel)
 await ddb.send(
