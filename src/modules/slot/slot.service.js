@@ -382,6 +382,7 @@ export async function getSlotGrid({ companyCode, date }) {
   validateSlotDate(date);
   const pk = pkFor(companyCode, date);
 
+  // ---------- CAPACITY ----------
   const res = await ddb.send(
     new QueryCommand({
       TableName: TABLE_CAPACITY,
@@ -391,6 +392,7 @@ export async function getSlotGrid({ companyCode, date }) {
   );
   const overrides = res.Items || [];
 
+  // ---------- BOOKINGS ----------
   const bookingsRes = await ddb.send(
     new QueryCommand({
       TableName: TABLE_BOOKINGS,
@@ -400,7 +402,7 @@ export async function getSlotGrid({ companyCode, date }) {
   );
   const allBookings = bookingsRes.Items || [];
 
-  // ✅ quick index for FULL bookings by time+pos (fast & clean)
+  // ---------- FULL BOOKING INDEX ----------
   const fullBookingIndex = new Map();
   for (const b of allBookings) {
     if (String(b.vehicleType || "").toUpperCase() !== "FULL") continue;
@@ -410,189 +412,187 @@ export async function getSlotGrid({ companyCode, date }) {
     fullBookingIndex.set(`${t}__${p}`, b);
   }
 
-  const defaultSlots = [];
+  // ---------- DEFAULT FULL SLOTS ----------
   const rules = await getRules(companyCode);
-const DEFAULT_SLOTS = flattenSlotTimes(rules.slotTimes);
-  const NIGHT_SLOTS = rules.slotTimes?.Night || []; 
-for (const time of DEFAULT_SLOTS) {
-  for (const pos of ALL_POSITIONS) {
-    let status = "AVAILABLE";
-    if (NIGHT_SLOTS.includes(time) && rules.lastSlotEnabled === false) {
-      status = "DISABLED";
+  const DEFAULT_SLOTS = flattenSlotTimes(rules.slotTimes);
+  const NIGHT_SLOTS = rules.slotTimes?.Night || [];
+
+  const defaultSlots = [];
+  for (const time of DEFAULT_SLOTS) {
+    for (const pos of ALL_POSITIONS) {
+      let status = "AVAILABLE";
+      if (NIGHT_SLOTS.includes(time) && rules.lastSlotEnabled === false) {
+        status = "DISABLED";
+      }
+
+      defaultSlots.push({
+        pk,
+        sk: skForSlot(time, "FULL", pos),
+        time,
+        vehicleType: "FULL",
+        pos,
+        status,
+      });
     }
-
-    defaultSlots.push({
-      pk,
-      sk: skForSlot(time, "FULL", pos),
-      time,
-      vehicleType: "FULL",
-      pos,
-      status,
-    });
   }
-}
 
-
+  // ---------- FINAL FULL SLOTS ----------
   const finalSlots = defaultSlots.map((slot) => {
-    // 1) capacity override merge
     const override = overrides.find((o) => o.sk === slot.sk);
     const merged = override ? { ...slot, ...override } : { ...slot };
 
-    // 2) ✅ Source of truth: BOOKINGS table (manual merge writes booking record)
-    const match = fullBookingIndex.get(`${String(merged.time)}__${String(merged.pos)}`);
+    const match = fullBookingIndex.get(
+      `${String(merged.time)}__${String(merged.pos)}`
+    );
 
     if (match) {
       merged.status = "BOOKED";
-      merged.distributorName = match.distributorName || merged.distributorName || null;
-      merged.distributorCode = match.distributorCode || merged.distributorCode || null;
-      merged.orderId = match.orderId || merged.orderId || null;
-      merged.amount = Number(match?.amount ?? merged?.amount ?? merged?.totalAmount ?? 0);
-      merged.bookedBy = match.userId || merged.bookedBy || null;
-
-      // ✅ important for old UI logic / fallback
+      merged.distributorName = match.distributorName || null;
+      merged.distributorCode = match.distributorCode || null;
+      merged.orderId = match.orderId || null;
+      merged.amount = Number(match.amount || 0);
+      merged.bookedBy = match.userId || null;
       merged.userId = merged.userId || match.userId || match.orderId || "BOOKED";
-    } else {
-      // fallback: old rule (capacity wrote userId but booking record missing)
-      if (
-        merged.vehicleType === "FULL" &&
-        String(merged.status || "").toUpperCase() === "AVAILABLE" &&
-        merged.userId
-      ) {
-        merged.status = "BOOKED";
-      }
     }
 
     return merged;
   });
-const dayMergeGroups = overrides
-  .filter((o) => String(o.sk || "").startsWith("MERGE_DAY#KEY#") && o.blink === true)
-  .map((d) => ({
-    ...d,
-    mergeKey: d.mergeKey || (String(d.sk).split("MERGE_DAY#KEY#")[1] || null),
-    vehicleType: "HALF",
-    tripStatus: d.tripStatus || "PARTIAL",
-    blink: true,
-  }));
-const mergeSlots = overrides
-  .filter((o) => {
-    if (!String(o.sk || "").startsWith("MERGE_SLOT#")) return false;
-    const ts = String(o.tripStatus || "").toUpperCase();
-    return ts !== "FULL";
-  })
-  .map((m) => {
-    // --- derive time ---
-    let time = m.time;
-    if (!time) {
-      try {
-        const parts = String(m.sk).split("#");
-        if (parts.length > 1) time = parts[1];
-      } catch (_) {}
-    }
 
-    // --- derive mergeKey ---
-    let mergeKey = m.mergeKey;
-    if (!mergeKey) {
-      try {
-        const parts = String(m.sk || "").split("#KEY#");
-        if (parts.length > 1) mergeKey = parts[1];
-      } catch (_) {}
-    }
-
-    // ✅ participants (same time + same mergeKey + pending/wait)
-    const participants = allBookings
-      .filter(
-        (b) =>
-          String(b.vehicleType || "").toUpperCase() === "HALF" &&
-          String(b.slotTime || "") === String(time) &&
-          String(b.mergeKey || "") === String(mergeKey) &&
-          isPendingOrWaitingStatus(b.status)
-      )
-      .map((b) => ({
-        distributorCode: b.distributorCode,
-        distributorName: b.distributorName,
-        amount: Number(b.amount || 0),
-        orderId: b.orderId || null,
-        bookingSk: b.sk,
-        status: b.status,
-        slotTime: b.slotTime,
-        mergeKey: b.mergeKey,
-        lat: b.lat,
-        lng: b.lng,
-      }));
-
-    // 🚨 DELETE empty merge slots
-    if (participants.length === 0) return null;
-
-    const participantsTotal = participants.reduce(
-      (s, p) => s + Number(p.amount || 0),
-      0
-    );
-
-    const safeTotalAmount =
-      participants.length > 0
-        ? participantsTotal
-        : Number(m.totalAmount || 0);
-
-    // ✅ READY only when 2 distributors + threshold
-    const effectiveTripStatus =
-      participants.length >= 2 && safeTotalAmount >= rules.threshold
-        ? "READY"
-        : participants.length >= 2
-        ? "WAITING"
-        : "PARTIAL";
-
-    let distanceKm = null;
-    if (participants.length >= 2) {
-      const a = participants[0];
-      const b = participants[1];
-      if (a.lat && a.lng && b.lat && b.lng) {
-        distanceKm = haversineKm(
-          Number(a.lat),
-          Number(a.lng),
-          Number(b.lat),
-          Number(b.lng)
-        );
-        distanceKm = Number(distanceKm.toFixed(2));
+  // =========================================================
+  // 🟠 TIME-LEVEL MERGE SLOTS (STRICT: same time + same key)
+  // =========================================================
+  const mergeSlots = overrides
+    .filter(
+      (o) =>
+        String(o.sk || "").startsWith("MERGE_SLOT#") &&
+        String(o.tripStatus || "").toUpperCase() !== "FULL"
+    )
+    .map((m) => {
+      let time = m.time;
+      if (!time) {
+        try {
+          time = String(m.sk).split("#")[1];
+        } catch (_) {}
       }
-    }
 
-    return {
-      ...m,
-      time,
-      blink: m.blink === true,
-      tripStatus: effectiveTripStatus,
-      vehicleType: "HALF",
-      mergeKey,
-      participants,
+      let mergeKey = m.mergeKey;
+      if (!mergeKey) {
+        try {
+          mergeKey = String(m.sk).split("#KEY#")[1];
+        } catch (_) {}
+      }
 
-      canCancel: true,
-      canRebook: true,
-      canMerge: true,
+      const participants = allBookings
+        .filter(
+          (b) =>
+            String(b.vehicleType || "").toUpperCase() === "HALF" &&
+            String(b.slotTime || "") === String(time) && // ✅ TIME STRICT
+            String(b.mergeKey || "") === String(mergeKey) &&
+            isPendingOrWaitingStatus(b.status)
+        )
+        .map((b) => ({
+          distributorName: b.distributorName,
+          distributorCode: b.distributorCode,
+          amount: Number(b.amount || 0),
+          orderId: b.orderId,
+          bookingSk: b.sk,
+          lat: b.lat,
+          lng: b.lng,
+        }));
 
-      orders: participants.map((p) => ({
-        orderId: p.orderId,
-        distributorName: p.distributorName,
-        amount: p.amount,
-        bookingSk: p.bookingSk,
-      })),
+      if (participants.length === 0) return null; // 🧹 delete empty
 
-      bookingCount: participants.length,
-      totalAmount: safeTotalAmount,
-      distanceKm,
-    };
-  })
-  .filter(Boolean);
-  const waitingHalfBookings = allBookings
-    .filter((b) => {
-      const vt = String(b.vehicleType || "").toUpperCase();
-      return vt === "HALF" && isPendingOrWaitingStatus(b.status);
+      const totalAmount = participants.reduce((s, p) => s + p.amount, 0);
+
+      const tripStatus =
+        participants.length >= 2 && totalAmount >= rules.threshold
+          ? "READY"
+          : participants.length >= 2
+          ? "WAITING"
+          : "PARTIAL";
+
+      let distanceKm = null;
+      if (participants.length >= 2) {
+        const a = participants[0];
+        const b = participants[1];
+        if (a.lat && a.lng && b.lat && b.lng) {
+          distanceKm = Number(
+            haversineKm(a.lat, a.lng, b.lat, b.lng).toFixed(2)
+          );
+        }
+      }
+
+      return {
+        ...m,
+        time,
+        mergeKey,
+        vehicleType: "HALF",
+        tripStatus,
+        participants,
+        bookingCount: participants.length,
+        totalAmount,
+        distanceKm,
+      };
     })
+    .filter(Boolean);
+
+  // =========================================================
+  // 🔵 DAY-LEVEL MERGE (ANY TIME, SAME mergeKey)
+  // =========================================================
+  const dayMergeGroups = overrides
+    .filter(
+      (o) =>
+        String(o.sk || "").startsWith("MERGE_DAY#KEY#") &&
+        o.blink === true
+    )
+    .map((d) => {
+      const mergeKey =
+        d.mergeKey || String(d.sk).split("MERGE_DAY#KEY#")[1];
+
+      const participants = allBookings
+        .filter(
+          (b) =>
+            String(b.vehicleType || "").toUpperCase() === "HALF" &&
+            String(b.mergeKey || "") === String(mergeKey) &&
+            isPendingOrWaitingStatus(b.status)
+        )
+        .map((b) => ({
+          distributorName: b.distributorName,
+          distributorCode: b.distributorCode,
+          amount: Number(b.amount || 0),
+          orderId: b.orderId,
+          slotTime: b.slotTime,
+        }));
+
+      if (participants.length < 2) return null;
+
+      const totalAmount = participants.reduce((s, p) => s + p.amount, 0);
+
+      return {
+        ...d,
+        mergeKey,
+        vehicleType: "HALF",
+        participants,
+        bookingCount: participants.length,
+        totalAmount,
+        tripStatus:
+          totalAmount >= rules.threshold ? "READY" : "WAITING",
+      };
+    })
+    .filter(Boolean);
+
+  // ---------- WAITING HALF BOOKINGS ----------
+  const waitingHalfBookings = allBookings
+    .filter(
+      (b) =>
+        String(b.vehicleType || "").toUpperCase() === "HALF" &&
+        isPendingOrWaitingStatus(b.status)
+    )
     .map((b) => ({
       distributorName: b.distributorName,
       distributorCode: b.distributorCode,
       amount: Number(b.amount || 0),
       orderId: b.orderId,
-      status: b.status,
       slotTime: b.slotTime,
       mergeKey: b.mergeKey,
       bookingSk: b.sk,
@@ -600,18 +600,20 @@ const mergeSlots = overrides
       lng: b.lng,
     }));
 
+  // ---------- FINAL RESPONSE ----------
   return {
     slots: [finalSlots, mergeSlots],
-    dayMergeGroups, 
+    dayMergeGroups,
     waitingHalfBookings,
     rules: {
       maxAmount: rules.threshold,
       lastSlotEnabled: rules.lastSlotEnabled,
       lastSlotOpenAfter: rules.lastSlotOpenAfter,
-      slotTimes: rules.slotTimes, // ✅ add this
+      slotTimes: rules.slotTimes,
     },
   };
 }
+
 export async function getAvailableFullTimes({ companyCode, date }) {
   validateSlotDate(date);
 
