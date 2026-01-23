@@ -486,7 +486,6 @@ export async function getSlotGrid({ companyCode, date }) {
         .filter(
           (b) =>
             String(b.vehicleType || "").toUpperCase() === "HALF" &&
-            String(b.slotTime || "") === String(time) && // ✅ TIME STRICT
             String(b.mergeKey || "") === String(mergeKey) &&
             isPendingOrWaitingStatus(b.status)
         )
@@ -561,6 +560,9 @@ export async function getSlotGrid({ companyCode, date }) {
           distributorCode: b.distributorCode,
           amount: Number(b.amount || 0),
           orderId: b.orderId,
+          bookingSk: b.sk,
+          lat: b.lat,
+          lng: b.lng,
           slotTime: b.slotTime,
         }));
 
@@ -2977,7 +2979,7 @@ async function recomputeAndFixMerge({ pk, companyCode, time, mergeKey }) {
     (b) =>
       String(b.vehicleType || "").toUpperCase() === "HALF" &&
       String(b.mergeKey || "") === String(mergeKey) &&
-      String(b.slotTime || "") === String(time)
+      isPendingOrWaitingStatus(b.status)
   );
 
   const timeCount = timeHalf.length;
