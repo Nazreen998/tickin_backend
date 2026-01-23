@@ -105,7 +105,7 @@ router.patch(
 router.post(
   "/confirm/:orderId",
   verifyToken,
-  allowRoles("SALES OFFICER", "MANAGER"),
+  allowRoles("SALES OFFICER", "MANAGER","SALES OFFICER VNR","SALES_OFFICER_VNR"),
   confirmOrder
 );
 
