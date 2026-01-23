@@ -480,7 +480,7 @@ const mergeSlots = overrides
     return ts !== "FULL";
   })
   .map((m) => {
-    // --- derive time from capacity item ---
+    // --- derive time ---
     let time = m.time;
     if (!time) {
       try {
@@ -489,24 +489,23 @@ const mergeSlots = overrides
       } catch (_) {}
     }
 
-    // --- derive mergeKey from capacity item ---
+    // --- derive mergeKey ---
     let mergeKey = m.mergeKey;
     if (!mergeKey) {
       try {
-        const sk = String(m.sk || "");
-        const parts = sk.split("#KEY#");
+        const parts = String(m.sk || "").split("#KEY#");
         if (parts.length > 1) mergeKey = parts[1];
       } catch (_) {}
     }
 
-    // ✅ participants must be same time + same mergeKey + pending/waiting only
+    // ✅ participants (same time + same mergeKey + pending/wait)
     const participants = allBookings
       .filter(
         (b) =>
           String(b.vehicleType || "").toUpperCase() === "HALF" &&
           String(b.slotTime || "") === String(time) &&
           String(b.mergeKey || "") === String(mergeKey) &&
-          isPendingOrWaitingStatus(b.status) // ✅ IMPORTANT
+          isPendingOrWaitingStatus(b.status)
       )
       .map((b) => ({
         distributorCode: b.distributorCode,
@@ -521,19 +520,27 @@ const mergeSlots = overrides
         lng: b.lng,
       }));
 
-    // ✅ correct total based on participants list
+    // 🚨 DELETE empty merge slots
+    if (participants.length === 0) return null;
+
     const participantsTotal = participants.reduce(
       (s, p) => s + Number(p.amount || 0),
       0
     );
 
-    // ✅ fallback (if participants empty, use capacity totalAmount)
     const safeTotalAmount =
       participants.length > 0
         ? participantsTotal
         : Number(m.totalAmount || 0);
 
-    // ✅ distanceKm define always
+    // ✅ READY only when 2 distributors + threshold
+    const effectiveTripStatus =
+      participants.length >= 2 && safeTotalAmount >= rules.threshold
+        ? "READY"
+        : participants.length >= 2
+        ? "WAITING"
+        : "PARTIAL";
+
     let distanceKm = null;
     if (participants.length >= 2) {
       const a = participants[0];
@@ -553,7 +560,7 @@ const mergeSlots = overrides
       ...m,
       time,
       blink: m.blink === true,
-      tripStatus: m.tripStatus || "PARTIAL",
+      tripStatus: effectiveTripStatus,
       vehicleType: "HALF",
       mergeKey,
       participants,
@@ -570,10 +577,11 @@ const mergeSlots = overrides
       })),
 
       bookingCount: participants.length,
-      totalAmount: safeTotalAmount, // ✅ FIXED (not participantsTotal)
+      totalAmount: safeTotalAmount,
       distanceKm,
     };
-  });
+  })
+  .filter(Boolean);
   const waitingHalfBookings = allBookings
     .filter((b) => {
       const vt = String(b.vehicleType || "").toUpperCase();
