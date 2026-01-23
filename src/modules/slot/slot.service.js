@@ -496,12 +496,6 @@ const dayMergeGroups = overrides
           if (parts.length > 1) mergeKey = parts[1];
         } catch (_) {}
       }
-console.log("mergeKey:", mergeKey, "participants:", participants.map(p => ({
-  name: p.distributorName,
-  time: p.slotTime,
-  mk: p.mergeKey
-})));
-
       const participants = allBookings
         .filter(
           (b) =>
@@ -520,7 +514,12 @@ console.log("mergeKey:", mergeKey, "participants:", participants.map(p => ({
           lat: b.lat,
           lng: b.lng,
         }));
-
+console.log("mergeKey:", mergeKey, "participants:", participants.map(p => ({
+  name: p.distributorName,
+  time: p.slotTime,
+  mk: p.mergeKey,
+  amt: p.amount,
+})));
       let distanceKm = null;
       if (participants.length >= 2) {
         const a = participants[0];
