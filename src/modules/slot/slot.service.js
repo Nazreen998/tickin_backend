@@ -496,12 +496,16 @@ const dayMergeGroups = overrides
           if (parts.length > 1) mergeKey = parts[1];
         } catch (_) {}
       }
+console.log("mergeKey:", mergeKey, "participants:", participants.map(p => ({
+  name: p.distributorName,
+  time: p.slotTime,
+  mk: p.mergeKey
+})));
 
       const participants = allBookings
         .filter(
           (b) =>
             String(b.vehicleType || "").toUpperCase() === "HALF" &&
-            String(b.slotTime || "") === String(time) &&
             String(b.mergeKey || "") === String(mergeKey)
         )
         .map((b) => ({
