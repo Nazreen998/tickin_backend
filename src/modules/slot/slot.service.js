@@ -497,65 +497,48 @@ const dayMergeGroups = overrides
         } catch (_) {}
       }
       const participants = allBookings
-        .filter(
-          (b) =>
-            String(b.vehicleType || "").toUpperCase() === "HALF" &&
-            String(b.mergeKey || "") === String(mergeKey)
-        )
-        .map((b) => ({
-          distributorCode: b.distributorCode,
-          distributorName: b.distributorName,
-          amount: Number(b.amount || 0),
-          orderId: b.orderId || null,
-          bookingSk: b.sk,
-          status: b.status,
-          slotTime: b.slotTime,
-          mergeKey: b.mergeKey,
-          lat: b.lat,
-          lng: b.lng,
-        }));
-console.log("mergeKey:", mergeKey, "participants:", participants.map(p => ({
-  name: p.distributorName,
-  time: p.slotTime,
-  mk: p.mergeKey,
-  amt: p.amount,
-})));
-      let distanceKm = null;
-      if (participants.length >= 2) {
-        const a = participants[0];
-        const b = participants[1];
-        if (a.lat && a.lng && b.lat && b.lng) {
-          distanceKm = haversineKm(
-            Number(a.lat),
-            Number(a.lng),
-            Number(b.lat),
-            Number(b.lng)
-          );
-          distanceKm = Number(distanceKm.toFixed(2));
-        }
-      }
-      return {
-        ...m,
-        time,
-        blink: m.blink === true,
-        tripStatus: m.tripStatus || "PARTIAL",
-        vehicleType: "HALF",
-        mergeKey,
-        participants,
+  .filter(
+    (b) =>
+      String(b.vehicleType || "").toUpperCase() === "HALF" &&
+      String(b.slotTime || "") === String(time) &&            // ✅ keep this
+      String(b.mergeKey || "") === String(mergeKey)
+  )
+  .map((b) => ({
+    distributorCode: b.distributorCode,
+    distributorName: b.distributorName,
+    amount: Number(b.amount || 0),
+    orderId: b.orderId || null,
+    bookingSk: b.sk,
+    status: b.status,
+    slotTime: b.slotTime,
+    mergeKey: b.mergeKey,
+    lat: b.lat,
+    lng: b.lng,
+  }));
 
-        canCancel: true,
-        canRebook: true,
-        canMerge: true,
-        orders: participants.map((p) => ({
-          orderId: p.orderId,
-          distributorName: p.distributorName,
-          amount: p.amount,
-          bookingSk: p.bookingSk,
-        })),
+const participantsTotal = participants.reduce((s, p) => s + Number(p.amount || 0), 0);
 
-        bookingCount: participants.length,
-        distanceKm,
-      };
+return {
+  ...m,
+  time,
+  blink: m.blink === true,
+  tripStatus: m.tripStatus || "PARTIAL",
+  vehicleType: "HALF",
+  mergeKey,
+  participants,
+  canCancel: true,
+  canRebook: true,
+  canMerge: true,
+  orders: participants.map((p) => ({
+    orderId: p.orderId,
+    distributorName: p.distributorName,
+    amount: p.amount,
+    bookingSk: p.bookingSk,
+  })),
+  bookingCount: participants.length,
+  totalAmount: participantsTotal,  // ✅ correct total
+  distanceKm,
+};
     });
 
   const waitingHalfBookings = allBookings
