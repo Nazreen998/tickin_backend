@@ -473,74 +473,100 @@ const dayMergeGroups = overrides
     tripStatus: d.tripStatus || "PARTIAL",
     blink: true,
   }));
-  const mergeSlots = overrides
-    .filter((o) => {
-      if (!String(o.sk || "").startsWith("MERGE_SLOT#")) return false;
-      const ts = String(o.tripStatus || "").toUpperCase();
-      return ts !== "FULL";
-    })
-    .map((m) => {
-      let time = m.time;
-      if (!time) {
-        try {
-          const parts = String(m.sk).split("#");
-          if (parts.length > 1) time = parts[1];
-        } catch (_) {}
+const mergeSlots = overrides
+  .filter((o) => {
+    if (!String(o.sk || "").startsWith("MERGE_SLOT#")) return false;
+    const ts = String(o.tripStatus || "").toUpperCase();
+    return ts !== "FULL";
+  })
+  .map((m) => {
+    // --- derive time from capacity item ---
+    let time = m.time;
+    if (!time) {
+      try {
+        const parts = String(m.sk).split("#");
+        if (parts.length > 1) time = parts[1];
+      } catch (_) {}
+    }
+
+    // --- derive mergeKey from capacity item ---
+    let mergeKey = m.mergeKey;
+    if (!mergeKey) {
+      try {
+        const sk = String(m.sk || "");
+        const parts = sk.split("#KEY#");
+        if (parts.length > 1) mergeKey = parts[1];
+      } catch (_) {}
+    }
+
+    // ✅ participants must be same time + same mergeKey
+    const participants = allBookings
+      .filter(
+        (b) =>
+          String(b.vehicleType || "").toUpperCase() === "HALF" &&
+          String(b.slotTime || "") === String(time) &&               // ✅ IMPORTANT
+          String(b.mergeKey || "") === String(mergeKey)
+      )
+      .map((b) => ({
+        distributorCode: b.distributorCode,
+        distributorName: b.distributorName,
+        amount: Number(b.amount || 0),
+        orderId: b.orderId || null,
+        bookingSk: b.sk,
+        status: b.status,
+        slotTime: b.slotTime,
+        mergeKey: b.mergeKey,
+        lat: b.lat,
+        lng: b.lng,
+      }));
+
+    // ✅ correct total based on participants list
+    const participantsTotal = participants.reduce(
+      (s, p) => s + Number(p.amount || 0),
+      0
+    );
+
+    // ✅ distanceKm define always (so no "not defined" error)
+    let distanceKm = null;
+    if (participants.length >= 2) {
+      const a = participants[0];
+      const b = participants[1];
+      if (a.lat && a.lng && b.lat && b.lng) {
+        distanceKm = haversineKm(
+          Number(a.lat),
+          Number(a.lng),
+          Number(b.lat),
+          Number(b.lng)
+        );
+        distanceKm = Number(distanceKm.toFixed(2));
       }
+    }
 
-      let mergeKey = m.mergeKey;
-      if (!mergeKey) {
-        try {
-          const sk = String(m.sk || "");
-          const parts = sk.split("#KEY#");
-          if (parts.length > 1) mergeKey = parts[1];
-        } catch (_) {}
-      }
-      const participants = allBookings
-  .filter(
-    (b) =>
-      String(b.vehicleType || "").toUpperCase() === "HALF" &&
-      String(b.slotTime || "") === String(time) &&            // ✅ keep this
-      String(b.mergeKey || "") === String(mergeKey)
-  )
-  .map((b) => ({
-    distributorCode: b.distributorCode,
-    distributorName: b.distributorName,
-    amount: Number(b.amount || 0),
-    orderId: b.orderId || null,
-    bookingSk: b.sk,
-    status: b.status,
-    slotTime: b.slotTime,
-    mergeKey: b.mergeKey,
-    lat: b.lat,
-    lng: b.lng,
-  }));
+    return {
+      ...m,
+      time,
+      blink: m.blink === true,
+      tripStatus: m.tripStatus || "PARTIAL",
+      vehicleType: "HALF",
+      mergeKey,
+      participants,
 
-const participantsTotal = participants.reduce((s, p) => s + Number(p.amount || 0), 0);
+      canCancel: true,
+      canRebook: true,
+      canMerge: true,
 
-return {
-  ...m,
-  time,
-  blink: m.blink === true,
-  tripStatus: m.tripStatus || "PARTIAL",
-  vehicleType: "HALF",
-  mergeKey,
-  participants,
-  canCancel: true,
-  canRebook: true,
-  canMerge: true,
-  orders: participants.map((p) => ({
-    orderId: p.orderId,
-    distributorName: p.distributorName,
-    amount: p.amount,
-    bookingSk: p.bookingSk,
-  })),
-  bookingCount: participants.length,
-  totalAmount: participantsTotal,  // ✅ correct total
-  distanceKm,
-};
-    });
+      orders: participants.map((p) => ({
+        orderId: p.orderId,
+        distributorName: p.distributorName,
+        amount: p.amount,
+        bookingSk: p.bookingSk,
+      })),
 
+      bookingCount: participants.length,
+      totalAmount: participantsTotal,   // ✅ correct
+      distanceKm,                       // ✅ defined
+    };
+  });
   const waitingHalfBookings = allBookings
     .filter((b) => {
       const vt = String(b.vehicleType || "").toUpperCase();
