@@ -1,12 +1,10 @@
 import dayjs from "dayjs";
 import { v4 as uuidv4 } from "uuid";
 import { ddb } from "../../config/dynamo.js";
-import { addTimelineEvent } from "../timeline/timeline.helper.js";
+import { addTimelineEvent, markOrderAsMerged } from "../timeline/timeline.helper.js";
 import { resolveMergeKeyByRadius, haversineKm } from "./geoMerge.helper.js";
 import { pairingMap } from "../../appInit.js";
 import { getDistributorByCode } from "../distributors/distributors.service.js";
-import { markOrderAsMerged } from "../timeline/timeline.helper.js";
-
 import {
   GetCommand,
   PutCommand,
@@ -1117,10 +1115,10 @@ const { resolvedName, safeLat, safeLng, resolvedLocationId } =
     if (!pos) throw new Error("pos required for FULL booking");
 
     // ✅ Night slots closed unless manager enabled
-    if (NIGHT_SLOTS.includes(time) && rules.lastSlotEnabled === false) {
-      throw new Error("❌ Night slots are closed");
-    }
-
+    const NIGHT_SLOTS = rules.slotTimes?.Night || [];
+  if (NIGHT_SLOTS.includes(targetTime) && rules.lastSlotEnabled === false) {
+    throw new Error("❌ Night slots are closed");
+  }
     const slotSk = skForSlot(time, "FULL", pos);
     const bookingSk = skForBooking(time, "FULL", pos, uid);
     const bookingId = uuidv4();
@@ -1976,6 +1974,10 @@ export async function managerConfirmDayMerge({
       );
     }
   }
+    await markOrderAsMerged({
+    fullOrderId,
+    childOrderIds: mergedOrderIds,
+  });
 // 10) Turn off DATE-level blink + store confirmed slot info
 await ddb.send(
   new UpdateCommand({
@@ -2909,8 +2911,95 @@ export async function managerCancelBooking(payload) {
         },
       });
     }
+async function recomputeAndFixMerge({ pk, companyCode, time, mergeKey }) {
+  const mergeSk2 = skForMergeSlot(time, mergeKey);
+  const daySk = skForMergeDay(mergeKey);
+
+  // read all bookings of this date once
+  const allBookingsRes = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_BOOKINGS,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
+    })
+  );
+  const all = allBookingsRes.Items || [];
+
+  // TIME level half bookings
+  const timeHalf = all.filter(
+    (b) =>
+      String(b.vehicleType || "").toUpperCase() === "HALF" &&
+      String(b.mergeKey || "") === String(mergeKey) &&
+      String(b.slotTime || "") === String(time)
+  );
+
+  const timeCount = timeHalf.length;
+  const timeTotal = timeHalf.reduce((s, b) => s + Number(b.amount || 0), 0);
+
+  // DAY level half bookings
+  const dayHalf = all.filter(
+    (b) =>
+      String(b.vehicleType || "").toUpperCase() === "HALF" &&
+      String(b.mergeKey || "") === String(mergeKey)
+  );
+
+  const dayCount = dayHalf.length;
+  const dayTotal = dayHalf.reduce((s, b) => s + Number(b.amount || 0), 0);
+
+  // ✅ TIME merge cleanup/update
+  if (timeCount <= 0 || timeTotal <= 0) {
+    try {
+      await ddb.send(new DeleteCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: mergeSk2 } }));
+    } catch (_) {}
+  } else {
+    const rules = await getRules(companyCode);
+    const threshold = Number(rules.threshold || 0);
+    const ts = timeTotal >= threshold ? "READY_FOR_CONFIRM" : "PARTIAL";
+
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: mergeSk2 },
+        UpdateExpression:
+          "SET totalAmount=:t, bookingCount=:c, tripStatus=:ts, blink=:b, updatedAt=:u",
+        ExpressionAttributeValues: {
+          ":t": timeTotal,
+          ":c": timeCount,
+          ":ts": ts,
+          ":b": ts === "READY_FOR_CONFIRM",
+          ":u": new Date().toISOString(),
+        },
+      })
+    );
+  }
+
+  // ✅ DAY merge cleanup/update
+  if (dayCount <= 0 || dayTotal <= 0) {
+    try {
+      await ddb.send(new DeleteCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: daySk } }));
+    } catch (_) {}
+  } else {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_CAPACITY,
+        Key: { pk, sk: daySk },
+        UpdateExpression:
+          "SET totalAmount=:t, bookingCount=:c, blink=:b, updatedAt=:u",
+        ExpressionAttributeValues: {
+          ":t": dayTotal,
+          ":c": dayCount,
+          ":b": true, // day bucket exists -> blink ok (or your own rule)
+          ":u": new Date().toISOString(),
+        },
+      })
+    );
+  }
+
+  return { timeCount, timeTotal, dayCount, dayTotal };
+}
 
     await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
+await recomputeAndFixMerge({ pk, companyCode, time, mergeKey });
 
     return {
       ok: true,
@@ -3176,6 +3265,88 @@ export async function managerCancelBooking(payload) {
 
   throw new Error("Invalid cancel payload");
 }
+/**Delete */
+export async function deleteOrderEverywhere({ companyCode, orderId, managerId }) {
+  if (!companyCode || !orderId) throw new Error("companyCode, orderId required");
+
+  // 1) read order meta
+  const metaRes = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_ORDERS,
+      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+    })
+  );
+  const meta = metaRes?.Item || null;
+
+  // 2) If order has any booking/merge footprint -> cancel booking first (CASCADE)
+  // managerCancelBooking already:
+  // - if child merged -> cancels ORD_FULL
+  // - frees FULL slot + deletes FULL booking
+  // - deletes locks
+  // - resets child orders slot fields
+  try {
+    await managerCancelBooking({
+      companyCode,
+      date: meta?.slotDate,     // allow null, cancelBooking will derive
+      time: meta?.slotTime,
+      pos: meta?.slotPos,
+      userId: meta?.mergeKey || meta?.userId || null,
+      mergeKey: meta?.mergeKey || null,
+      orderId,                  // IMPORTANT: pass the deleted orderId
+      managerId,
+    });
+  } catch (e) {
+    // If nothing booked, cancelBooking may throw "Invalid cancel payload"
+    // We can ignore that and still mark deleted
+    const msg = String(e?.message || "");
+    if (!msg.includes("Invalid cancel payload") && !msg.includes("Booking not found")) {
+      console.error("deleteOrderEverywhere cancelBooking error:", e);
+    }
+  }
+
+  // 3) Mark THIS order as deleted (global disable)
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_ORDERS,
+      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+      UpdateExpression:
+        "SET #st=:c, isDeleted=:d, deletedAt=:t, deletedBy=:m, updatedAt=:u",
+      ExpressionAttributeNames: { "#st": "status" },
+      ExpressionAttributeValues: {
+        ":c": "CANCELLED",
+        ":d": true,
+        ":t": new Date().toISOString(),
+        ":m": String(managerId || "MANAGER"),
+        ":u": new Date().toISOString(),
+      },
+    })
+  );
+
+  // 4) If it was merged into a FULL order -> mark FULL order deleted too (Option-1 rule)
+  // (because user expects delete affects whole app)
+  const masterId = meta?.mergedIntoOrderId || null;
+  if (masterId && String(masterId).startsWith("ORD_FULL_")) {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_ORDERS,
+        Key: { pk: `ORDER#${masterId}`, sk: "META" },
+        UpdateExpression:
+          "SET #st=:c, isDeleted=:d, deletedAt=:t, deletedBy=:m, updatedAt=:u",
+        ExpressionAttributeNames: { "#st": "status" },
+        ExpressionAttributeValues: {
+          ":c": "CANCELLED",
+          ":d": true,
+          ":t": new Date().toISOString(),
+          ":m": String(managerId || "MANAGER"),
+          ":u": new Date().toISOString(),
+        },
+      })
+    );
+  }
+
+  return { ok: true, message: "✅ Order deleted everywhere", orderId };
+}
+
 /* ✅ DISABLE SLOT */
 export async function managerDisableSlot({
   companyCode,
