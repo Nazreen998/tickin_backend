@@ -2797,8 +2797,11 @@ if (originalOrderId) {
     ) {
       mergedOrderIds = [originalOrderId];
     }
-
-    const lockSk = resolvedOrderId ? `ORDERLOCK#${resolvedOrderId}` : null;
+    // ✅ ORD_FULL_* never has a lock, lock is always on customer orders
+const lockSk =
+  resolvedOrderId && !String(resolvedOrderId).startsWith("ORD_FULL_")
+    ? `ORDERLOCK#${resolvedOrderId}`
+    : null;
 
     const transactItems = [
       // free capacity slot
@@ -2832,8 +2835,6 @@ const match = (allBookingsRes.Items || []).find(
     String(b.pos || "") === String(pos)
 );
 
-fullBookingSkToDelete = match?.sk || null;
-
       fullBookingSkToDelete = match?.sk || null;
     }
 
@@ -2852,7 +2853,14 @@ fullBookingSkToDelete = match?.sk || null;
         Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: lockSk } },
       });
     }
-
+if (originalOrderId && originalOrderId !== resolvedOrderId) {
+  transactItems.push({
+    Delete: {
+      TableName: TABLE_BOOKINGS,
+      Key: { pk, sk: `ORDERLOCK#${originalOrderId}` },
+    },
+  });
+}
     // reset master order meta if it's a real customer order (not ORD_FULL_*)
     if (resolvedOrderId && !String(resolvedOrderId).startsWith("ORD_FULL_")) {
       transactItems.push({
