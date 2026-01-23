@@ -503,13 +503,12 @@ export async function getSlotGrid({ companyCode, date }) {
       if (participants.length === 0) return null; // 🧹 delete empty
 
       const totalAmount = participants.reduce((s, p) => s + p.amount, 0);
-
-      const tripStatus =
-        participants.length >= 2 && totalAmount >= rules.threshold
-          ? "READY"
-          : participants.length >= 2
-          ? "WAITING"
-          : "PARTIAL";
+const effectiveTripStatus =
+  safeTotalAmount >= rules.threshold
+    ? "READY"
+    : participants.length >= 1
+    ? "WAITING"
+    : "PARTIAL";
 
       let distanceKm = null;
       if (participants.length >= 2) {
