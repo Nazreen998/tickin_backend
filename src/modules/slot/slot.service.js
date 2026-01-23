@@ -3157,9 +3157,9 @@ await recomputeAndFixMerge({ pk, companyCode, time, mergeKey });
           UpdateExpression:
             "SET totalAmount = if_not_exists(totalAmount,:z) - :a, " +
             "bookingCount = if_not_exists(bookingCount,:z) - :one, " +
-            "updatedAt = :u",
+            "updatedAt = :u"+  "REMOVE blink",
           ConditionExpression:
-            "if_not_exists(totalAmount,:z) >= :a AND if_not_exists(bookingCount,:z) >= :one",
+            "attribute_exists(sk)",
           ExpressionAttributeValues: {
             ":z": 0,
             ":a": amt,
@@ -3179,7 +3179,7 @@ await recomputeAndFixMerge({ pk, companyCode, time, mergeKey });
             "bookingCount = if_not_exists(bookingCount,:z) - :one, " +
             "updatedAt=:u",
           ConditionExpression:
-            "if_not_exists(totalAmount,:z) >= :a AND if_not_exists(bookingCount,:z) >= :one",
+             "attribute_exists(sk)",
           ExpressionAttributeValues: {
             ":z": 0,
             ":a": amt,
