@@ -24,7 +24,7 @@ router.get("/monthly", verifyToken, async (req, res) => {
     const role = String(user.role || "").toUpperCase();
 
     // ✅ allow Sales + Manager + Master
-    const allowedRoles = ["SALES OFFICER", "SALES_OFFICER", "MANAGER", "MASTER"];
+    const allowedRoles = ["SALES OFFICER", "SALES_OFFICER", "MANAGER", "MASTER","SALES OFFICER VNR","SALES_OFFICER_VNR"];
     if (!allowedRoles.includes(role)) {
       return res.status(403).json({
         ok: false,
