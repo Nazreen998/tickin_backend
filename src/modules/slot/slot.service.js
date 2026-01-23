@@ -2659,6 +2659,7 @@ export async function managerCancelConfirmedDayMerge({
 }
 
 /* ✅ CANCEL BOOKING */
+/* ✅ CANCEL BOOKING */
 export async function managerCancelBooking(payload) {
   let {
     companyCode,
@@ -2712,10 +2713,7 @@ export async function managerCancelBooking(payload) {
 
   // 3) derive correct date/time/pos
   if (meta) {
-    // IMPORTANT: pkFor must use slotDate (not today)
     date = meta.slotDate || date;
-
-    // Prefer explicit fields
     time = time || meta.slotTime || null;
     pos = pos || meta.slotPos || null;
 
@@ -2732,31 +2730,28 @@ export async function managerCancelBooking(payload) {
   orderId = cancelOrderId;
 
   // ✅ For HALF cancels, make sure date/time/mergeKey are from ORDER META (prevents pk mismatch)
-if (originalOrderId) {
-  const om = await readOrderMeta(originalOrderId);
-  if (om) {
-    date = om.slotDate || date;
-    time = time || om.slotTime || null;
-    mergeKey = mergeKey || om.mergeKey || null;
-    pos = pos || om.slotPos || null;
+  if (originalOrderId) {
+    const om = await readOrderMeta(originalOrderId);
+    if (om) {
+      date = om.slotDate || date;
+      time = time || om.slotTime || null;
+      mergeKey = mergeKey || om.mergeKey || null;
+      pos = pos || om.slotPos || null;
+    }
   }
-}
-
 
   let pk = pkFor(companyCode, date);
 
   /* =========================
-     ✅ FULL cancel (works even if UI didn't send pos/time)
+     ✅ FULL cancel
   ========================= */
   const shouldFullCancel = Boolean(time && pos);
 
   if (shouldFullCancel) {
     const slotSk = skForSlot(time, "FULL", pos);
 
-    // booking sk if userId available
     const bookingSK = userId ? skForBooking(time, "FULL", pos, userId) : null;
 
-    // resolve orderId from payload/capacity/booking
     let resolvedOrderId = orderId || null;
 
     if (!resolvedOrderId) {
@@ -2797,14 +2792,14 @@ if (originalOrderId) {
     ) {
       mergedOrderIds = [originalOrderId];
     }
+
     // ✅ ORD_FULL_* never has a lock, lock is always on customer orders
-const lockSk =
-  resolvedOrderId && !String(resolvedOrderId).startsWith("ORD_FULL_")
-    ? `ORDERLOCK#${resolvedOrderId}`
-    : null;
+    const lockSk =
+      resolvedOrderId && !String(resolvedOrderId).startsWith("ORD_FULL_")
+        ? `ORDERLOCK#${resolvedOrderId}`
+        : null;
 
     const transactItems = [
-      // free capacity slot
       {
         Update: {
           TableName: TABLE_CAPACITY,
@@ -2828,12 +2823,13 @@ const lockSk =
           ExpressionAttributeValues: { ":pk": pk },
         })
       );
-const match = (allBookingsRes.Items || []).find(
-  (b) =>
-    String(b.vehicleType || "").toUpperCase() === "FULL" &&
-    String(b.slotTime || "") === String(time) &&
-    String(b.pos || "") === String(pos)
-);
+
+      const match = (allBookingsRes.Items || []).find(
+        (b) =>
+          String(b.vehicleType || "").toUpperCase() === "FULL" &&
+          String(b.slotTime || "") === String(time) &&
+          String(b.pos || "") === String(pos)
+      );
 
       fullBookingSkToDelete = match?.sk || null;
     }
@@ -2847,20 +2843,22 @@ const match = (allBookingsRes.Items || []).find(
       });
     }
 
-    // delete order lock for master
     if (lockSk) {
       transactItems.push({
         Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: lockSk } },
       });
     }
-if (originalOrderId && originalOrderId !== resolvedOrderId) {
-  transactItems.push({
-    Delete: {
-      TableName: TABLE_BOOKINGS,
-      Key: { pk, sk: `ORDERLOCK#${originalOrderId}` },
-    },
-  });
-}
+
+    // ✅ IMPORTANT: delete clicked child lock also (only if different)
+    if (originalOrderId && originalOrderId !== resolvedOrderId) {
+      transactItems.push({
+        Delete: {
+          TableName: TABLE_BOOKINGS,
+          Key: { pk, sk: `ORDERLOCK#${originalOrderId}` },
+        },
+      });
+    }
+
     // reset master order meta if it's a real customer order (not ORD_FULL_*)
     if (resolvedOrderId && !String(resolvedOrderId).startsWith("ORD_FULL_")) {
       transactItems.push({
@@ -2878,7 +2876,7 @@ if (originalOrderId && originalOrderId !== resolvedOrderId) {
       });
     }
 
-    // ✅ reset child orders (this re-enables SLOT button)
+    // ✅ reset child orders + delete their locks
     for (const childId of mergedOrderIds) {
       transactItems.push({
         Update: {
@@ -2924,12 +2922,12 @@ if (originalOrderId && originalOrderId !== resolvedOrderId) {
       resetOrders: mergedOrderIds,
     };
   }
+
   /* =========================
      ✅ HALF cancel (resolve bookingSk if missing)
   ========================= */
   let resolvedBookingSk = bookingSk || null;
 
-  // If bookingSk missing but mergeKey + orderId present, resolve bookingSk by orderId
   if ((!resolvedBookingSk || resolvedBookingSk === "") && mergeKey && originalOrderId) {
     // 1) Try within current pk (fast path)
     const allBookingsRes = await ddb.send(
@@ -2948,7 +2946,7 @@ if (originalOrderId && originalOrderId !== resolvedOrderId) {
         (!time || String(b.slotTime || "") === String(time))
     );
 
-    // 2) Fallback: if not found in pk, Scan the table by orderId+mergeKey (slow but fixes pk mismatch)
+    // 2) Fallback: scan by mergeKey+orderId to find the real pk
     if (candidates.length === 0) {
       let lastKey = undefined;
       let found = null;
@@ -2979,15 +2977,11 @@ if (originalOrderId && originalOrderId !== resolvedOrderId) {
 
       if (!found) throw new Error("Booking not found for this orderId");
 
-      // ✅ IMPORTANT: switch to the real pk where the booking exists
-      pk = found.pk;
-
-      // derive time if missing
+      pk = found.pk; // ✅ switch to correct pk
       if (!time) time = found.slotTime || null;
 
       resolvedBookingSk = found.sk;
     } else {
-      // pick latest if duplicates exist
       const match = candidates.sort((a, b) =>
         String(b.createdAt || b.sk || "").localeCompare(String(a.createdAt || a.sk || ""))
       )[0];
@@ -2997,11 +2991,11 @@ if (originalOrderId && originalOrderId !== resolvedOrderId) {
     }
   }
 
-  // ✅ HALF cancel
   if (resolvedBookingSk && mergeKey) {
     if (!time) throw new Error("time required for HALF cancel");
 
     const mergeSk2 = skForMergeSlot(time, mergeKey);
+    const daySk = skForMergeDay(mergeKey);
 
     const bookingRes = await ddb.send(
       new GetCommand({
@@ -3017,40 +3011,47 @@ if (originalOrderId && originalOrderId !== resolvedOrderId) {
     const lockSk = orderIdFromBooking ? `ORDERLOCK#${orderIdFromBooking}` : null;
 
     const transactItems = [
-      // 1) reduce TIME-level merge slot total
+      // ✅ (FIX-1) TIME-level merge slot: totalAmount + bookingCount decrement
       {
         Update: {
           TableName: TABLE_CAPACITY,
           Key: { pk, sk: mergeSk2 },
-          UpdateExpression: "SET totalAmount = totalAmount - :a, updatedAt = :u",
-          ConditionExpression: "totalAmount >= :a",
+          UpdateExpression:
+            "SET totalAmount = if_not_exists(totalAmount,:z) - :a, " +
+            "bookingCount = if_not_exists(bookingCount,:z) - :one, " +
+            "updatedAt = :u",
+          ConditionExpression:
+            "if_not_exists(totalAmount,:z) >= :a AND if_not_exists(bookingCount,:z) >= :one",
           ExpressionAttributeValues: {
+            ":z": 0,
             ":a": amt,
+            ":one": 1,
             ":u": new Date().toISOString(),
           },
         },
       },
 
-      // 2) ✅ reduce DATE-level bucket also
+      // ✅ DATE-level bucket decrement
       {
-  Update: {
-    TableName: TABLE_CAPACITY,
-    Key: { pk, sk: skForMergeDay(mergeKey) },
-    UpdateExpression:
-      "SET totalAmount = if_not_exists(totalAmount,:z) - :a, " +
-      "bookingCount = if_not_exists(bookingCount,:z) - :one, " +
-      "updatedAt=:u",
-    ConditionExpression:
-      "if_not_exists(totalAmount,:z) >= :a AND if_not_exists(bookingCount,:z) >= :one",
-    ExpressionAttributeValues: {
-      ":z": 0,
-      ":a": amt,
-      ":one": 1,
-      ":u": new Date().toISOString(),
-    },
-  },
-},
-      // 3) delete booking row
+        Update: {
+          TableName: TABLE_CAPACITY,
+          Key: { pk, sk: daySk },
+          UpdateExpression:
+            "SET totalAmount = if_not_exists(totalAmount,:z) - :a, " +
+            "bookingCount = if_not_exists(bookingCount,:z) - :one, " +
+            "updatedAt=:u",
+          ConditionExpression:
+            "if_not_exists(totalAmount,:z) >= :a AND if_not_exists(bookingCount,:z) >= :one",
+          ExpressionAttributeValues: {
+            ":z": 0,
+            ":a": amt,
+            ":one": 1,
+            ":u": new Date().toISOString(),
+          },
+        },
+      },
+
+      // delete booking row
       {
         Delete: {
           TableName: TABLE_BOOKINGS,
@@ -3059,14 +3060,12 @@ if (originalOrderId && originalOrderId !== resolvedOrderId) {
       },
     ];
 
-    // 4) delete order lock
     if (lockSk) {
       transactItems.push({
         Delete: { TableName: TABLE_BOOKINGS, Key: { pk, sk: lockSk } },
       });
     }
 
-    // 5) reset ORDER meta
     if (orderIdFromBooking) {
       transactItems.push({
         Update: {
@@ -3085,7 +3084,7 @@ if (originalOrderId && originalOrderId !== resolvedOrderId) {
 
     await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
 
-    // 6) recompute TIME-level tripStatus after cancel
+    // recompute TIME-level tripStatus
     const after = await ddb.send(
       new GetCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: mergeSk2 } })
     );
@@ -3094,37 +3093,46 @@ if (originalOrderId && originalOrderId !== resolvedOrderId) {
     const threshold = rules.threshold;
 
     const finalTotal = Number(after?.Item?.totalAmount || 0);
+    const timeBC = Number(after?.Item?.bookingCount || 0);
+
     const newTripStatus = finalTotal >= threshold ? "READY_FOR_CONFIRM" : "PARTIAL";
 
-    await ddb.send(
-      new UpdateCommand({
-        TableName: TABLE_CAPACITY,
-        Key: { pk, sk: mergeSk2 },
-        UpdateExpression: "SET tripStatus = :s, blink=:b, updatedAt=:u",
-        ExpressionAttributeValues: {
-          ":s": newTripStatus,
-          ":b": newTripStatus === "READY_FOR_CONFIRM",
-          ":u": new Date().toISOString(),
-        },
-      })
-    );
+    // if still exists (could be deleted later), update status
+    if (after?.Item) {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: TABLE_CAPACITY,
+          Key: { pk, sk: mergeSk2 },
+          UpdateExpression: "SET tripStatus = :s, blink=:b, updatedAt=:u",
+          ExpressionAttributeValues: {
+            ":s": newTripStatus,
+            ":b": newTripStatus === "READY_FOR_CONFIRM",
+            ":u": new Date().toISOString(),
+          },
+        })
+      );
+    }
 
-    // ✅ STEP-3 (IMPORTANT): day bucket count 0 => blink OFF
+    // ✅ read day bucket + if 0 => delete merge cards (FIX-2)
+    let dayBC = 0;
+    let dayTotal = 0;
     try {
       const dayRes = await ddb.send(
         new GetCommand({
           TableName: TABLE_CAPACITY,
-          Key: { pk, sk: skForMergeDay(mergeKey) },
+          Key: { pk, sk: daySk },
         })
       );
 
-      const bc = Number(dayRes?.Item?.bookingCount || 0);
+      dayBC = Number(dayRes?.Item?.bookingCount || 0);
+      dayTotal = Number(dayRes?.Item?.totalAmount || 0);
 
-      if (bc <= 0) {
+      // blink OFF when empty
+      if (dayBC <= 0) {
         await ddb.send(
           new UpdateCommand({
             TableName: TABLE_CAPACITY,
-            Key: { pk, sk: skForMergeDay(mergeKey) },
+            Key: { pk, sk: daySk },
             UpdateExpression: "SET blink=:b, updatedAt=:u",
             ExpressionAttributeValues: {
               ":b": false,
@@ -3135,6 +3143,24 @@ if (originalOrderId && originalOrderId !== resolvedOrderId) {
       }
     } catch (_) {}
 
+    // ✅ DELETE empty tiles
+    // - if time-level merge empty OR day-level empty => remove items so UI won't show orange empty card
+    if (finalTotal <= 0 || timeBC <= 0) {
+      try {
+        await ddb.send(
+          new DeleteCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: mergeSk2 } })
+        );
+      } catch (_) {}
+    }
+
+    if (dayBC <= 0 || dayTotal <= 0) {
+      try {
+        await ddb.send(
+          new DeleteCommand({ TableName: TABLE_CAPACITY, Key: { pk, sk: daySk } })
+        );
+      } catch (_) {}
+    }
+
     return {
       ok: true,
       slotType: "HALF",
@@ -3143,6 +3169,8 @@ if (originalOrderId && originalOrderId !== resolvedOrderId) {
       time,
       tripStatus: newTripStatus,
       finalTotal,
+      timeBookingCount: timeBC,
+      dayBookingCount: dayBC,
     };
   }
 
