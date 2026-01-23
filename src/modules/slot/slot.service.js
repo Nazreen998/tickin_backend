@@ -499,13 +499,14 @@ const mergeSlots = overrides
       } catch (_) {}
     }
 
-    // ✅ participants must be same time + same mergeKey
+    // ✅ participants must be same time + same mergeKey + pending/waiting only
     const participants = allBookings
       .filter(
         (b) =>
           String(b.vehicleType || "").toUpperCase() === "HALF" &&
-          String(b.slotTime || "") === String(time) &&               // ✅ IMPORTANT
-          String(b.mergeKey || "") === String(mergeKey)
+          String(b.slotTime || "") === String(time) &&
+          String(b.mergeKey || "") === String(mergeKey) &&
+          isPendingOrWaitingStatus(b.status) // ✅ IMPORTANT
       )
       .map((b) => ({
         distributorCode: b.distributorCode,
@@ -526,7 +527,13 @@ const mergeSlots = overrides
       0
     );
 
-    // ✅ distanceKm define always (so no "not defined" error)
+    // ✅ fallback (if participants empty, use capacity totalAmount)
+    const safeTotalAmount =
+      participants.length > 0
+        ? participantsTotal
+        : Number(m.totalAmount || 0);
+
+    // ✅ distanceKm define always
     let distanceKm = null;
     if (participants.length >= 2) {
       const a = participants[0];
@@ -563,8 +570,8 @@ const mergeSlots = overrides
       })),
 
       bookingCount: participants.length,
-      totalAmount: participantsTotal,   // ✅ correct
-      distanceKm,                       // ✅ defined
+      totalAmount: safeTotalAmount, // ✅ FIXED (not participantsTotal)
+      distanceKm,
     };
   });
   const waitingHalfBookings = allBookings
