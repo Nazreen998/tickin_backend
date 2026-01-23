@@ -30,25 +30,6 @@ function isFiniteLatLng(lat, lng) {
   return true;
 }
 
-/* -------- Google Maps URL → lat/lng -------- */
-
-function extractLatLngFromUrl(url) {
-  if (!url || typeof url !== "string") return { lat: null, lng: null };
-
-  let match;
-
-  match = url.match(/!3d(-?\d+(\.\d+)?)!4d(-?\d+(\.\d+)?)/);
-  if (match) return { lat: Number(match[1]), lng: Number(match[3]) };
-
-  match = url.match(/@(-?\d+(\.\d+)?),(-?\d+(\.\d+)?)/);
-  if (match) return { lat: Number(match[1]), lng: Number(match[3]) };
-
-  match = url.match(/(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)/);
-  if (match) return { lat: Number(match[1]), lng: Number(match[3]) };
-
-  return { lat: null, lng: null };
-}
-
 /* -------- distance -------- */
 
 function haversineMeters(lat1, lon1, lat2, lon2) {
@@ -81,18 +62,17 @@ function normalizeDistributors(order) {
   const list = Array.isArray(order.distributors) ? order.distributors : [];
 
   return list.map((d) => {
-    const url = d.mapUrl || d.final_url || d.finalUrl || null;
-    const parsed = extractLatLngFromUrl(url);
-
-    const lat = d.lat ?? d.latitude ?? parsed.lat ?? null;
-    const lng = d.lng ?? d.longitude ?? parsed.lng ?? null;
+    // ✅ NO URL PARSING. Only use stored coordinates.
+    const lat = d.lat ?? d.latitude ?? null;
+    const lng = d.lng ?? d.longitude ?? null;
 
     return {
       distributorCode: d.distributorCode || d.code || null,
       distributorName: d.distributorName || d.name || null,
       lat,
       lng,
-      mapUrl: url,
+      // ✅ keep mapUrl if you want, but not used for logic
+      mapUrl: d.mapUrl || d.final_url || d.finalUrl || null,
       items: Array.isArray(d.items) ? d.items : [],
       reachedAt: d.reachedAt || null,
       unloadStartAt: d.unloadStartAt || null,
@@ -151,24 +131,24 @@ export async function getDriverOrders(driverId) {
   );
 
   // ✅ allow all statuses that driver can see
- const allowed = new Set([
-  "DRIVER_ASSIGNED",
-  "DRIVER_STARTED",           // ✅ add
-  "DRIVE_STARTED",            // keep if old data exists
-  "DRIVER_REACHED_DISTRIBUTOR", // ✅ add (safety)
-  "UNLOAD_START",             // ✅ add
-  "UNLOAD_END",               // ✅ add
+  const allowed = new Set([
+    "DRIVER_ASSIGNED",
+    "DRIVER_STARTED", // ✅ add
+    "DRIVE_STARTED", // keep if old data exists
+    "DRIVER_REACHED_DISTRIBUTOR", // ✅ add (safety)
+    "UNLOAD_START", // ✅ add
+    "UNLOAD_END", // ✅ add
 
-  "REACHED_D1",
-  "UNLOADING_START_D1",
-  "UNLOADING_END_D1",
-  "REACHED_D2",
-  "UNLOADING_START_D2",
-  "UNLOADING_END_D2",
+    "REACHED_D1",
+    "UNLOADING_START_D1",
+    "UNLOADING_END_D1",
+    "REACHED_D2",
+    "UNLOADING_START_D2",
+    "UNLOADING_END_D2",
 
-  "WAREHOUSE_REACHED",
-  "DELIVERY_COMPLETED",
-]);
+    "WAREHOUSE_REACHED",
+    "DELIVERY_COMPLETED",
+  ]);
 
   return (res.Items || []).filter((o) =>
     allowed.has(String(o.status || "").toUpperCase())
@@ -238,15 +218,18 @@ export async function updateDriverStatus({
 
   // ✅ map generic → timeline keys
   let desired = incoming;
-  
-if (incoming === "DRIVER_STARTED") desired = "DRIVER_STARTED";
-if (incoming === "DRIVE_STARTED") desired = "DRIVER_STARTED"; // alias normalize
+
+  if (incoming === "DRIVER_STARTED") desired = "DRIVER_STARTED";
+  if (incoming === "DRIVE_STARTED") desired = "DRIVER_STARTED"; // alias normalize
   if (incoming === "DRIVER_REACHED_DISTRIBUTOR") desired = reachedEventKey(idx);
   if (incoming === "UNLOAD_START") desired = unloadStartEventKey(idx);
   if (incoming === "UNLOAD_END") desired = unloadEndEventKey(idx);
 
   // ✅ Single order => never allow D2 events
-  if (!hasD2 && ["REACHED_D2", "UNLOADING_START_D2", "UNLOADING_END_D2"].includes(desired)) {
+  if (
+    !hasD2 &&
+    ["REACHED_D2", "UNLOADING_START_D2", "UNLOADING_END_D2"].includes(desired)
+  ) {
     throw new Error("D2 not applicable for single order");
   }
 
@@ -273,7 +256,11 @@ if (incoming === "DRIVE_STARTED") desired = "DRIVER_STARTED"; // alias normalize
         throw new Error("currentLat/currentLng required");
       }
 
-      const check = await validateDriverReach30m({ orderId, currentLat, currentLng });
+      const check = await validateDriverReach30m({
+        orderId,
+        currentLat,
+        currentLng,
+      });
       if (!check.within) {
         return {
           ok: false,
@@ -294,7 +281,10 @@ if (incoming === "DRIVE_STARTED") desired = "DRIVER_STARTED"; // alias normalize
   if (desired === "UNLOADING_START_D1" || desired === "UNLOADING_START_D2") {
     if (!stop) throw new Error("No distributor stop found");
     newDistributors = [...newDistributors];
-    newDistributors[idx] = { ...newDistributors[idx], unloadStartAt: toIsoNow() };
+    newDistributors[idx] = {
+      ...newDistributors[idx],
+      unloadStartAt: toIsoNow(),
+    };
   }
 
   /* ---------- UNLOADING_END_D1 / D2 ---------- */
@@ -302,7 +292,10 @@ if (incoming === "DRIVE_STARTED") desired = "DRIVER_STARTED"; // alias normalize
     if (!stop) throw new Error("No distributor stop found");
 
     newDistributors = [...newDistributors];
-    newDistributors[idx] = { ...newDistributors[idx], unloadEndAt: toIsoNow() };
+    newDistributors[idx] = {
+      ...newDistributors[idx],
+      unloadEndAt: toIsoNow(),
+    };
 
     // ✅ after unload end, move to next stop if exists
     if (idx + 1 < newDistributors.length) {
@@ -310,7 +303,8 @@ if (incoming === "DRIVE_STARTED") desired = "DRIVER_STARTED"; // alias normalize
     }
   }
 
-  const tripClosed = desired === "WAREHOUSE_REACHED" || desired === "DELIVERY_COMPLETED";
+  const tripClosed =
+    desired === "WAREHOUSE_REACHED" || desired === "DELIVERY_COMPLETED";
 
   // ✅ DB update
   const updated = await ddb.send(
@@ -346,8 +340,8 @@ if (incoming === "DRIVE_STARTED") desired = "DRIVER_STARTED"; // alias normalize
         desired === "WAREHOUSE_REACHED"
           ? "WAREHOUSE"
           : desired === "DELIVERY_COMPLETED"
-            ? "DONE"
-            : stopLabel(idx),
+          ? "DONE"
+          : stopLabel(idx),
       stopIndex: idx,
       currentLat,
       currentLng,
@@ -356,7 +350,8 @@ if (incoming === "DRIVE_STARTED") desired = "DRIVER_STARTED"; // alias normalize
 
   return {
     ok: true,
-    reached: desired === "REACHED_D1" || desired === "REACHED_D2" ? true : undefined,
+    reached:
+      desired === "REACHED_D1" || desired === "REACHED_D2" ? true : undefined,
     order: after,
   };
 }
