@@ -335,7 +335,8 @@ export const createOrder = async (req, res) => {
         role === "SALES OFFICER" ||
         role === "SALES_OFFICER" ||
         role === "MANAGER" ||
-        role === "SALES OFFICER_VNR" ||
+        role === "SALES_OFFICER_VNR" ||
+        role === "SALES OFFICER VNR" ||
         role === "SALESMAN"
       )
     ) {
@@ -667,7 +668,7 @@ export const confirmOrder = async (req, res) => {
 
     const order = orderRes.Item;
     const role = String(user.role || "").trim().toUpperCase();
-    const isAdmin = ["MASTER", "MANAGER", "DISTRIBUTOR", "SALESMAN", "SALES OFFICER"].includes(role);
+    const isAdmin = ["MASTER", "MANAGER", "DISTRIBUTOR", "SALESMAN", "SALES OFFICER","SALES_OFFICER_VNR","SALES OFFICER VNR"].includes(role);
     // // ✅ Only MANAGER can confirm (as you requested)
     // if (role !== "MANAGER") {
     //   return res.status(403).json({ message: "Access denied (MANAGER only)" });
