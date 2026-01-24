@@ -290,7 +290,7 @@ router.post(
 
 /* ✅ MANAGER CANCEL BOOKING */
 router.post(
-  "/api/slots/manager/cancel-booking",
+  "/manager/cancel-booking",
   verifyToken,
   allowRoles("MANAGER"),
   async (req, res) => {
