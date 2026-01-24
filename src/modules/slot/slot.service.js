@@ -101,9 +101,13 @@ export async function confirmHalfMerge(req, res) {
   }
 }
 
-export async function fetchEligibleHalfBookings({ companyCode, date, time }) {
+export async function fetchEligibleHalfBookings({ companyCode, date, time, mergeKey }) {
   const pk = `COMPANY#${companyCode}#DATE#${date}`;
-  const skPrefix = `BOOKING#${time}#KEY#`;
+
+  // ✅ if mergeKey is provided, filter only that merge group
+  const skPrefix = mergeKey
+    ? `BOOKING#${time}#KEY#${mergeKey}`
+    : `BOOKING#${time}#KEY#`;
 
   const statusFilters = ELIGIBLE_STATUSES
     .map((_, i) => `#st = :s${i}`)
@@ -131,32 +135,25 @@ export async function fetchEligibleHalfBookings({ companyCode, date, time }) {
 
   return res.Items || [];
 }
-
 export async function getEligibleHalfBookingsHandler(req, res) {
   try {
-    const { date, time } = req.query;
+    const { date, time, mergeKey } = req.query;   // ✅ mergeKey added
     const companyCode = req.user?.companyCode || "VAGR_IT";
 
     if (!date || !time) {
-      return res.status(400).json({
-        ok: false,
-        message: "date and time are required",
-      });
+      return res.status(400).json({ ok: false, message: "date and time are required" });
     }
 
     const bookings = await fetchEligibleHalfBookings({
       companyCode,
       date,
       time,
+      mergeKey, // ✅ pass it
     });
 
-    return res.json({
-      ok: true,
-      count: bookings.length,
-      bookings,
-    });
+    return res.json({ ok: true, count: bookings.length, bookings });
   } catch (err) {
-    console.error("getEligibleHalfBookings error:", err);
+    console.error("getEligibleHalfBookingsHandler error:", err);
     return res.status(500).json({ ok: false, message: err.message });
   }
 }
