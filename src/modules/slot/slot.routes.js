@@ -7,6 +7,8 @@ import {
   joinWaiting,
   managerCancelBooking,
   managerDisableSlot,
+  cancelHalfMerge,
+  confirmHalfMerge,
   getEligibleHalfBookingsHandler,
   managerConfirmMerge,
   managerCancelConfirmedDayMerge,
@@ -47,7 +49,8 @@ function extractSlotId(out) {
   );
 }
 router.get("/eligible-half-bookings", getEligibleHalfBookingsHandler);
-
+router.post("/half-merge/cancel", verifyToken, allowRoles(["MANAGER"]), cancelHalfMerge);
+router.post("/half-merge/confirm", verifyToken, allowRoles(["MANAGER"]), confirmHalfMerge);
 router.get(
   "/available-full-times",
   verifyToken,

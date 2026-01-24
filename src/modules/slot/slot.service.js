@@ -64,6 +64,42 @@ const ELIGIBLE_STATUSES = [
   "PENDING",
   "WAITING",
 ];
+// --- HALF merge: cancel ---
+export async function cancelHalfMerge(req, res) {
+  try {
+    const { date, time, mergeKey } = req.body; // or req.query based on frontend
+    const companyCode = req.user?.companyCode || "VAGR_IT";
+
+    if (!date || !time || !mergeKey) {
+      return res.status(400).json({ ok: false, message: "date, time, mergeKey are required" });
+    }
+
+    // TODO: your actual cancel logic here (update bookings status, timeline etc.)
+    // For now return ok so route works
+    return res.json({ ok: true, message: "cancelHalfMerge route wired", companyCode, date, time, mergeKey });
+  } catch (err) {
+    console.error("cancelHalfMerge error:", err);
+    return res.status(500).json({ ok: false, message: err.message });
+  }
+}
+
+// --- HALF merge: confirm ---
+export async function confirmHalfMerge(req, res) {
+  try {
+    const { date, time, mergeKey } = req.body; // or req.query
+    const companyCode = req.user?.companyCode || "VAGR_IT";
+
+    if (!date || !time || !mergeKey) {
+      return res.status(400).json({ ok: false, message: "date, time, mergeKey are required" });
+    }
+
+    // TODO: your actual confirm logic here
+    return res.json({ ok: true, message: "confirmHalfMerge route wired", companyCode, date, time, mergeKey });
+  } catch (err) {
+    console.error("confirmHalfMerge error:", err);
+    return res.status(500).json({ ok: false, message: err.message });
+  }
+}
 
 export async function fetchEligibleHalfBookings({ companyCode, date, time }) {
   const pk = `COMPANY#${companyCode}#DATE#${date}`;
