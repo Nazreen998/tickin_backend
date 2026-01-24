@@ -23,18 +23,15 @@ const TRIPS_TABLE = process.env.TRIPS_TABLE || "tickin_trips";
 const BOOKINGS_TABLE = process.env.BOOKINGS_TABLE || "tickin_slot_bookings";
 
 export const getSlotConfirmedOrders = async (req, res) => {
-  try {
+    try {
     const { date } = req.query;
-
     if (!date) {
       return res.status(400).json({
         ok: false,
         message: "date is required (YYYY-MM-DD)",
       });
     }
-
     const pk = `COMPANY#VAGR_IT#DATE#${date}`;
-
     // ✅ 1) Fetch CONFIRMED bookings for given date
     const bookingsRes = await ddb.send(
       new ScanCommand({
@@ -78,7 +75,10 @@ export const getSlotConfirmedOrders = async (req, res) => {
 const grouped = {};
 
 for (const order of ordersMeta) {
-  const oid = order.orderId;
+  const oid =
+  order.orderId ||
+  (order.pk ? String(order.pk).replace("ORDER#", "") : null);
+if (!oid) continue;
   const booking = bookingByOrderId[oid];
   if (!booking) continue;
 
@@ -89,8 +89,8 @@ for (const order of ordersMeta) {
       : (booking.mergedIntoOrderId && String(booking.mergedIntoOrderId).startsWith("ORD_FULL_"))
         ? booking.mergedIntoOrderId
         : null;
-
-  const mk = booking.mergeKey || order.mergeKey || null;
+  let mk = booking.mergeKey || order.mergeKey || null;
+  if (mk && String(mk).startsWith("LOC#")) mk = null;
 
   // ✅ priority: ORD_FULL_ > GEO mergeKey > orderId
   const flowKey = masterId || mk || oid;
@@ -156,13 +156,21 @@ for (const order of ordersMeta) {
         totalQty: g.totalQty,
       };
     });
+// ✅ REMOVE ghost flows (qty 0 or LOC#)
+const cleanedOrders = finalOrders.filter((o) => {
+  const qty = Number(o.totalQty || o.qty || o.quantity || 0);
+  const fk = String(o.flowKey || "");
+  if (qty <= 0) return false;
+  if (fk.startsWith("LOC#")) return false;
+  return true;
+});
+return res.json({
+  ok: true,
+  count: cleanedOrders.length,
+  date,
+  orders: cleanedOrders,
+});
 
-    return res.json({
-      ok: true,
-      count: finalOrders.length,
-      date,
-      orders: finalOrders,
-    });
   } catch (err) {
     console.error("getSlotConfirmedOrders error:", err);
     return res.status(500).json({ ok: false, message: err.message });
