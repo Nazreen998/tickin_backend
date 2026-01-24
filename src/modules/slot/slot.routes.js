@@ -7,6 +7,7 @@ import {
   joinWaiting,
   managerCancelBooking,
   managerDisableSlot,
+  getEligibleHalfBookingsHandler,
   managerConfirmMerge,
   managerCancelConfirmedDayMerge,
   managerMoveBookingToMerge,
@@ -45,6 +46,8 @@ function extractSlotId(out) {
     null
   );
 }
+router.get("/eligible-half-bookings", getEligibleHalfBookingsHandler);
+
 router.get(
   "/available-full-times",
   verifyToken,
@@ -96,7 +99,7 @@ router.get(
 router.post(
   "/manager/manual-cross-session-merge",
   verifyToken,
-  allowRoles(["MANAGER", "ADMIN"]),
+  allowRoles("MANAGER"),
   async (req, res) => {
     try {
       const out = await managerManualCrossSessionMerge({

@@ -96,7 +96,7 @@ export async function fetchEligibleHalfBookings({ companyCode, date, time }) {
   return res.Items || [];
 }
 
-export async function getEligibleHalfBookings(req, res) {
+export async function getEligibleHalfBookingsHandler(req, res) {
   try {
     const { date, time } = req.query;
     const companyCode = req.user?.companyCode || "VAGR_IT";
@@ -3395,6 +3395,41 @@ export async function deleteOrderEverywhere({ companyCode, orderId, managerId })
 
   return { ok: true, message: "✅ Order deleted everywhere", orderId };
 }
+export const getEligibleHalfBookings = async (q) => {
+  const { date, mergeKey, time } = q || {};
+  if (!date) throw new Error("date is required");
+  if (!mergeKey) throw new Error("mergeKey is required");
+  if (!time) throw new Error("time is required");
+
+  // NOTE: mergeKey exact match ஆகணும் (KEY#LOC#1 / 5306 etc)
+  const pk = `COMPANY#VAGR_IT#DATE#${date}`;
+
+  const res = await ddb.send(
+    new ScanCommand({
+      TableName: BOOKINGS_TABLE,
+      FilterExpression:
+        "#pk = :pk AND #vt = :half AND #mk = :mk AND #tm = :tm",
+      ExpressionAttributeNames: {
+        "#pk": "pk",
+        "#vt": "vehicleType",
+        "#mk": "mergeKey",
+        "#tm": "slotTime",
+      },
+      ExpressionAttributeValues: {
+        ":pk": pk,
+        ":half": "HALF",
+        ":mk": mergeKey,
+        ":tm": time,
+      },
+    })
+  );
+
+  return {
+    ok: true,
+    items: res.Items || [],
+    count: (res.Items || []).length,
+  };
+};
 
 /* ✅ DISABLE SLOT */
 export async function managerDisableSlot({
