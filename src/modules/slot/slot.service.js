@@ -59,77 +59,142 @@ const LAST_SLOT_TIME = "19:30";
 ============================================================ */
 
 const ELIGIBLE_STATUSES = [
-  "PENDING_MANAGER_CONFIRM",
+   "PENDING_MANAGER_CONFIRM",
   "WAITING_MANAGER_CONFIRM",
   "PENDING",
   "WAITING",
+  "READY",
+  "READY_FOR_CONFIRM",
 ];
 // --- HALF merge: cancel ---
 export async function cancelHalfMerge(req, res) {
   try {
-    const { date, time, mergeKey } = req.body; // or req.query based on frontend
+    const { date, time, mergeKey, mode } = req.body;
     const companyCode = req.user?.companyCode || "VAGR_IT";
+    const managerId = req.user?.userId || req.user?.id || "MANAGER";
 
-    if (!date || !time || !mergeKey) {
-      return res.status(400).json({ ok: false, message: "date, time, mergeKey are required" });
+    if (!date || !mergeKey) {
+      return res.status(400).json({ ok: false, message: "date, mergeKey required" });
     }
 
-    // TODO: your actual cancel logic here (update bookings status, timeline etc.)
-    // For now return ok so route works
-    return res.json({ ok: true, message: "cancelHalfMerge route wired", companyCode, date, time, mergeKey });
+    // DAY confirmed cancel
+    if (String(mode || "").toUpperCase() === "DAY") {
+      const out = await managerCancelConfirmedDayMerge({
+        companyCode,
+        date,
+        mergeKey,
+        managerId,
+      });
+      return res.json(out);
+    }
+
+    // TIME confirmed cancel
+    if (!time) {
+      return res.status(400).json({ ok: false, message: "time required for TIME cancel" });
+    }
+
+    const out = await managerCancelConfirmedMerge({
+      companyCode,
+      date,
+      time,
+      mergeKey,
+      managerId,
+    });
+
+    return res.json(out);
   } catch (err) {
     console.error("cancelHalfMerge error:", err);
     return res.status(500).json({ ok: false, message: err.message });
   }
 }
-
 // --- HALF merge: confirm ---
 export async function confirmHalfMerge(req, res) {
   try {
-    const { date, time, mergeKey } = req.body; // or req.query
+    const { date, time, mergeKey, targetTime, mode } = req.body; 
+    // mode optional: "TIME" (default) or "DAY"
     const companyCode = req.user?.companyCode || "VAGR_IT";
+    const managerId = req.user?.userId || req.user?.id || "MANAGER";
 
-    if (!date || !time || !mergeKey) {
-      return res.status(400).json({ ok: false, message: "date, time, mergeKey are required" });
+    if (!date || !mergeKey) {
+      return res.status(400).json({ ok: false, message: "date, mergeKey are required" });
     }
 
-    // TODO: your actual confirm logic here
-    return res.json({ ok: true, message: "confirmHalfMerge route wired", companyCode, date, time, mergeKey });
+    // ✅ DAY-level confirm (blue blink tile)
+    if (String(mode || "").toUpperCase() === "DAY") {
+      if (!targetTime) {
+        return res.status(400).json({ ok: false, message: "targetTime is required for DAY confirm" });
+      }
+
+      const out = await managerConfirmDayMerge({
+        companyCode,
+        date,
+        mergeKey,
+        targetTime,
+        managerId,
+      });
+
+      return res.json(out);
+    }
+
+    // ✅ TIME-level confirm (orange tile)
+    if (!time) {
+      return res.status(400).json({ ok: false, message: "time is required for TIME confirm" });
+    }
+
+    const out = await managerConfirmMerge({
+      companyCode,
+      date,
+      time,
+      mergeKey,
+      managerId,
+    });
+
+    return res.json(out);
   } catch (err) {
     console.error("confirmHalfMerge error:", err);
     return res.status(500).json({ ok: false, message: err.message });
   }
 }
-
 export async function fetchEligibleHalfBookings({ companyCode, date, time, mergeKey }) {
   const pk = `COMPANY#${companyCode}#DATE#${date}`;
-
-  // ✅ if mergeKey is provided, filter only that merge group
-  const skPrefix = mergeKey
-    ? `BOOKING#${time}#KEY#${mergeKey}`
-    : `BOOKING#${time}#KEY#`;
 
   const statusFilters = ELIGIBLE_STATUSES
     .map((_, i) => `#st = :s${i}`)
     .join(" OR ");
 
+  const filterParts = [
+    "#vt = :half",
+    "#tm = :tm",
+    `(${statusFilters})`,
+  ];
+
+  const names = {
+    "#pk": "pk",
+    "#vt": "vehicleType",
+    "#st": "status",
+    "#tm": "slotTime",
+  };
+
+  const values = {
+    ":pk": pk,
+    ":half": "HALF",
+    ":tm": time,
+    ...Object.fromEntries(ELIGIBLE_STATUSES.map((s, i) => [`:s${i}`, s])),
+  };
+
+  if (mergeKey) {
+    filterParts.push("#mk = :mk");
+    names["#mk"] = "mergeKey";
+    values[":mk"] = mergeKey;
+  }
+
   const res = await ddb.send(
     new QueryCommand({
       TableName: TABLE_BOOKINGS,
-      KeyConditionExpression: "#pk = :pk AND begins_with(#sk, :skPrefix)",
-      FilterExpression: `#vt = :half AND (${statusFilters})`,
-      ExpressionAttributeNames: {
-        "#pk": "pk",
-        "#sk": "sk",
-        "#vt": "vehicleType",
-        "#st": "status",
-      },
-      ExpressionAttributeValues: {
-        ":pk": pk,
-        ":skPrefix": skPrefix,
-        ":half": "HALF",
-        ...Object.fromEntries(ELIGIBLE_STATUSES.map((s, i) => [`:s${i}`, s])),
-      },
+      KeyConditionExpression: "#pk = :pk",
+      FilterExpression: filterParts.join(" AND "),
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
     })
   );
 
@@ -538,7 +603,7 @@ export async function getSlotGrid({ companyCode, date }) {
 
       const tripStatus =
         participants.length >= 2 && totalAmount >= rules.threshold
-          ? "READY"
+          ? "READY_FOR_CONFIRM"
           : participants.length >= 2
           ? "WAITING"
           : "PARTIAL";
@@ -927,7 +992,7 @@ for (const key of touched) {
             ":p": chosenPos,
             ":ts": "CONFIRMED",
             ":u": new Date().toISOString(),
-          },
+          }, 
         })
       );
     }
@@ -1663,7 +1728,8 @@ export async function managerConfirmMerge({
     (b) =>
       String(b.mergeKey || "") === String(mergeKey) &&
       String(b.slotTime || "") === String(time) &&
-      String(b.vehicleType || "").toUpperCase() === "HALF"
+      String(b.vehicleType || "").toUpperCase() === "HALF" &&
+      isPendingOrWaitingStatus(b.status)
   );
 
   if (bookings.length < 2) {
@@ -2576,6 +2642,11 @@ const fullOrderId = fullCapRes?.Item?.orderId || null;
       );
     }
   }
+try {
+  await recomputeAndFixMerge({ pk, companyCode, time, mergeKey });
+} catch (e) {
+  console.error("recomputeAndFixMerge failed:", e);
+}
 
   return {
     ok: true,
@@ -3008,13 +3079,12 @@ async function recomputeAndFixMerge({ pk, companyCode, time, mergeKey }) {
   const all = allBookingsRes.Items || [];
 
   // TIME level half bookings
-  const timeHalf = all.filter(
-    (b) =>
-      String(b.vehicleType || "").toUpperCase() === "HALF" &&
-      String(b.mergeKey || "") === String(mergeKey) &&
-      isPendingOrWaitingStatus(b.status)
-  );
-
+const timeHalf = all.filter(b =>
+  String(b.vehicleType||"").toUpperCase()==="HALF" &&
+  String(b.mergeKey||"")===String(mergeKey) &&
+  String(b.slotTime||"")===String(time) &&
+  isPendingOrWaitingStatus(b.status)
+);
   const timeCount = timeHalf.length;
   const timeTotal = timeHalf.reduce((s, b) => s + Number(b.amount || 0), 0);
 
@@ -3439,7 +3509,7 @@ export const getEligibleHalfBookings = async (q) => {
 
   const res = await ddb.send(
     new ScanCommand({
-      TableName: BOOKINGS_TABLE,
+      TableName: TABLE_BOOKINGS,
       FilterExpression:
         "#pk = :pk AND #vt = :half AND #mk = :mk AND #tm = :tm",
       ExpressionAttributeNames: {
