@@ -486,7 +486,6 @@ export async function getSlotGrid({ companyCode, date }) {
         .filter(
           (b) =>
             String(b.vehicleType || "").toUpperCase() === "HALF" &&
-            String(b.slotTime || "") === String(time) && // ✅ TIME STRICT
             String(b.mergeKey || "") === String(mergeKey) &&
             isPendingOrWaitingStatus(b.status)
         )
@@ -503,12 +502,13 @@ export async function getSlotGrid({ companyCode, date }) {
       if (participants.length === 0) return null; // 🧹 delete empty
 
       const totalAmount = participants.reduce((s, p) => s + p.amount, 0);
-const effectiveTripStatus =
-  safeTotalAmount >= rules.threshold
-    ? "READY"
-    : participants.length >= 1
-    ? "WAITING"
-    : "PARTIAL";
+
+      const tripStatus =
+        participants.length >= 2 && totalAmount >= rules.threshold
+          ? "READY"
+          : participants.length >= 2
+          ? "WAITING"
+          : "PARTIAL";
 
       let distanceKm = null;
       if (participants.length >= 2) {
@@ -560,6 +560,9 @@ const effectiveTripStatus =
           distributorCode: b.distributorCode,
           amount: Number(b.amount || 0),
           orderId: b.orderId,
+          bookingSk: b.sk,
+          lat: b.lat,
+          lng: b.lng,
           slotTime: b.slotTime,
         }));
 
@@ -1144,7 +1147,7 @@ const { resolvedName, safeLat, safeLng, resolvedLocationId } =
 
     // ✅ Night slots closed unless manager enabled
     const NIGHT_SLOTS = rules.slotTimes?.Night || [];
-  if (NIGHT_SLOTS.includes(targetTime) && rules.lastSlotEnabled === false) {
+  if (NIGHT_SLOTS.includes(time) && rules.lastSlotEnabled === false) {
     throw new Error("❌ Night slots are closed");
   }
     const slotSk = skForSlot(time, "FULL", pos);
@@ -2976,7 +2979,7 @@ async function recomputeAndFixMerge({ pk, companyCode, time, mergeKey }) {
     (b) =>
       String(b.vehicleType || "").toUpperCase() === "HALF" &&
       String(b.mergeKey || "") === String(mergeKey) &&
-      String(b.slotTime || "") === String(time)
+      isPendingOrWaitingStatus(b.status)
   );
 
   const timeCount = timeHalf.length;
@@ -3154,9 +3157,9 @@ await recomputeAndFixMerge({ pk, companyCode, time, mergeKey });
           UpdateExpression:
             "SET totalAmount = if_not_exists(totalAmount,:z) - :a, " +
             "bookingCount = if_not_exists(bookingCount,:z) - :one, " +
-            "updatedAt = :u",
+            "updatedAt = :u"+  "REMOVE blink",
           ConditionExpression:
-            "if_not_exists(totalAmount,:z) >= :a AND if_not_exists(bookingCount,:z) >= :one",
+            "attribute_exists(sk)",
           ExpressionAttributeValues: {
             ":z": 0,
             ":a": amt,
@@ -3176,7 +3179,7 @@ await recomputeAndFixMerge({ pk, companyCode, time, mergeKey });
             "bookingCount = if_not_exists(bookingCount,:z) - :one, " +
             "updatedAt=:u",
           ConditionExpression:
-            "if_not_exists(totalAmount,:z) >= :a AND if_not_exists(bookingCount,:z) >= :one",
+             "attribute_exists(sk)",
           ExpressionAttributeValues: {
             ":z": 0,
             ":a": amt,
