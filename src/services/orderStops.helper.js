@@ -20,12 +20,16 @@ export async function buildOrderStopsFromDistributorId({
   const dist = distRes.Item || null;
 
   const mapUrl = dist?.final_url || dist?.finalUrl || null;
+  const lat = dist?.lat ?? dist?.latitude ?? null;
+  const lng = dist?.lng ?? dist?.longitude ?? null;
 
   return [
     {
       distributorCode: String(distributorId),
       distributorName: distributorName || dist?.agencyName || null,
       mapUrl, // ✅ final_url goes here
+      lat: lat == null ? null : Number(lat),
+      lng: lng == null ? null : Number(lng),
       items: Array.isArray(items) ? items : [],
       reachedAt: null,
       unloadStartAt: null,
