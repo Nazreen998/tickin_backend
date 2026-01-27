@@ -48,7 +48,13 @@ function extractSlotId(out) {
     null
   );
 }
-router.get("/eligible-half-bookings", getEligibleHalfBookingsHandler);
+router.get(
+  "/manager/half-bookings",
+  verifyToken,
+  allowRoles(["MANAGER"]),
+  getEligibleHalfBookingsHandler
+);
+
 router.post("/half-merge/cancel", verifyToken, allowRoles(["MANAGER"]), cancelHalfMerge);
 router.post("/half-merge/confirm", verifyToken, allowRoles(["MANAGER"]), confirmHalfMerge);
 router.get(

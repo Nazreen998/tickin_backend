@@ -3260,7 +3260,7 @@ await recomputeAndFixMerge({ pk, companyCode, time, mergeKey });
           UpdateExpression:
             "SET totalAmount = if_not_exists(totalAmount,:z) - :a, " +
             "bookingCount = if_not_exists(bookingCount,:z) - :one, " +
-            "updatedAt = :u"+  "REMOVE blink",
+             "updatedAt = :u REMOVE blink",
           ConditionExpression:
             "attribute_exists(sk)",
           ExpressionAttributeValues: {
@@ -3335,8 +3335,12 @@ await recomputeAndFixMerge({ pk, companyCode, time, mergeKey });
 
     const finalTotal = Number(after?.Item?.totalAmount || 0);
     const timeBC = Number(after?.Item?.bookingCount || 0);
-
-    const newTripStatus = finalTotal >= threshold ? "READY_FOR_CONFIRM" : "PARTIAL";
+const newTripStatus =
+  timeBC >= 2 && finalTotal >= threshold
+    ? "READY_FOR_CONFIRM"
+    : timeBC >= 2
+    ? "WAITING_MANAGER_CONFIRM"
+    : "PARTIAL";
 
     // if still exists (could be deleted later), update status
     if (after?.Item) {
