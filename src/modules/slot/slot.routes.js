@@ -302,6 +302,9 @@ router.post(
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
+      console.log("🔥 HIT /manager/cancel-booking");
+  console.log("🔥 user:", req.user?.userId, req.user?.role, req.user?.companyCode);
+  console.log("🔥 body:", req.body);
       const user = req.user || {};
       const out = await managerCancelBooking(req.body);
 
@@ -327,6 +330,7 @@ router.post(
 
       return res.json(out);
     } catch (err) {
+       console.error("❌ /manager/cancel-booking ERROR:", err);
       return res.status(400).json({ ok: false, message: err.message });
     }
   }
