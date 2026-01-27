@@ -9,7 +9,7 @@ import {
   managerDisableSlot,
   cancelHalfMerge,
   confirmHalfMerge,
-
+  managerCancelConfirmedMerge,
   managerConfirmMerge,
   managerCancelConfirmedDayMerge,
   managerMoveBookingToMerge,
