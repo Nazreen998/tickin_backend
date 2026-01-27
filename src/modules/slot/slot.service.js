@@ -1931,15 +1931,17 @@ try {
   );
 } catch (_) {}
   return {
-    ok: true,
-    mergeKey,
-    fullOrderId,
-    slotId: finalSlotId,
-    totalAmount: total,
-    status: "FULL",
-    pos: chosenPos,
-    mergedOrderIds,
-  };
+  ok: true,
+  mergeKey,
+  fullOrderId,
+  slotId: finalSlotId,
+  totalAmount: total,
+  status: "FULL",
+  pos: chosenPos,
+  mergedOrderIds: mergedOrderIds || [],
+  resetOrders: [],
+  affectedBookings: bookings.length,
+};
 }
 // ✅ NEW: Confirm DATE-level merge (ignore HALF slotTime; manager chooses targetTime)
 export async function managerConfirmDayMerge({
@@ -2187,10 +2189,9 @@ return {
     status: "FULL",
     pos: chosenPos,
     targetTime,
-    mergedOrderIds,
-    mergedOrderIds: [],
-    resetOrders: [],
-    affectedBookings: 1,
+    mergedOrderIds: mergedOrderIds || [],
+  resetOrders: [],
+  affectedBookings: bookings.length,
   };
 }
 
@@ -2650,18 +2651,16 @@ try {
 } catch (e) {
   console.error("recomputeAndFixMerge failed:", e);
 }
-
-  return {
-    ok: true,
-    message: "✅ Confirmed merge cancelled. Rebook again from start.",
-    mergeKey,
-    pos,
-    affectedBookings: halfBookings.length,
-    cancelledBy: String(managerId || "MANAGER"),
-    mergedOrderIds: [],
-      resetOrders: [],
-      affectedBookings: 1,
-  };
+return {
+  ok: true,
+  message: "✅ Confirmed merge cancelled. Rebook again from start.",
+  mergeKey,
+  pos,
+  cancelledBy: String(managerId || "MANAGER"),
+  mergedOrderIds: [],
+  resetOrders: [],                 // or mergedOrderIds if you want
+  affectedBookings: halfBookings.length,
+};
 }
 /**Day Merge */
 export async function managerCancelConfirmedDayMerge({
@@ -2807,18 +2806,16 @@ export async function managerCancelConfirmedDayMerge({
   }
 
   await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
-
-  return {
-    ok: true,
-    message: "✅ Day-wise confirmed merge cancelled",
-    mergeKey,
-    freedSlot: { time, pos },
-    resetHalfBookings: halfBookings.length,
-    cancelledBy: String(managerId || "MANAGER"),
-    mergedOrderIds: [],
-    resetOrders: [],
-    affectedBookings: 1,
-  };
+return {
+  ok: true,
+  message: "✅ Day-wise confirmed merge cancelled",
+  mergeKey,
+  freedSlot: { time, pos },
+  cancelledBy: String(managerId || "MANAGER"),
+  mergedOrderIds: [],
+  resetOrders: [],
+  affectedBookings: halfBookings.length,
+};
 }
 /* ✅ CANCEL BOOKING */
 export async function managerCancelBooking(payload) {

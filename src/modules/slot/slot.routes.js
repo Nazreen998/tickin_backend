@@ -9,7 +9,7 @@ import {
   managerDisableSlot,
   cancelHalfMerge,
   confirmHalfMerge,
-  getEligibleHalfBookingsHandler,
+
   managerConfirmMerge,
   managerCancelConfirmedDayMerge,
   managerMoveBookingToMerge,
@@ -48,12 +48,6 @@ function extractSlotId(out) {
     null
   );
 }
-router.get(
-  "/manager/half-bookings",
-  verifyToken,
-  allowRoles(["MANAGER"]),
-  getEligibleHalfBookingsHandler
-);
 
 router.post("/half-merge/cancel", verifyToken, allowRoles(["MANAGER"]), cancelHalfMerge);
 router.post("/half-merge/confirm", verifyToken, allowRoles(["MANAGER"]), confirmHalfMerge);
@@ -103,7 +97,7 @@ router.get(
   "/eligible-half-bookings",
   verifyToken,
   allowRoles("MANAGER"),
-  getEligibleHalfBookings
+  getEligibleHalfBookings,
 );
 router.post(
   "/manager/manual-cross-session-merge",
@@ -170,14 +164,15 @@ router.get(
   allowRoles("MASTER", "MANAGER", "SALES OFFICER", "DISTRIBUTOR", "SALESMAN"),
   async (req, res) => {
     try {
-      const { companyCode, date } = req.query;
+const q = req.query || {};
+const companyCode =
+  q.companyCode || q.CompanyCode || q.company_code || req.user?.companyCode;
 
-      if (!companyCode || !date) {
-        return res
-          .status(400)
-          .json({ ok: false, message: "companyCode & date required" });
-      }
+const date = q.date || q.Date;
 
+if (!companyCode || !date) {
+  return res.status(400).json({ ok: false, message: "companyCode & date required" });
+}
       const data = await getSlotGrid({ companyCode, date });
 
       return res.json({
