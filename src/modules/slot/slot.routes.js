@@ -482,6 +482,7 @@ router.post(
         date: req.body.date,
         mergeKey: req.body.mergeKey,       // ex: "LOC#2"
         targetTime: req.body.targetTime,   // ex: "15:00"
+        orderIds: req.body.orderIds || [],
         managerId: user.userId || user.mobile || "MANAGER",
       });
 
