@@ -249,6 +249,10 @@ router.post(
             bookingType: req.body?.slotType || req.body?.type || null,
           },
         });
+        await triggerTimelineNotification({
+  orderId,
+  event: "SLOT_BOOKING",
+});
       }
 
       return res.json(out);
@@ -448,6 +452,7 @@ router.post(
               mergeKey: out?.mergeKey || out?.flowKey || null,
             },
           });
+          
 
           // ✅ optional: ORDER_CONFIRMED also at merge time
           await addTimelineEvent({

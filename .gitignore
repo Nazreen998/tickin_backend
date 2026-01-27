@@ -50,3 +50,7 @@ app.*.map.json
 node_modules
 
 .env
+
+/scripts/migrate_notification_prefs.js
+
+serviceAccountKey.json

@@ -284,6 +284,8 @@ router.get(
     "MANAGER",
     "DISTRIBUTOR",
     "SALES OFFICER",
+    "SALES_OFFICER_VNR",
+    "SALES OFFICER VNR",
     "DRIVER",
     "SALESMAN"
   ),
@@ -299,6 +301,8 @@ router.get(
     "MANAGER",
     "DISTRIBUTOR",
     "SALES OFFICER",
+    "SALES_OFFICER_VNR",
+    "SALES OFFICER VNR",
     "DRIVER",
     "SALESMAN"
   ),

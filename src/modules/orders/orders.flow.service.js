@@ -406,6 +406,10 @@ export const loadingStart = async (req, res) => {
         role: user?.role || "MANAGER",
         data: { flowKey: key },
       });
+      await triggerTimelineNotification({
+  orderId: oid,
+  event: "LOADING_STARTED",
+});
     }
 
     return res.json({
@@ -465,6 +469,10 @@ export const loadingEnd = async (req, res) => {
         role: user?.role || "MANAGER",
         data: { flowKey: key },
       });
+      await triggerTimelineNotification({
+  orderId: oid,
+  event: "LOADING_COMPLETED",
+});
     }
 
     return res.json({
@@ -585,6 +593,10 @@ export const assignDriver = async (req, res) => {
           vehicleNo: vehicleNo || null,
         },
       });
+      await triggerTimelineNotification({
+  orderId: oid,
+  event: "DRIVER_ASSIGNED",
+});
     }
 
     return res.json({
