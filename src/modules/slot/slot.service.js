@@ -566,7 +566,6 @@ export async function getSlotGrid({ companyCode, date }) {
         String(o.tripStatus || "").toUpperCase() !== "FULL"
     )
     .map((m) => {
-      // derive time from record / sk
       let time = m.time;
       if (!time) {
         try {
@@ -574,7 +573,6 @@ export async function getSlotGrid({ companyCode, date }) {
         } catch (_) {}
       }
 
-      // derive mergeKey from record / sk
       let mergeKey = m.mergeKey;
       if (!mergeKey) {
         try {
@@ -582,16 +580,12 @@ export async function getSlotGrid({ companyCode, date }) {
         } catch (_) {}
       }
 
-      if (!time || !mergeKey) return null;
-
-      // ✅ IMPORTANT FIX:
-      // Time tile must show only bookings of SAME TIME + SAME mergeKey
       const participants = allBookings
         .filter(
           (b) =>
             String(b.vehicleType || "").toUpperCase() === "HALF" &&
             String(b.mergeKey || "") === String(mergeKey) &&
-            String(b.slotTime || "") === String(time) && // ✅ FIXED
+            String(b.slotTime || "") === String(time) &&   // ✅ ADD THIS
             isPendingOrWaitingStatus(b.status)
         )
         .map((b) => ({
@@ -604,20 +598,15 @@ export async function getSlotGrid({ companyCode, date }) {
           lng: b.lng,
         }));
 
-      // If no participants -> remove the tile
-      if (participants.length === 0) return null;
+      if (participants.length === 0) return null; // 🧹 delete empty
 
-      const totalAmount = participants.reduce((s, p) => s + Number(p.amount || 0), 0);
+      const totalAmount = participants.reduce((s, p) => s + p.amount, 0);
 
-      // ✅ Use consistent backend statuses
-      // - READY_FOR_CONFIRM (>=2 + >=threshold)
-      // - WAITING_MANAGER_CONFIRM (>=2 but below threshold)
-      // - PARTIAL (<2)
       const tripStatus =
         participants.length >= 2 && totalAmount >= rules.threshold
           ? "READY_FOR_CONFIRM"
           : participants.length >= 2
-          ? "WAITING_MANAGER_CONFIRM"
+          ? "WAITING"
           : "PARTIAL";
 
       let distanceKm = null;
@@ -625,7 +614,9 @@ export async function getSlotGrid({ companyCode, date }) {
         const a = participants[0];
         const b = participants[1];
         if (a.lat && a.lng && b.lat && b.lng) {
-          distanceKm = Number(haversineKm(a.lat, a.lng, b.lat, b.lng).toFixed(2));
+          distanceKm = Number(
+            haversineKm(a.lat, a.lng, b.lat, b.lng).toFixed(2)
+          );
         }
       }
 
@@ -639,7 +630,6 @@ export async function getSlotGrid({ companyCode, date }) {
         bookingCount: participants.length,
         totalAmount,
         distanceKm,
-        blink: tripStatus !== "PARTIAL", // optional: show blink only when actionable
       };
     })
     .filter(Boolean);
@@ -654,10 +644,9 @@ export async function getSlotGrid({ companyCode, date }) {
         o.blink === true
     )
     .map((d) => {
-      const mergeKey = d.mergeKey || String(d.sk).split("MERGE_DAY#KEY#")[1];
-      if (!mergeKey) return null;
+      const mergeKey =
+        d.mergeKey || String(d.sk).split("MERGE_DAY#KEY#")[1];
 
-      // DAY tile = ANY TIME bookings for same mergeKey
       const participants = allBookings
         .filter(
           (b) =>
@@ -678,7 +667,7 @@ export async function getSlotGrid({ companyCode, date }) {
 
       if (participants.length < 2) return null;
 
-      const totalAmount = participants.reduce((s, p) => s + Number(p.amount || 0), 0);
+      const totalAmount = participants.reduce((s, p) => s + p.amount, 0);
 
       return {
         ...d,
@@ -687,7 +676,8 @@ export async function getSlotGrid({ companyCode, date }) {
         participants,
         bookingCount: participants.length,
         totalAmount,
-        tripStatus: totalAmount >= rules.threshold ? "READY_FOR_CONFIRM" : "WAITING_MANAGER_CONFIRM",
+        tripStatus:
+          totalAmount >= rules.threshold ? "READY" : "WAITING",
       };
     })
     .filter(Boolean);
@@ -724,6 +714,7 @@ export async function getSlotGrid({ companyCode, date }) {
     },
   };
 }
+
 export async function getAvailableFullTimes({ companyCode, date }) {
   validateSlotDate(date);
 
