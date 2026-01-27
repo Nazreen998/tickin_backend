@@ -69,7 +69,7 @@ const ELIGIBLE_STATUSES = [
 // --- HALF merge: cancel ---
 export async function cancelHalfMerge(req, res) {
   try {
-    const { date, time, mergeKey, mode } = req.body;
+    const { date, time, mergeKey, orderIds = [], mode } = req.body;
     const companyCode = req.user?.companyCode || "VAGR_IT";
     const managerId = req.user?.userId || req.user?.id || "MANAGER";
 
@@ -77,7 +77,7 @@ export async function cancelHalfMerge(req, res) {
       return res.status(400).json({ ok: false, message: "date, mergeKey required" });
     }
 
-    // DAY confirmed cancel
+    // ✅ DAY-level cancel (already confirmed FULL)
     if (String(mode || "").toUpperCase() === "DAY") {
       const out = await managerCancelConfirmedDayMerge({
         companyCode,
@@ -88,20 +88,31 @@ export async function cancelHalfMerge(req, res) {
       return res.json(out);
     }
 
-    // TIME confirmed cancel
-    if (!time) {
-      return res.status(400).json({ ok: false, message: "time required for TIME cancel" });
+    // ✅ TIME-level / ORDER-level HALF cancel
+    if (!Array.isArray(orderIds) || orderIds.length === 0) {
+      return res.status(400).json({ ok: false, message: "orderIds required" });
     }
 
-    const out = await managerCancelConfirmedMerge({
-      companyCode,
-      date,
-      time,
-      mergeKey,
-      managerId,
-    });
+    const results = [];
 
-    return res.json(out);
+    for (const orderId of orderIds) {
+      const out = await managerCancelBooking({
+        companyCode,
+        date,
+        time,
+        mergeKey,
+        orderId,
+        managerId,
+      });
+      results.push(out);
+    }
+
+    return res.json({
+      ok: true,
+      cancelledOrders: orderIds,
+      count: orderIds.length,
+      results,
+    });
   } catch (err) {
     console.error("cancelHalfMerge error:", err);
     return res.status(500).json({ ok: false, message: err.message });
