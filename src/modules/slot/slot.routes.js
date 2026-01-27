@@ -31,6 +31,7 @@ import {
 // ✅ NEW: Slot Timeline writer
 import { requireAuth as auth } from "../../middleware/auth.middleware.js";
 import { addTimelineEvent, addSlotTimelineEvent } from "../timeline/timeline.helper.js";
+import { triggerTimelineNotification } from "../../services/notification.service.js";
 const router = express.Router();
 
 /* ✅ helper: extract slotId safely from any response */
