@@ -31,6 +31,28 @@ const getISTNow = () =>
     second: "2-digit",
     hour12: true,
   });
+  
+  /**
+  Helper – get all dates in month (IST)
+ **/
+  const getMonthDates = (year, month) => {
+  const dates = [];
+  const d = new Date(year, month - 1, 1);
+
+  while (d.getMonth() === month - 1) {
+    dates.push(
+      d.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" })
+    );
+    d.setDate(d.getDate() + 1);
+  }
+  return dates;
+};
+
+const isSunday = (dateStr) => {
+  const d = new Date(dateStr);
+  return d.getDay() === 0; // Sunday
+};
+
 
 /**
  * GET /attendance/dashboard/today
@@ -157,6 +179,66 @@ export const weeklySummary = async (req, res) => {
     absentDays: 6 - u.presentDays,
     totalAmount: u.totalBata + u.nightAllowance,
     visitedOffice2: u.office2Visits > 0 ? "YES" : "NO",
+  }));
+
+  res.json({ ok: true, data: result });
+};
+
+/**
+ * GET /attendance/dashboard/monthly-summary
+ */
+export const monthlySummary = async (req, res) => {
+  const { month } = req.query; // YYYY-MM
+
+  if (!month) {
+    return res.json({ ok: false, error: "month_required" });
+  }
+
+  const [year, m] = month.split("-").map(Number);
+  const dates = getMonthDates(year, m);
+
+  const users = {};
+  let workingDays = 0;
+
+  for (const date of dates) {
+    if (isSunday(date)) continue; // 🚫 Skip Sunday
+    workingDays++;
+
+    const params = {
+      TableName: TABLE,
+      IndexName: "GSI1",
+      KeyConditionExpression: "GSI1PK = :pk",
+      ExpressionAttributeValues: {
+        ":pk": `DATE#${date}`,
+      },
+      ProjectionExpression:
+        "PK, userName, #r, attendanceRole",
+      ExpressionAttributeNames: {
+        "#r": "role",
+      },
+    };
+
+    const data = await ddb.send(new QueryCommand(params));
+
+    for (const item of data.Items || []) {
+      const uid = item.PK;
+
+      if (!users[uid]) {
+        users[uid] = {
+          name: item.userName,
+          role: item.attendanceRole || item.role,
+          presentDays: 0,
+        };
+      }
+
+      users[uid].presentDays++;
+    }
+  }
+
+  const result = Object.values(users).map((u) => ({
+    ...u,
+    totalDays: workingDays,
+    absentDays: workingDays - u.presentDays,
   }));
 
   res.json({ ok: true, data: result });
