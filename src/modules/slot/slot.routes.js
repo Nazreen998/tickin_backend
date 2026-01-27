@@ -9,7 +9,7 @@ import {
   managerDisableSlot,
   cancelHalfMerge,
   confirmHalfMerge,
-  getEligibleHalfBookingsHandler,
+  managerCancelConfirmedMerge,
   managerConfirmMerge,
   managerCancelConfirmedDayMerge,
   managerMoveBookingToMerge,
@@ -49,7 +49,7 @@ function extractSlotId(out) {
     null
   );
 }
-router.get("/eligible-half-bookings", getEligibleHalfBookingsHandler);
+
 router.post("/half-merge/cancel", verifyToken, allowRoles(["MANAGER"]), cancelHalfMerge);
 router.post("/half-merge/confirm", verifyToken, allowRoles(["MANAGER"]), confirmHalfMerge);
 router.get(
@@ -98,7 +98,7 @@ router.get(
   "/eligible-half-bookings",
   verifyToken,
   allowRoles("MANAGER"),
-  getEligibleHalfBookings
+  getEligibleHalfBookings,
 );
 router.post(
   "/manager/manual-cross-session-merge",
@@ -165,14 +165,15 @@ router.get(
   allowRoles("MASTER", "MANAGER", "SALES OFFICER", "DISTRIBUTOR", "SALESMAN"),
   async (req, res) => {
     try {
-      const { companyCode, date } = req.query;
+const q = req.query || {};
+const companyCode =
+  q.companyCode || q.CompanyCode || q.company_code || req.user?.companyCode;
 
-      if (!companyCode || !date) {
-        return res
-          .status(400)
-          .json({ ok: false, message: "companyCode & date required" });
-      }
+const date = q.date || q.Date;
 
+if (!companyCode || !date) {
+  return res.status(400).json({ ok: false, message: "companyCode & date required" });
+}
       const data = await getSlotGrid({ companyCode, date });
 
       return res.json({
@@ -306,6 +307,9 @@ router.post(
   allowRoles("MANAGER"),
   async (req, res) => {
     try {
+      console.log("🔥 HIT /manager/cancel-booking");
+  console.log("🔥 user:", req.user?.userId, req.user?.role, req.user?.companyCode);
+  console.log("🔥 body:", req.body);
       const user = req.user || {};
       const out = await managerCancelBooking(req.body);
 
@@ -331,6 +335,7 @@ router.post(
 
       return res.json(out);
     } catch (err) {
+       console.error("❌ /manager/cancel-booking ERROR:", err);
       return res.status(400).json({ ok: false, message: err.message });
     }
   }
@@ -487,6 +492,7 @@ router.post(
         date: req.body.date,
         mergeKey: req.body.mergeKey,       // ex: "LOC#2"
         targetTime: req.body.targetTime,   // ex: "15:00"
+        orderIds: req.body.orderIds || [],
         managerId: user.userId || user.mobile || "MANAGER",
       });
 
