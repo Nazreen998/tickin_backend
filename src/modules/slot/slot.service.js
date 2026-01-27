@@ -555,6 +555,61 @@ export async function getSlotGrid({ companyCode, date }) {
 
     return merged;
   });
+// =========================================================
+// 🟠 TIME-LEVEL MERGE SLOTS (STRICT: same time + same location)
+// =========================================================
+const mergeSlots = overrides
+  .filter(
+    (o) =>
+      String(o.sk || "").startsWith("MERGE_SLOT#") &&
+      String(o.tripStatus || "").toUpperCase() !== "FULL"
+  )
+  .map((m) => {
+    let time = m.time || String(m.sk).split("#")[1];
+    let mergeKey = m.mergeKey || String(m.sk).split("#KEY#")[1];
+
+    const participants = allBookings.filter(
+      (b) =>
+        String(b.vehicleType || "").toUpperCase() === "HALF" &&
+        String(b.mergeKey || "") === String(mergeKey) &&
+        String(b.slotTime || "") === String(time) &&
+        isPendingOrWaitingStatus(b.status)
+    );
+
+    if (participants.length === 0) return null;
+
+    const totalAmount = participants.reduce(
+      (s, b) => s + Number(b.amount || 0),
+      0
+    );
+
+    const tripStatus =
+      participants.length >= 2 && totalAmount >= rules.threshold
+        ? "READY_FOR_CONFIRM"
+        : participants.length >= 2
+        ? "WAITING_MANAGER_CONFIRM"
+        : "PARTIAL";
+
+    return {
+      ...m,
+      time,
+      mergeKey,
+      vehicleType: "HALF",
+      participants: participants.map((b) => ({
+        distributorName: b.distributorName,
+        distributorCode: b.distributorCode,
+        amount: Number(b.amount || 0),
+        orderId: b.orderId,
+        bookingSk: b.sk,
+        lat: b.lat,
+        lng: b.lng,
+      })),
+      bookingCount: participants.length,
+      totalAmount,
+      tripStatus,
+    };
+  })
+  .filter(Boolean);
 
   // =========================================================
   // 🔵 DAY-LEVEL MERGE (LOCATION BASED – ONLY)
@@ -631,7 +686,7 @@ export async function getSlotGrid({ companyCode, date }) {
 
   // ---------- FINAL RESPONSE ----------
   return {
-    slots: [finalSlots],          // ✅ ONLY FULL SLOTS
+    slots: [finalSlots,mergeSlots],          // ✅ ONLY FULL SLOTS
     dayMergeGroups,               // ✅ ONLY DAY MERGE
     waitingHalfBookings,
     rules: {
