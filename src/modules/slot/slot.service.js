@@ -2188,6 +2188,9 @@ return {
     pos: chosenPos,
     targetTime,
     mergedOrderIds,
+    mergedOrderIds: [],
+    resetOrders: [],
+    affectedBookings: 1,
   };
 }
 
@@ -2655,9 +2658,11 @@ try {
     pos,
     affectedBookings: halfBookings.length,
     cancelledBy: String(managerId || "MANAGER"),
+    mergedOrderIds: [],
+      resetOrders: [],
+      affectedBookings: 1,
   };
 }
-
 /**Day Merge */
 export async function managerCancelConfirmedDayMerge({
   companyCode,
@@ -2810,10 +2815,11 @@ export async function managerCancelConfirmedDayMerge({
     freedSlot: { time, pos },
     resetHalfBookings: halfBookings.length,
     cancelledBy: String(managerId || "MANAGER"),
+    mergedOrderIds: [],
+    resetOrders: [],
+    affectedBookings: 1,
   };
 }
-
-/* ✅ CANCEL BOOKING */
 /* ✅ CANCEL BOOKING */
 export async function managerCancelBooking(payload) {
   let {
@@ -3416,6 +3422,9 @@ const newTripStatus =
       finalTotal,
       timeBookingCount: timeBC,
       dayBookingCount: dayBC,
+      mergedOrderIds: [],
+      resetOrders: [],
+      affectedBookings: 1,
     };
   }
 
