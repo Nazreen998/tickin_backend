@@ -1684,7 +1684,7 @@ export async function managerConfirmMerge({
   );
 
   const item = res.Item;
-  if (!item) throw new Error("Merge slot not found");
+  if (!item) throw new Error("Merge slot not found. Try DAY merge confirm");
 
   const tripStatus = String(item.tripStatus || "PARTIAL").toUpperCase();
   if (tripStatus === "FULL" || item.confirmedAt) {
@@ -1958,8 +1958,7 @@ export async function managerConfirmDayMerge({
     (b) =>
       String(b.vehicleType || "").toUpperCase() === "HALF" &&
       String(b.mergeKey || "") === String(mergeKey) &&
-      orderIds.includes(String(b.orderId)) &&
-      isPendingOrWaitingStatus(b.status)
+      orderIds.includes(String(b.orderId))
   );
 
   if (bookings.length < 2) {
