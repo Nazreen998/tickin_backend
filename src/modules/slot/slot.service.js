@@ -1675,7 +1675,7 @@ export async function managerConfirmMerge({
   const threshold = rules.threshold;
 
   const pk = pkFor(companyCode, date);
-  const mergeSk = skForMergeSlot(time, mergeKey);
+  const mergeSk = skForMergeSlot(mergeKey);
 
   const res = await ddb.send(
     new GetCommand({
