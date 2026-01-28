@@ -63,7 +63,18 @@ export const assignCompany = async (req, res) => {
  */
 export const addPlayerId = async (req, res) => {
   try {
-    const mobile = req.user.mobile;
+    let mobile = req.user.mobile;
+
+    if (!mobile && req.user.pk?.includes("#")) {
+      mobile = req.user.pk.split("#")[1];
+    }
+
+    if (!mobile) {
+      return res.status(400).json({
+        ok: false,
+        message: "mobile not found in token",
+      });
+    }
     const { playerId } = req.body;
 
     if (!playerId) {
