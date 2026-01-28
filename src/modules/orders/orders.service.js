@@ -5,7 +5,6 @@ import {
   QueryCommand,
   GetCommand,
 } from "@aws-sdk/lib-dynamodb";
-import { triggerTimelineNotification } from "../../services/notification.service.js";
 import crypto from "crypto";
 import { v4 as uuidv4 } from "uuid";
 
@@ -719,10 +718,7 @@ export const confirmOrder = async (req, res) => {
       by: user.mobile,
       extra: { role: user.role, note: "Order confirmed" },
     });
-    await triggerTimelineNotification({
-    orderId,  
-    event: "ORDER_CONFIRMED",
-    });
+    
 
     // ✅ 3) Slot booking (if slot data provided)
     let slotBooked = false;
