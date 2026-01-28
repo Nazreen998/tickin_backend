@@ -149,6 +149,7 @@ export async function confirmHalfMerge(req, res) {
 
     // ✅ TIME-level confirm (orange tile)
     if (!time) {
+      delete q.time;
       return res.status(400).json({ ok: false, message: "time is required for TIME confirm" });
     }
 
@@ -1674,7 +1675,7 @@ export async function managerConfirmMerge({
   const threshold = rules.threshold;
 
   const pk = pkFor(companyCode, date);
-  const mergeSk = skForMergeSlot(time, mergeKey);
+  const mergeSk = skForMergeSlot(mergeKey);
 
   const res = await ddb.send(
     new GetCommand({
@@ -1684,7 +1685,7 @@ export async function managerConfirmMerge({
   );
 
   const item = res.Item;
-  if (!item) throw new Error("Merge slot not found");
+  if (!item) throw new Error("Merge slot not found. Try DAY merge confirm");
 
   const tripStatus = String(item.tripStatus || "PARTIAL").toUpperCase();
   if (tripStatus === "FULL" || item.confirmedAt) {
@@ -1706,7 +1707,6 @@ export async function managerConfirmMerge({
   const bookings = (allBookingsRes.Items || []).filter(
     (b) =>
       String(b.mergeKey || "") === String(mergeKey) &&
-      String(b.slotTime || "") === String(time) &&
       String(b.vehicleType || "").toUpperCase() === "HALF" &&
       isPendingOrWaitingStatus(b.status)
   );
@@ -1959,8 +1959,7 @@ export async function managerConfirmDayMerge({
     (b) =>
       String(b.vehicleType || "").toUpperCase() === "HALF" &&
       String(b.mergeKey || "") === String(mergeKey) &&
-      orderIds.includes(String(b.orderId)) &&
-      isPendingOrWaitingStatus(b.status)
+      orderIds.includes(String(b.orderId))
   );
 
   if (bookings.length < 2) {
@@ -3430,11 +3429,11 @@ export async function deleteOrderEverywhere({ companyCode, orderId, managerId })
 }
 export const getEligibleHalfBookings = async (q) => {
   const { date, mergeKey, time } = q || {};
+
   if (!date) throw new Error("date is required");
   if (!mergeKey) throw new Error("mergeKey is required");
   if (!time) throw new Error("time is required");
 
-  // NOTE: mergeKey exact match ஆகணும் (KEY#LOC#1 / 5306 etc)
   const pk = `COMPANY#VAGR_IT#DATE#${date}`;
 
   const res = await ddb.send(
@@ -3457,13 +3456,8 @@ export const getEligibleHalfBookings = async (q) => {
     })
   );
 
-  return {
-    ok: true,
-    items: res.Items || [],
-    count: (res.Items || []).length,
-  };
+  return res.Items || [];   // ✅ ONLY ARRAY
 };
-
 /* ✅ DISABLE SLOT */
 export async function managerDisableSlot({
   companyCode,
