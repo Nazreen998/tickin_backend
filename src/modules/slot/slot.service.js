@@ -1569,6 +1569,31 @@ await ddb.send(
     },
   })
 );
+// 🔥 ENSURE DAY-LEVEL MERGE SLOT EXISTS (MANDATORY)
+const dayMergeSk = skForMergeDay(mergeKey);
+
+const dayMergeRes = await ddb.send(
+  new GetCommand({
+    TableName: TABLE_CAPACITY,
+    Key: { pk, sk: dayMergeSk },
+  })
+);
+
+if (!dayMergeRes.Item) {
+  await ddb.send(
+    new PutCommand({
+      TableName: TABLE_CAPACITY,
+      Item: {
+        pk,
+        sk: dayMergeSk,
+        mergeKey,
+        tripStatus: "PARTIAL",
+        blink: true,
+        createdAt: new Date().toISOString(),
+      },
+    })
+  );
+}
 
 return {
   ok: true,
