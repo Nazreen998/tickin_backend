@@ -1,5 +1,6 @@
 import express from "express";
 import { getDrivers } from "./users.service.js";
+import { verifyToken } from "../../middleware/auth.middleware.js";
 
 const router = express.Router();
 
