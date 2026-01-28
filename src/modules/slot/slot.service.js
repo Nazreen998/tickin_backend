@@ -1706,7 +1706,6 @@ export async function managerConfirmMerge({
   const bookings = (allBookingsRes.Items || []).filter(
     (b) =>
       String(b.mergeKey || "") === String(mergeKey) &&
-      String(b.slotTime || "") === String(time) &&
       String(b.vehicleType || "").toUpperCase() === "HALF" &&
       isPendingOrWaitingStatus(b.status)
   );
