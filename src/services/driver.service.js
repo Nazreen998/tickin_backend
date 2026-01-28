@@ -2,7 +2,6 @@ import { ddb } from "../config/dynamo.js";
 import { GetCommand, UpdateCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { validateTransition } from "../utils/driverTransitions.js";
 import { addTimelineEvent } from "../modules/timeline/timeline.helper.js";
-import { triggerTimelineNotification } from "./notification.service.js";
 
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const DRIVER_GSI = "GSI_DRIVER_ASSIGNED";
@@ -347,12 +346,6 @@ export async function updateDriverStatus({
       currentLat,
       currentLng,
     },
-  });
-  // 🔔 PUSH TRIGGER HERE
-  await triggerTimelineNotification({
-    users,   // already resolved users
-    order: after,
-    event: desired,
   });
   return {
     ok: true,
