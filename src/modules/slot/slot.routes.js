@@ -13,6 +13,7 @@ import {
   managerConfirmMerge,
   managerCancelConfirmedDayMerge,
   managerMoveBookingToMerge,
+  getEligibleHalfBookingsHandler,
   getWaitingHalfBookingsByDate,
   getBlinkGroupsByDateLocation,
   managerConfirmDayMerge,
@@ -97,7 +98,7 @@ router.get(
   "/eligible-half-bookings",
   verifyToken,
   allowRoles("MANAGER"),
-  getEligibleHalfBookings,
+  getEligibleHalfBookingsHandler,
 );
 router.post(
   "/manager/manual-cross-session-merge",
