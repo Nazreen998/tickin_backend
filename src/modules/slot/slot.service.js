@@ -1755,7 +1755,6 @@ const displayName =
     bookings
       .map((b) => String(b.distributorCode || "").trim())
       .filter(Boolean)[0] || "MERGE";
-
   // ✅ Create FULL master OrderId
   const fullOrderId = `ORD_FULL_${uuidv4().slice(0, 8)}`;
   const mergedOrderIds = bookings.map((b) => String(b.orderId)).filter(Boolean);
@@ -1797,7 +1796,39 @@ const displayName =
       },
     })
   );
+// 🔥 CLOSE ALL TIME-LEVEL HALF MERGE SLOTS FOR THIS MERGEKEY
+const halfMergeSlots = await ddb.send(
+  new QueryCommand({
+    TableName: TABLE_CAPACITY,
+    KeyConditionExpression: "pk = :pk AND begins_with(sk, :sk)",
+    ExpressionAttributeValues: {
+      ":pk": pk,
+      ":sk": `MERGE#`, // all merge slots
+    },
+  })
+);
 
+for (const m of halfMergeSlots.Items || []) {
+  if (String(m.mergeKey) !== String(mergeKey)) continue;
+
+  // Skip DAY-level merge (already updated)
+  if (m.sk === skForMergeDay(mergeKey)) continue;
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: TABLE_CAPACITY,
+      Key: { pk, sk: m.sk },
+      UpdateExpression:
+        "SET tripStatus = :s, blink = :b, confirmedAt = :t, confirmedBy = :m",
+      ExpressionAttributeValues: {
+        ":s": "FULL",
+        ":b": false,
+        ":t": new Date().toISOString(),
+        ":m": String(managerId || "MANAGER"),
+      },
+    })
+  );
+}
   // ✅ Create FULL booking record (IMPORTANT FIX for UI)
   const fullBookingSk = skForBooking(time, "FULL", chosenPos, mergeKey);
 
