@@ -52,3 +52,11 @@ node_modules
 .env
 
 serviceAccountKey.json
+
+onesignal
+
+scripts/migrate_notification_prefs.js
+
+scripts/testPush.js
+
+scripts/migrate_add_player_ids.js
