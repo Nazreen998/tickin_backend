@@ -5,7 +5,6 @@ import {
   QueryCommand,
   GetCommand,
 } from "@aws-sdk/lib-dynamodb";
-import { triggerTimelineNotification } from "../../services/notification.service.js";
 import crypto from "crypto";
 import { v4 as uuidv4 } from "uuid";
 
