@@ -35,7 +35,7 @@ export const getSlotConfirmedOrders = async (req, res) => {
     const bookingsRes = await ddb.send(
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
-        FilterExpression: "#pk = :pk AND #st = :c",
+        FilterExpression: "#pk = :pk AND (#st = :c OR #st = :m)",
         ExpressionAttributeNames: {
           "#pk": "pk",
           "#st": "status",
@@ -43,6 +43,7 @@ export const getSlotConfirmedOrders = async (req, res) => {
         ExpressionAttributeValues: {
           ":pk": pk,
           ":c": "CONFIRMED",
+           ":m": "MERGED",
         },
       })
     );
@@ -80,7 +81,14 @@ for (const order of ordersMeta) {
 if (!oid) continue;
   const booking = bookingByOrderId[oid];
   if (!booking) continue;
-
+// ❌ HARD BLOCK: slot cancelled → do not show
+if (
+  order.slotBooked === false &&
+  !booking.slotId &&
+  !booking.mergedIntoOrderId
+) {
+  continue;
+}
   // ✅ choose flowKey
   const masterId =
     (order.mergedIntoOrderId && String(order.mergedIntoOrderId).startsWith("ORD_FULL_"))
@@ -159,7 +167,8 @@ if (!oid) continue;
 const cleanedOrders = finalOrders.filter((o) => {
   const qty = Number(o.totalQty || o.qty || o.quantity || 0);
   const fk = String(o.flowKey || "");
-  if (qty <= 0) return false;
+  if (qty <= 0 && !fk.startsWith("ORD_FULL_")) return false;
+
   if (fk.startsWith("LOC#")) return false;
   return true;
 });
