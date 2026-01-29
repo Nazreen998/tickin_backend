@@ -324,7 +324,11 @@ export const confirmDraftOrder = async (req, res) => {
     }
 
     if (order.status !== "DRAFT") {
-      return res.status(403).json({ message: "Order already confirmed" });
+     return res.status(403).json({
+  ok: false,
+  message: "Order already confirmed",
+});
+
     }
 
     // ✅ CHANGE HERE
