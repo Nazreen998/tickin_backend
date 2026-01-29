@@ -321,9 +321,11 @@ function isConfirmedStatus(st) {
 function pkFor(companyCode, date) {
   return `COMPANY#${companyCode}#DATE#${date}`;
 }
+
 function skForSlot(time, vehicleType, pos) {
   return `SLOT#${time}#TYPE#${vehicleType}#POS#${pos}`;
 }
+
 function skForBooking(time, vehicleType, pos, userId) {
   return `BOOKING#${time}#TYPE#${vehicleType}#POS#${pos}#USER#${userId}`;
 }
@@ -1382,31 +1384,6 @@ const mergeKey = `LOC#${rawLocationId}`;
 // ✅ Step 2: TIME-level merge slot sk + DAY-level sk
 const mergeSk = skForMergeSlot(time, mergeKey);      // ex: MERGE#TIME#.. (your helper)
 const daySk = skForMergeDay(mergeKey);              // ex: MERGE_DAY#KEY#LOC#2
-// 🔥 ENSURE DAY-LEVEL MERGE SLOT EXISTS (MANDATORY)
-const dayMergeSk = skForMergeDay(mergeKey);
-
-const dayMergeRes = await ddb.send(
-  new GetCommand({
-    TableName: TABLE_CAPACITY,
-    Key: { pk, sk: dayMergeSk },
-  })
-);
-
-if (!dayMergeRes.Item) {
-  await ddb.send(
-    new PutCommand({
-      TableName: TABLE_CAPACITY,
-      Item: {
-        pk,
-        sk: dayMergeSk,
-        mergeKey,
-        tripStatus: "PARTIAL",
-        blink: true,
-        createdAt: new Date().toISOString(),
-      },
-    })
-  );
-}
 
 // ✅ Step 3: block if already confirmed FULL
 const mergeCap = await ddb.send(

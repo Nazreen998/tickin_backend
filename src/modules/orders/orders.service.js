@@ -5,13 +5,18 @@ import {
   QueryCommand,
   GetCommand,
 } from "@aws-sdk/lib-dynamodb";
+import { triggerTimelineNotification } from "../../services/notification.service.js";
 import crypto from "crypto";
 import { v4 as uuidv4 } from "uuid";
+
 import { ddb } from "../../config/dynamo.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
 import { buildOrderStopsFromDistributorId } from "../../services/orderStops.helper.js";
-import {deductDistributorMonthlyGoalProductWise,addBackDistributorMonthlyGoalProductWise } from "../../services/goals.service.js";
+import {
+  deductDistributorMonthlyGoalProductWise,
+  addBackDistributorMonthlyGoalProductWise,
+} from "../../services/goals.service.js";
 
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const TRIPS_TABLE = process.env.TRIPS_TABLE || "tickin_trips";
@@ -26,13 +31,12 @@ export const getSlotConfirmedOrders = async (req, res) => {
         message: "date is required (YYYY-MM-DD)",
       });
     }
-    const companyCode = "VAGR_IT"; // or derive from token later
-    const pk = pkFor(companyCode, date);
+    const pk = `COMPANY#VAGR_IT#DATE#${date}`;
     // ✅ 1) Fetch CONFIRMED bookings for given date
     const bookingsRes = await ddb.send(
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
-        FilterExpression: "#pk = :pk AND #st IN (:c, :sb)",
+        FilterExpression: "#pk = :pk AND #st = :c",
         ExpressionAttributeNames: {
           "#pk": "pk",
           "#st": "status",
@@ -40,7 +44,6 @@ export const getSlotConfirmedOrders = async (req, res) => {
         ExpressionAttributeValues: {
           ":pk": pk,
           ":c": "CONFIRMED",
-           ":sb": "SLOT_BOOKED"
         },
       })
     );
@@ -99,8 +102,7 @@ if (!oid) continue;
       date,
       slotTime: booking.slotTime,
       pos: booking.slotPos || booking.pos || null,
-      vehicleType: "FULL",
-      slotVehicleType: "FULL",// ✅ if master, show FULL
+      vehicleType: masterId ? "FULL" : booking.vehicleType, // ✅ if master, show FULL
       orderIds: [],
       distributors: [],
       totalQty: 0,
@@ -158,7 +160,8 @@ if (!oid) continue;
 const cleanedOrders = finalOrders.filter((o) => {
   const qty = Number(o.totalQty || o.qty || o.quantity || 0);
   const fk = String(o.flowKey || "");
-  if (qty <= 0) return false;
+  if (qty <= 0 && !fk.startsWith("ORD_FULL_")) return false;
+
   if (fk.startsWith("LOC#")) return false;
   return true;
 });
@@ -717,7 +720,10 @@ export const confirmOrder = async (req, res) => {
       by: user.mobile,
       extra: { role: user.role, note: "Order confirmed" },
     });
-    
+    await triggerTimelineNotification({
+    orderId,  
+    event: "ORDER_CONFIRMED",
+    });
 
     // ✅ 3) Slot booking (if slot data provided)
     let slotBooked = false;
