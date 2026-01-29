@@ -7,7 +7,7 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import crypto from "crypto";
 import { v4 as uuidv4 } from "uuid";
-
+import { dispatchEvent } from "../notifications/dispatchEvent.js";
 import { ddb } from "../../config/dynamo.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
@@ -718,7 +718,17 @@ export const confirmOrder = async (req, res) => {
       by: user.mobile,
       extra: { role: user.role, note: "Order confirmed" },
     });
-    
+    await dispatchEvent(
+      "ORDER_CONFIRMED",
+      {
+        orderNo: order.orderId,
+        distributorName: order.distributorName,
+        amount: order.totalAmount,
+      },
+      {
+        order, // 🔥 VERY IMPORTANT
+      }
+    );
 
     // ✅ 3) Slot booking (if slot data provided)
     let slotBooked = false;
