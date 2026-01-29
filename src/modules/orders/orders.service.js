@@ -81,7 +81,14 @@ for (const order of ordersMeta) {
 if (!oid) continue;
   const booking = bookingByOrderId[oid];
   if (!booking) continue;
-
+// ❌ HARD BLOCK: slot cancelled → do not show
+if (
+  order.slotBooked === false &&
+  !booking.slotId &&
+  !booking.mergedIntoOrderId
+) {
+  continue;
+}
   // ✅ choose flowKey
   const masterId =
     (order.mergedIntoOrderId && String(order.mergedIntoOrderId).startsWith("ORD_FULL_"))
