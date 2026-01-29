@@ -7,15 +7,11 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import crypto from "crypto";
 import { v4 as uuidv4 } from "uuid";
-
 import { ddb } from "../../config/dynamo.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
 import { buildOrderStopsFromDistributorId } from "../../services/orderStops.helper.js";
-import {
-  deductDistributorMonthlyGoalProductWise,
-  addBackDistributorMonthlyGoalProductWise,
-} from "../../services/goals.service.js";
+import {deductDistributorMonthlyGoalProductWise,addBackDistributorMonthlyGoalProductWise } from "../../services/goals.service.js";
 
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const TRIPS_TABLE = process.env.TRIPS_TABLE || "tickin_trips";
@@ -30,7 +26,8 @@ export const getSlotConfirmedOrders = async (req, res) => {
         message: "date is required (YYYY-MM-DD)",
       });
     }
-    const pk = `COMPANY#VAGR_IT#DATE#${date}`;
+    const companyCode = "VAGR_IT"; // or derive from token later
+    const pk = pkFor(companyCode, date);
     // ✅ 1) Fetch CONFIRMED bookings for given date
     const bookingsRes = await ddb.send(
       new ScanCommand({
@@ -102,7 +99,8 @@ if (!oid) continue;
       date,
       slotTime: booking.slotTime,
       pos: booking.slotPos || booking.pos || null,
-      vehicleType: masterId ? "FULL" : booking.vehicleType, // ✅ if master, show FULL
+      vehicleType: "FULL",
+      slotVehicleType: "FULL",// ✅ if master, show FULL
       orderIds: [],
       distributors: [],
       totalQty: 0,

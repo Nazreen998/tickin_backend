@@ -321,11 +321,9 @@ function isConfirmedStatus(st) {
 function pkFor(companyCode, date) {
   return `COMPANY#${companyCode}#DATE#${date}`;
 }
-
 function skForSlot(time, vehicleType, pos) {
   return `SLOT#${time}#TYPE#${vehicleType}#POS#${pos}`;
 }
-
 function skForBooking(time, vehicleType, pos, userId) {
   return `BOOKING#${time}#TYPE#${vehicleType}#POS#${pos}#USER#${userId}`;
 }
