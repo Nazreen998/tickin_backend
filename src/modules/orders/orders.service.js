@@ -121,8 +121,10 @@ export const getSlotConfirmedOrders = async (req, res) => {
       if (masterId) {
         const children = fullChildrenMap[masterId] || [];
         const hasActiveChild = children.some(
-          (b) => b.status === "CONFIRMED" && b.isActive !== false && b.slotId
-        );
+  (b) =>
+    (b.status === "CONFIRMED" || b.status === "MERGED") &&
+    b.isActive !== false
+);
         if (!hasActiveChild) {
           continue; // FULL slot cancelled
         }
@@ -322,7 +324,11 @@ export const confirmDraftOrder = async (req, res) => {
     }
 
     if (order.status !== "DRAFT") {
-      return res.status(403).json({ message: "Order already confirmed" });
+     return res.status(403).json({
+  ok: false,
+  message: "Order already confirmed",
+});
+
     }
 
     // ✅ CHANGE HERE
@@ -797,7 +803,6 @@ export const confirmOrder = async (req, res) => {
       // ✅ Store slot + slotBooked in order
       const now = new Date().toISOString();
 
-// slotId: உங்கள் existing format வேண்டும்னா bookSlot return-ல இருந்து build பண்ணலாம்
 const slotIdValue =
   slotDetails?.bookingId ||
   booked?.bookingId ||
