@@ -121,8 +121,9 @@ export const getSlotConfirmedOrders = async (req, res) => {
       if (masterId) {
         const children = fullChildrenMap[masterId] || [];
         const hasActiveChild = children.some(
-          (b) => b.status === "CONFIRMED" && b.isActive !== false && b.slotId
-        );
+  (b) => b.status === "CONFIRMED" && b.isActive !== false
+);
+
         if (!hasActiveChild) {
           continue; // FULL slot cancelled
         }
