@@ -22,7 +22,7 @@ const TRIPS_TABLE = process.env.TRIPS_TABLE || "tickin_trips";
 const BOOKINGS_TABLE = process.env.BOOKINGS_TABLE || "tickin_slot_bookings";
 
 export const getSlotConfirmedOrders = async (req, res) => {
-    try {
+  try {
     const { date } = req.query;
     if (!date) {
       return res.status(400).json({
@@ -30,8 +30,10 @@ export const getSlotConfirmedOrders = async (req, res) => {
         message: "date is required (YYYY-MM-DD)",
       });
     }
+
     const pk = `COMPANY#VAGR_IT#DATE#${date}`;
-    // ✅ 1) Fetch CONFIRMED bookings for given date
+
+    // 1️⃣ Fetch bookings (CONFIRMED + MERGED only)
     const bookingsRes = await ddb.send(
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
@@ -43,24 +45,25 @@ export const getSlotConfirmedOrders = async (req, res) => {
         ExpressionAttributeValues: {
           ":pk": pk,
           ":c": "CONFIRMED",
-           ":m": "MERGED",
+          ":m": "MERGED",
         },
       })
     );
 
     const bookings = bookingsRes.Items || [];
 
-    // ✅ 2) DEDUPE bookings by orderId (prevents D3 / amount double)
-    const bookingByOrderId = {};
+    // 2️⃣ Group bookings by orderId (keep ALL, not one)
+    const bookingsByOrderId = {};
     for (const b of bookings) {
       const oid = String(b.orderId || "").trim();
       if (!oid) continue;
-      if (!bookingByOrderId[oid]) bookingByOrderId[oid] = b; // keep first occurrence
+      if (!bookingsByOrderId[oid]) bookingsByOrderId[oid] = [];
+      bookingsByOrderId[oid].push(b);
     }
 
-    const orderIds = Object.keys(bookingByOrderId);
+    const orderIds = Object.keys(bookingsByOrderId);
 
-    // ✅ 3) fetch order metas for all orderIds
+    // 3️⃣ Fetch order metas
     const ordersMeta = [];
     for (const orderId of orderIds) {
       const orderRes = await ddb.send(
@@ -71,119 +74,141 @@ export const getSlotConfirmedOrders = async (req, res) => {
       );
       if (orderRes.Item) ordersMeta.push(orderRes.Item);
     }
-// ✅ 4) group by FULL master if merged, else by mergeKey, else by orderId
-const grouped = {};
 
-for (const order of ordersMeta) {
-  const oid =
-  order.orderId ||
-  (order.pk ? String(order.pk).replace("ORDER#", "") : null);
-if (!oid) continue;
-  const booking = bookingByOrderId[oid];
-  if (!booking) continue;
-// ❌ HARD BLOCK: slot cancelled → do not show
-if (
-  order.slotBooked === false &&
-  !booking.slotId &&
-  !booking.mergedIntoOrderId
-) {
-  continue;
-}
-  // ✅ choose flowKey
-  const masterId =
-    (order.mergedIntoOrderId && String(order.mergedIntoOrderId).startsWith("ORD_FULL_"))
-      ? order.mergedIntoOrderId
-      : (booking.mergedIntoOrderId && String(booking.mergedIntoOrderId).startsWith("ORD_FULL_"))
-        ? booking.mergedIntoOrderId
-        : null;
-  let mk = booking.mergeKey || order.mergeKey || null;
-  if (mk && String(mk).startsWith("LOC#")) mk = null;
+    // 4️⃣ Build FULL master → children map
+    const fullChildrenMap = {};
+    for (const list of Object.values(bookingsByOrderId)) {
+      for (const b of list) {
+        if (b.mergedIntoOrderId && String(b.mergedIntoOrderId).startsWith("ORD_FULL_")) {
+          if (!fullChildrenMap[b.mergedIntoOrderId]) {
+            fullChildrenMap[b.mergedIntoOrderId] = [];
+          }
+          fullChildrenMap[b.mergedIntoOrderId].push(b);
+        }
+      }
+    }
 
-  // ✅ priority: ORD_FULL_ > GEO mergeKey > orderId
-  const flowKey = masterId || mk || oid;
+    const grouped = {};
 
-  if (!grouped[flowKey]) {
-    grouped[flowKey] = {
-      flowKey,
-      mergeKey: mk,
+    // 5️⃣ Main grouping loop
+    for (const order of ordersMeta) {
+      const oid =
+        order.orderId ||
+        (order.pk ? String(order.pk).replace("ORDER#", "") : null);
+      if (!oid) continue;
+
+      const bookingList = bookingsByOrderId[oid];
+      if (!bookingList || bookingList.length === 0) continue;
+
+      // pick confirmed booking if exists, else first
+      const booking =
+        bookingList.find((b) => b.status === "CONFIRMED") || bookingList[0];
+
+      // 🚫 HARD BLOCK: cancelled / inactive booking
+      if (booking.status === "CANCELLED" || booking.isActive === false) {
+        continue;
+      }
+
+      // detect FULL master
+      const masterId =
+        (order.mergedIntoOrderId && String(order.mergedIntoOrderId).startsWith("ORD_FULL_"))
+          ? order.mergedIntoOrderId
+          : (booking.mergedIntoOrderId && String(booking.mergedIntoOrderId).startsWith("ORD_FULL_"))
+            ? booking.mergedIntoOrderId
+            : null;
+
+      // 🚫 FULL SLOT CANCEL CHECK (ALL children cancelled)
+      if (masterId) {
+        const children = fullChildrenMap[masterId] || [];
+        const hasActiveChild = children.some(
+          (b) => b.status === "CONFIRMED" && b.isActive !== false && b.slotId
+        );
+        if (!hasActiveChild) {
+          continue; // FULL slot cancelled
+        }
+      }
+
+      let mk = booking.mergeKey || order.mergeKey || null;
+      if (mk && String(mk).startsWith("LOC#")) mk = null;
+
+      const flowKey = masterId || mk || oid;
+
+      if (!grouped[flowKey]) {
+        grouped[flowKey] = {
+          flowKey,
+          mergeKey: mk,
+          date,
+          slotTime: booking.slotTime,
+          pos: booking.slotPos || booking.pos || null,
+          vehicleType: masterId ? "FULL" : booking.vehicleType,
+          orderIds: [],
+          distributors: [],
+          totalQty: 0,
+          grandAmount: 0,
+          status: "CONFIRMED",
+        };
+      }
+
+      if (!grouped[flowKey].orderIds.includes(oid)) {
+        grouped[flowKey].orderIds.push(oid);
+      }
+
+      const already = grouped[flowKey].distributors.some(
+        (d) => d.orderId === oid
+      );
+      if (!already) {
+        grouped[flowKey].distributors.push({
+          orderId: oid,
+          distributorName: booking.distributorName || order.distributorName,
+          distributorId: booking.distributorCode || order.distributorId,
+        });
+      }
+
+      if (!String(oid).startsWith("ORD_FULL_")) {
+        grouped[flowKey].totalQty += Number(order.totalQty || order.qty || 0);
+      }
+
+      grouped[flowKey].grandAmount += Number(booking.amount || 0);
+
+      const st = String(order.status || "CONFIRMED").toUpperCase();
+      if (st !== "CONFIRMED") grouped[flowKey].status = st;
+    }
+
+    // 6️⃣ Final shaping
+    const finalOrders = Object.values(grouped)
+      .filter((o) => {
+        const qty = Number(o.totalQty || 0);
+        if (qty <= 0) return false; // 🚫 even FULL qty 0 removed
+        if (String(o.flowKey).startsWith("LOC#")) return false;
+        return true;
+      })
+      .map((g) => {
+        const d2 = (g.distributors || []).slice(0, 2);
+        const names = d2
+          .map((d, i) => `D${i + 1}: ${d.distributorName || "-"}`)
+          .join(" | ");
+
+        return {
+          ...g,
+          distributors: d2,
+          distributorName: names || "-",
+          totalQty: g.totalQty,
+          grandAmount: g.grandAmount,
+        };
+      });
+
+    return res.json({
+      ok: true,
+      count: finalOrders.length,
       date,
-      slotTime: booking.slotTime,
-      pos: booking.slotPos || booking.pos || null,
-      vehicleType: masterId ? "FULL" : booking.vehicleType, // ✅ if master, show FULL
-      orderIds: [],
-      distributors: [],
-      totalQty: 0,
-      grandAmount: 0,
-      status: "CONFIRMED",
-    };
-  }
-
-  // ✅ unique orderIds
-  if (!grouped[flowKey].orderIds.includes(oid)) {
-    grouped[flowKey].orderIds.push(oid);
-  }
-
-  // ✅ distributors unique by orderId
-  const already = grouped[flowKey].distributors.some((d) => d.orderId === oid);
-  if (!already) {
-    grouped[flowKey].distributors.push({
-      orderId: oid,
-      distributorName: booking.distributorName || order.distributorName,
-      distributorId: booking.distributorCode || order.distributorId,
+      orders: finalOrders,
     });
-  }
-
-  // ✅ Qty from child orders only (ignore ORD_FULL_ meta)
-  if (!String(oid).startsWith("ORD_FULL_")) {
-    grouped[flowKey].totalQty += Number(order.totalQty || order.qty || 0);
-  }
-
-  // ✅ Amount ONLY from booking (already good)
-  grouped[flowKey].grandAmount += Number(booking.amount || 0);
-
-  // ✅ status upgrade if progressed
-  const st = String(order.status || "CONFIRMED").toUpperCase();
-  if (st !== "CONFIRMED") grouped[flowKey].status = st;
-}
-    // ✅ 5) Final shaping: only D1/D2 needed
-    const finalOrders = Object.values(grouped).map((g) => {
-      // keep only first 2 distributors
-      const d2 = (g.distributors || []).slice(0, 2);
-      const names = d2
-        .map((d, i) => `D${i + 1}: ${d.distributorName || "-"}`)
-        .join(" | ");
-
-      return {
-        ...g,
-        distributors: d2,
-        distributorName: names || "-",
-
-        // ✅ keep UI keys as-is
-        grandAmount: g.grandAmount,
-        totalQty: g.totalQty,
-      };
-    });
-// ✅ REMOVE ghost flows (qty 0 or LOC#)
-const cleanedOrders = finalOrders.filter((o) => {
-  const qty = Number(o.totalQty || o.qty || o.quantity || 0);
-  const fk = String(o.flowKey || "");
-  if (qty <= 0 && !fk.startsWith("ORD_FULL_")) return false;
-
-  if (fk.startsWith("LOC#")) return false;
-  return true;
-});
-return res.json({
-  ok: true,
-  count: cleanedOrders.length,
-  date,
-  orders: cleanedOrders,
-});
-
   } catch (err) {
     console.error("getSlotConfirmedOrders error:", err);
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
+
 export async function forceResetOrderSlotMeta(orderId) {
   if (!orderId) throw new Error("orderId required");
 
