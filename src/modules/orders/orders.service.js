@@ -35,7 +35,7 @@ export const getSlotConfirmedOrders = async (req, res) => {
     const bookingsRes = await ddb.send(
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
-        FilterExpression: "#pk = :pk AND #st = :c",
+        FilterExpression: "#pk = :pk AND #st IN (:c, :sb)",
         ExpressionAttributeNames: {
           "#pk": "pk",
           "#st": "status",
@@ -43,6 +43,7 @@ export const getSlotConfirmedOrders = async (req, res) => {
         ExpressionAttributeValues: {
           ":pk": pk,
           ":c": "CONFIRMED",
+           ":sb": "SLOT_BOOKED"
         },
       })
     );
