@@ -3,7 +3,7 @@ import {
   updateDriverStatus,
   validateDriverReach30m,
 } from "../services/driver.service.js";
-
+import { ddb } from "../config/dynamo.js";
 // small helper: accept both currentLat/currentLng OR driverLat/driverLng
 function pickLatLng(body = {}) {
   const lat = body.currentLat ?? body.driverLat ?? body.lat ?? null;
@@ -119,27 +119,36 @@ export async function deleteDriverOrder(req, res) {
     const { driverId } = req.body;
 
     if (!orderId || !driverId) {
-      return res.status(400).json({ ok: false, message: "orderId & driverId required" });
+      return res.status(400).json({
+        ok: false,
+        message: "orderId & driverId required",
+      });
     }
 
     await ddb.send(
       new UpdateCommand({
-        TableName: ORDERS_TABLE,
-        Key: orderKey(orderId),
+        TableName: process.env.ORDERS_TABLE || "tickin_orders",
+        Key: {
+          pk: `ORDER#${orderId}`,
+          sk: "META",
+        },
+        ConditionExpression: "driverId = :d",
         UpdateExpression:
-          "SET deletedByDriver = :t, deletedAt = :d",
-        ConditionExpression: "driverId = :driverId",
+          "SET deletedByDriver = :t, deletedAt = :dt",
         ExpressionAttributeValues: {
+          ":d": String(driverId),
           ":t": true,
-          ":d": new Date().toISOString(),
-          ":driverId": String(driverId),
+          ":dt": new Date().toISOString(),
         },
       })
     );
 
-    return res.json({ ok: true, message: "Order removed from driver list" });
+    return res.json({ ok: true });
   } catch (e) {
-    return res.status(400).json({ ok: false, message: normalizeErrMessage(e) });
+    return res.status(400).json({
+      ok: false,
+      message: e.message || String(e),
+    });
   }
 }
 
