@@ -253,23 +253,18 @@ export const getOrderFlowByKey = async (req, res) => {
       FilterExpression: "mergeKey = :mk",
       ExpressionAttributeValues: { ":mk": flowKey },
     }));
-
     const orders = scanRes.Items || [];
     if (orders.length === 0) return res.status(404).json({ ok: false, message: "No orders found for mergeKey" });
-
     // ✅ Combine items
     const combinedItems = [];
     let totalQty = 0;
     let totalAmount = 0;
     let status = "CONFIRMED";
-
     for (const o of orders) {
       totalQty += Number(o.totalQty || 0);
       totalAmount += Number(o.totalAmount || 0);
-
       const st = String(o.status || "").toUpperCase();
       if (st !== "CONFIRMED") status = st;
-
       (o.items || []).forEach((it) => {
         combinedItems.push({
           ...it,
@@ -277,7 +272,6 @@ export const getOrderFlowByKey = async (req, res) => {
         });
       });
     }
-
     return res.json({
       ok: true,
       flowKey,
@@ -296,7 +290,6 @@ export const getOrderFlowByKey = async (req, res) => {
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
-
 /* ==========================
    ✅ Confirm Draft Order
    DRAFT → PENDING (Salesman)
@@ -305,31 +298,25 @@ export const confirmDraftOrder = async (req, res) => {
   try {
     const { orderId } = req.params;
     const user = req.user;
-
     const existing = await ddb.send(
       new GetCommand({
         TableName: ORDERS_TABLE,
         Key: { pk: `ORDER#${orderId}`, sk: "META" },
       })
     );
-
     if (!existing.Item) {
       return res.status(404).json({ message: "Order not found" });
     }
-
     const order = existing.Item;
-
     if (order.createdBy !== user.mobile) {
       return res.status(403).json({ message: "Only creator can confirm" });
     }
-
     if (order.status !== "DRAFT") {
    return res.status(403).json({
   ok: false,
   message: "Order already confirmed",
 });
-    }
-
+}
     // ✅ CHANGE HERE
     await ddb.send(
       new UpdateCommand({
