@@ -4,6 +4,8 @@ import {
   validateDriverReach30m,
 } from "../services/driver.service.js";
 import { ddb } from "../config/dynamo.js";
+import { UpdateCommand } from "@aws-sdk/lib-dynamodb"; // ✅ ADD THIS
+
 // small helper: accept both currentLat/currentLng OR driverLat/driverLng
 function pickLatLng(body = {}) {
   const lat = body.currentLat ?? body.driverLat ?? body.lat ?? null;
