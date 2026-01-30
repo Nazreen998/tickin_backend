@@ -149,10 +149,10 @@ export async function getDriverOrders(driverId) {
     "WAREHOUSE_REACHED",
     "DELIVERY_COMPLETED",
   ]);
-
-  return (res.Items || []).filter((o) =>
-    allowed.has(String(o.status || "").toUpperCase())
-  );
+return (res.Items || []).filter((o) =>
+  allowed.has(String(o.status || "").toUpperCase()) &&
+  o.deletedByDriver !== true
+);
 }
 
 /* -------- distance validation -------- */

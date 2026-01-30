@@ -3,6 +3,8 @@ import {
   updateDriverStatus,
   validateDriverReach30m,
 } from "../services/driver.service.js";
+import { ddb } from "../config/dynamo.js";
+import { UpdateCommand } from "@aws-sdk/lib-dynamodb"; // ✅ ADD THIS
 
 // small helper: accept both currentLat/currentLng OR driverLat/driverLng
 function pickLatLng(body = {}) {
@@ -113,3 +115,42 @@ export async function updateStatus(req, res) {
     return res.status(400).json({ ok: false, message: normalizeErrMessage(e) });
   }
 }
+export async function deleteDriverOrder(req, res) {
+  try {
+    const { orderId } = req.params;
+    const { driverId } = req.body;
+
+    if (!orderId || !driverId) {
+      return res.status(400).json({
+        ok: false,
+        message: "orderId & driverId required",
+      });
+    }
+
+    await ddb.send(
+      new UpdateCommand({
+        TableName: process.env.ORDERS_TABLE || "tickin_orders",
+        Key: {
+          pk: `ORDER#${orderId}`,
+          sk: "META",
+        },
+        ConditionExpression: "driverId = :d",
+        UpdateExpression:
+          "SET deletedByDriver = :t, deletedAt = :dt",
+        ExpressionAttributeValues: {
+          ":d": String(driverId),
+          ":t": true,
+          ":dt": new Date().toISOString(),
+        },
+      })
+    );
+
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(400).json({
+      ok: false,
+      message: e.message || String(e),
+    });
+  }
+}
+
