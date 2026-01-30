@@ -339,6 +339,17 @@ export const confirmDraftOrder = async (req, res) => {
       by: user.mobile,
       extra: { role: user.role, note: "Draft order confirmed directly" },
     });
+    await dispatchEvent(
+    "ORDER_CONFIRMED",
+    {
+      orderId,
+      orderNo: orderId,
+      distributorName: order.distributorName,
+      amount: order.totalAmount,
+    },
+    { order }
+  );
+
 
     return res.json({
       ok: true,
@@ -516,6 +527,19 @@ const stops = await buildOrderStopsFromDistributorId({
         totalQty,
       },
     });
+    if (finalStatus === "CONFIRMED") {
+      await dispatchEvent(
+        "ORDER_CONFIRMED",
+        {
+          orderId,
+          orderNo: orderId,
+          distributorName,
+          amount: totalAmount,
+        },
+        { order: orderItem }
+      );
+    }
+
 
     return res.json({
       ok: true,

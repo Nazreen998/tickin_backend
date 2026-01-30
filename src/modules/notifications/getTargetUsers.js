@@ -2,75 +2,109 @@ import { ScanCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "../../config/dynamo.js";
 import { EVENT_ROLE_MAP } from "../../config/notificationEvents.js";
 
-const USERS_TABLE = process.env.USERS_TABLE || "tickin_users" ;
+const USERS_TABLE = process.env.USERS_TABLE || "tickin_users";
+const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 
 /**
- * 🔥 Generic target resolver
- * - EVENT_ROLE_MAP based
- * - notificationPrefs respected (Map / List safe)
- * - Order specific users supported
- * - Distributor resolved via distributorCode
+ * 🔥 FINAL Notification Target Resolver
+ * - MANAGER → global
+ * - Others → orders based
+ * - notificationPrefs respected
+ * - duplicates avoided
  */
-export async function getTargetUsers(eventType, context = {}) {
+export async function getTargetUsers(eventType) {
   const allowedRoles = EVENT_ROLE_MAP[eventType];
   if (!allowedRoles) return [];
 
   const usersMap = new Map();
 
   /* --------------------------------------------------
-   * 🔧 helper: extract prefs safely from DynamoDB
+   * 🔧 helper: extract notification prefs safely
    * -------------------------------------------------- */
   const extractPrefs = (user, role) => {
     const raw = user.notificationPrefs?.[role];
     if (!raw) return [];
-
-    // DocumentClient → already array
     if (Array.isArray(raw)) return raw;
-
-    // Low-level DynamoDB format → { L: [{ S: "" }] }
     if (raw.L) return raw.L.map((x) => x.S);
-
     return [];
   };
 
   /* --------------------------------------------------
-   * 1️⃣ GLOBAL USERS (Managers / mapped roles)
+   * 🔧 helper: get user by mobile
    * -------------------------------------------------- */
-  const scanRes = await ddb.send(
-    new ScanCommand({
-      TableName: USERS_TABLE,
-      FilterExpression: "#sk = :sk",
-      ExpressionAttributeNames: {
-        "#sk": "sk",
-      },
-      ExpressionAttributeValues: {
-        ":sk": "PROFILE",
-      },
-    })
-  );
+  const getUserByMobile = async (mobile) => {
+    if (!mobile) return null;
+    const res = await ddb.send(
+      new GetCommand({
+        TableName: USERS_TABLE,
+        Key: { pk: `USER#${mobile}`, sk: "PROFILE" },
+      })
+    );
+    return res.Item;
+  };
 
-  for (const u of scanRes.Items || []) {
-    const role = String(u.role || "").toUpperCase();
-    if (!allowedRoles.includes(role)) continue;
+  /* --------------------------------------------------
+   * 1️⃣ GLOBAL USERS (MANAGER)
+   * -------------------------------------------------- */
+  if (allowedRoles.includes("MANAGER")) {
+    const managerScan = await ddb.send(
+      new ScanCommand({
+        TableName: USERS_TABLE,
+        FilterExpression: "#sk = :sk",
+        ExpressionAttributeNames: {
+          "#sk": "sk",
+        },
+        ExpressionAttributeValues: {
+          ":sk": "PROFILE",
+        },
+      })
+    );
 
-    const prefs = extractPrefs(u, role);
-    if (!(prefs.includes("ALL") || prefs.includes(eventType))) continue;
+    for (const u of managerScan.Items || []) {
+      if (String(u.role) !== "MANAGER") continue;
+      if (!u.playerIds?.length) continue;
 
-    if (u.playerIds?.length) {
+      const prefs = extractPrefs(u, "MANAGER");
+      if (!(prefs.includes("ALL") || prefs.includes(eventType))) continue;
+
       usersMap.set(u.pk, u);
     }
   }
 
   /* --------------------------------------------------
-   * 2️⃣ ORDER SPECIFIC USERS
-   *   - Distributor (via distributorCode)
-   *   - Driver (via driverMobile)
-   *   - Creator (createdBy)
+   * 2️⃣ SCAN ORDERS TABLE
    * -------------------------------------------------- */
-  if (context.order) {
-    const { distributorId, driverMobile, createdBy } = context.order;
+  const orderScan = await ddb.send(
+    new ScanCommand({
+      TableName: ORDERS_TABLE,
+    })
+  );
 
-    /* ---- 2A️⃣ DISTRIBUTOR: distributorCode match ---- */
+  /* --------------------------------------------------
+   * 3️⃣ ORDER BASED USERS
+   * -------------------------------------------------- */
+  for (const order of orderScan.Items || []) {
+    const { distributorId, driverMobile, createdBy } = order;
+
+    /* ---- DRIVER & CREATOR ---- */
+    const mobileUsers = await Promise.all([
+      getUserByMobile(driverMobile),
+      getUserByMobile(createdBy),
+    ]);
+
+    for (const u of mobileUsers) {
+      if (!u?.playerIds?.length) continue;
+
+      const role = String(u.role || "");
+      if (!allowedRoles.includes(role)) continue;
+
+      const prefs = extractPrefs(u, role);
+      if (!(prefs.includes("ALL") || prefs.includes(eventType))) continue;
+
+      usersMap.set(u.pk, u);
+    }
+
+    /* ---- DISTRIBUTOR USERS ---- */
     if (distributorId) {
       const distributorScan = await ddb.send(
         new ScanCommand({
@@ -87,50 +121,21 @@ export async function getTargetUsers(eventType, context = {}) {
       );
 
       for (const u of distributorScan.Items || []) {
-        const role = String(u.role || "").toUpperCase();
+        if (!u.playerIds?.length) continue;
+
+        const role = String(u.role || "");
         if (!allowedRoles.includes(role)) continue;
 
         const prefs = extractPrefs(u, role);
         if (!(prefs.includes("ALL") || prefs.includes(eventType))) continue;
 
-        if (u.playerIds?.length) {
-          usersMap.set(u.pk, u);
-        }
+        usersMap.set(u.pk, u);
       }
-    }
-
-    /* ---- 2B️⃣ DRIVER & CREATOR (mobile based) ---- */
-    const fetchByMobile = async (mobile) => {
-      if (!mobile) return null;
-      const res = await ddb.send(
-        new GetCommand({
-          TableName: USERS_TABLE,
-          Key: { pk: `USER#${mobile}`, sk: "PROFILE" },
-        })
-      );
-      return res.Item;
-    };
-
-    const specialUsers = await Promise.all([
-      fetchByMobile(driverMobile),
-      fetchByMobile(createdBy),
-    ]);
-
-    for (const u of specialUsers) {
-      if (!u?.playerIds?.length) continue;
-
-      const role = String(u.role || "").toUpperCase();
-      if (!allowedRoles.includes(role)) continue;
-
-      const prefs = extractPrefs(u, role);
-      if (!(prefs.includes("ALL") || prefs.includes(eventType))) continue;
-
-      usersMap.set(u.pk, u);
     }
   }
 
   /* --------------------------------------------------
-   * 3️⃣ FINAL UNIQUE USERS
+   * 4️⃣ FINAL UNIQUE USERS
    * -------------------------------------------------- */
   return [...usersMap.values()];
 }
