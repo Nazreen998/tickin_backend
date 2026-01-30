@@ -760,14 +760,14 @@ export const confirmOrder = async (req, res) => {
     await dispatchEvent(
       "ORDER_CONFIRMED",
       {
+        orderId: order.orderId,
         orderNo: order.orderId,
         distributorName: order.distributorName,
         amount: order.totalAmount,
       },
-      {
-        order, // 🔥 VERY IMPORTANT
-      }
+      { order }
     );
+                
 
     // ✅ 3) Slot booking (if slot data provided)
     let slotBooked = false;

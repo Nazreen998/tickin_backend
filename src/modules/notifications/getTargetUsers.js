@@ -6,40 +6,48 @@ const USERS_TABLE = process.env.USERS_TABLE;
 
 /**
  * 🔥 Generic target resolver
- * - Uses EVENT_ROLE_MAP
- * - Uses notificationPrefs
- * - Supports order based targeting
+ * - EVENT_ROLE_MAP based
+ * - notificationPrefs respected
+ * - Order specific users supported (without duplication)
  */
 export async function getTargetUsers(eventType, context = {}) {
   const allowedRoles = EVENT_ROLE_MAP[eventType];
   if (!allowedRoles) return [];
 
-  const users = [];
+  const usersMap = new Map();
 
-  /* 1️⃣ Scan all profiles */
-  const out = await ddb.send(
+  /* --------------------------------------------------
+   * 1️⃣ GLOBAL USERS (Managers / roles via EVENT_ROLE_MAP)
+   * -------------------------------------------------- */
+  const scanRes = await ddb.send(
     new ScanCommand({
       TableName: USERS_TABLE,
-      FilterExpression: "sk = :sk",
+      FilterExpression: "#sk = :sk",
+      ExpressionAttributeNames: {
+        "#sk": "sk",
+      },
       ExpressionAttributeValues: {
         ":sk": "PROFILE",
       },
     })
   );
 
-  for (const u of out.Items || []) {
+  for (const u of scanRes.Items || []) {
     const role = String(u.role || "").toUpperCase();
 
     if (!allowedRoles.includes(role)) continue;
 
     const prefs = u.notificationPrefs?.[role] || [];
-
     if (!(prefs.includes("ALL") || prefs.includes(eventType))) continue;
 
-    users.push(u);
+    if (u.playerIds?.length) {
+      usersMap.set(u.pk, u);
+    }
   }
 
-  /* 2️⃣ Order specific users (Distributor / Driver / Creator) */
+  /* --------------------------------------------------
+   * 2️⃣ ORDER SPECIFIC USERS (Distributor / Driver / Creator)
+   * -------------------------------------------------- */
   if (context.order) {
     const { distributorId, driverMobile, createdBy } = context.order;
 
@@ -64,17 +72,17 @@ export async function getTargetUsers(eventType, context = {}) {
       if (!u?.playerIds?.length) continue;
 
       const role = String(u.role || "").toUpperCase();
-      const prefs = u.notificationPrefs?.[role] || [];
+      if (!allowedRoles.includes(role)) continue;
 
-      if (prefs.includes("ALL") || prefs.includes(eventType)) {
-        users.push(u);
-      }
+      const prefs = u.notificationPrefs?.[role] || [];
+      if (!(prefs.includes("ALL") || prefs.includes(eventType))) continue;
+
+      usersMap.set(u.pk, u);
     }
   }
 
-  /* 3️⃣ Deduplicate */
-  const uniq = new Map();
-  for (const u of users) uniq.set(u.pk, u);
-
-  return [...uniq.values()];
+  /* --------------------------------------------------
+   * 3️⃣ FINAL UNIQUE USERS
+   * -------------------------------------------------- */
+  return [...usersMap.values()];
 }
