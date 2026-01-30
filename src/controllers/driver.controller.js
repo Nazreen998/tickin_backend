@@ -137,7 +137,6 @@ export async function deleteDriverOrder(req, res) {
         UpdateExpression:
           "SET deletedByDriver = :t, deletedAt = :dt",
         ExpressionAttributeValues: {
-          ":d": String(driverId),
           ":t": true,
           ":dt": new Date().toISOString(),
         },
