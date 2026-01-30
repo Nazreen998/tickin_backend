@@ -58,6 +58,8 @@ onesignal
 scripts/migrate_notification_prefs.js
 
 scripts/testPush.js
+scripts/testOrderConfirmed.js
+scripts/test.js
 
 scripts/migrate_add_player_ids.js
 

@@ -3,7 +3,9 @@ export const NOTIFICATION_TEMPLATES = {
   ORDER_CONFIRMED: {
     MANAGER: ({ orderNo, distributorName, amount }) => ({
       title: "Order Confirmed ✅",
-      message: `Order #${orderNo} confirmed for ${distributorName} (₹${amount})`,
+      message: `Order #${orderNo || "-"} confirmed${
+        distributorName ? ` for ${distributorName}` : ""
+      }${amount ? ` (₹${amount})` : ""}`,
     }),
 
     SALES_OFFICER: ({ orderNo, distributorName, amount }) => ({

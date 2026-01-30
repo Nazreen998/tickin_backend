@@ -25,6 +25,12 @@ export async function sendPush(playerIds, title, message, data = {}) {
     );
 
     console.log("✅ Push sent:", res.data.id);
+    console.log("🧪 sendPush called", {
+  playerIds,
+  title,
+  message,
+  data,
+});
   } catch (err) {
     console.error(
       "❌ Push failed:",
