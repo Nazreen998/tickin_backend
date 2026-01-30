@@ -113,3 +113,33 @@ export async function updateStatus(req, res) {
     return res.status(400).json({ ok: false, message: normalizeErrMessage(e) });
   }
 }
+export async function deleteDriverOrder(req, res) {
+  try {
+    const { orderId } = req.params;
+    const { driverId } = req.body;
+
+    if (!orderId || !driverId) {
+      return res.status(400).json({ ok: false, message: "orderId & driverId required" });
+    }
+
+    await ddb.send(
+      new UpdateCommand({
+        TableName: ORDERS_TABLE,
+        Key: orderKey(orderId),
+        UpdateExpression:
+          "SET deletedByDriver = :t, deletedAt = :d",
+        ConditionExpression: "driverId = :driverId",
+        ExpressionAttributeValues: {
+          ":t": true,
+          ":d": new Date().toISOString(),
+          ":driverId": String(driverId),
+        },
+      })
+    );
+
+    return res.json({ ok: true, message: "Order removed from driver list" });
+  } catch (e) {
+    return res.status(400).json({ ok: false, message: normalizeErrMessage(e) });
+  }
+}
+
