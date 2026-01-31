@@ -7,7 +7,6 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import crypto from "crypto";
 import { v4 as uuidv4 } from "uuid";
-import { dispatchEvent } from "../notifications/dispatchEvent.js";
 import { ddb } from "../../config/dynamo.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
@@ -333,24 +332,13 @@ export const confirmDraftOrder = async (req, res) => {
       })
     );
 
-    // 🔔 THIS IS CORRECT PLACE
-    await dispatchEvent(
-      "ORDER_CONFIRMED",
-      {
-        orderId,
-        orderNo: orderId,
-        distributorName: order.distributorName,
-        amount: order.totalAmount,
-      },
-      { order }
-    );
-
     await addTimelineEvent({
       orderId,
       event: "ORDER_CONFIRMED",
       by: user.mobile,
       extra: { role: user.role, note: "Draft order confirmed directly" },
     });
+
     return res.json({
       ok: true,
       message: "✅ Draft Order confirmed successfully",
@@ -527,6 +515,7 @@ const stops = await buildOrderStopsFromDistributorId({
         totalQty,
       },
     });
+
     return res.json({
       ok: true,
       message:
@@ -547,6 +536,7 @@ const stops = await buildOrderStopsFromDistributorId({
     return res.status(500).json({ message: "Error", error: err.message });
   }
 };
+
 /* ==========================
    ✅ Pending Orders (Manager / Master)
    - CONFIRMED
@@ -744,17 +734,6 @@ export const confirmOrder = async (req, res) => {
     },
   })
 );
-    await dispatchEvent(
-      "ORDER_CONFIRMED",
-      {
-        orderId,
-        orderNo: orderId,
-        distributorName: order.distributorName,
-        amount: order.totalAmount,
-      },
-      { order }
-    );
-
     await addTimelineEvent({
       orderId,
       event: "ORDER_CONFIRMED",

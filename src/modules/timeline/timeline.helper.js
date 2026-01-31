@@ -1,6 +1,7 @@
 import dayjs from "dayjs";
 import { PutCommand, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "../../config/dynamo.js";
+import { handleTimelineNotification } from "../notifications/timelineNotification.helper.js";
 import utc from "dayjs/plugin/utc.js";
 import timezone from "dayjs/plugin/timezone.js";
 
@@ -93,6 +94,13 @@ export const addTimelineEvent = async ({
       ConditionExpression: eventId ? "attribute_not_exists(eventId)" : undefined,
     })
   );
+  // 🔔 auto notification based on EVENT_ROLE_MAP
+  await handleTimelineNotification({
+    event: evt,
+    orderId,
+    data,
+  });
+
 
   return true;
 };
