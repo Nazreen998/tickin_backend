@@ -534,20 +534,50 @@ export const assignDriver = async (req, res) => {
     }
 
     // ✅ FINAL list = child orders + FULL order (if exists)
-    const finalOrderIds = fullOrderId
-      ? [...new Set([...orderIds.map(normalizeOrderId), fullOrderId].filter(Boolean))]
-      : [...new Set(orderIds.map(normalizeOrderId).filter(Boolean))];
+   // ✅ Normalize all ids
+const allIds = [...new Set(orderIds.map(normalizeOrderId).filter(Boolean))];
 
-    // ✅ driver lookup
-    const driverPk = normalizeUserPk(driverId);
+// ✅ FULL order (must exist for merged)
+if (!fullOrderId) {
+  return res.status(400).json({
+    ok: false,
+    message: "Merged flow must have ORD_FULL order",
+  });
+}
 
-    const dg = await ddb.send(
-      new GetCommand({
-        TableName: USERS_TABLE,
-        Key: { pk: driverPk, sk: "PROFILE" },
-      })
-    );
+// ✅ CHILD orders (exclude FULL)
+const childOrderIds = allIds.filter((id) => id !== fullOrderId);
 
+// ===============================
+// ✅ 1) UPDATE ONLY FULL ORDER
+// ===============================
+await updateOrders([fullOrderId], {
+  UpdateExpression:
+    "SET #s = :st, driverId = :d, driverName = :dn, driverMobile = :dm, vehicleNo = :vn",
+  ExpressionAttributeNames: { "#s": "status" },
+  ExpressionAttributeValues: {
+    ":st": "DRIVER_ASSIGNED",
+    ":d": driverPk,
+    ":dn": driverName,
+    ":dm": driverMobile,
+    ":vn": vehicleNo || null,
+  },
+});
+
+// ===============================
+// ✅ 2) UPDATE CHILD ORDERS (NO driverId)
+// ===============================
+if (childOrderIds.length > 0) {
+  await updateOrders(childOrderIds, {
+    UpdateExpression:
+      "SET #s = :st, mergedIntoOrderId = :mid REMOVE driverId, driverName, driverMobile",
+    ExpressionAttributeNames: { "#s": "status" },
+    ExpressionAttributeValues: {
+      ":st": "MERGED",
+      ":mid": fullOrderId,
+    },
+  });
+}
     const driver = dg.Item;
     if (!driver) {
       return res.status(404).json({ ok: false, message: "Driver not found" });
@@ -574,20 +604,19 @@ export const assignDriver = async (req, res) => {
     const user = req.user || {};
     for (const oid of finalOrderIds) {
       await addTimelineEvent({
-        orderId: oid,
-        event: "DRIVER_ASSIGNED",
-        by: user?.mobile || "system",
-        byUserName: user?.name || user?.userName || null,
-        role: user?.role || "MANAGER",
-        data: {
-          flowKey: key,
-          driverId: driverPk,
-          driverName,
-          driverMobile,
-          vehicleNo: vehicleNo || null,
-        },
-      });
-      
+  orderId: fullOrderId,
+  event: "DRIVER_ASSIGNED",
+  by: user?.mobile || "system",
+  byUserName: user?.name || user?.userName || null,
+  role: user?.role || "MANAGER",
+  data: {
+    flowKey: key,
+    driverId: driverPk,
+    driverName,
+    driverMobile,
+    vehicleNo: vehicleNo || null,
+  },
+});
     }
 
     return res.json({
