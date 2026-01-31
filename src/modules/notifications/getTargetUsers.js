@@ -13,18 +13,45 @@ export async function getTargetUsers(eventType) {
 
   if (!allowedRoles) return [];
 
+  const getRoleVariants = (role) => {
+    const raw = String(role || "").toUpperCase();
+    if (!raw) return [];
+    const variants = new Set([
+      raw,
+      raw.replace(/_/g, " "),
+      raw.replace(/\s+/g, "_"),
+    ]);
+    return [...variants];
+  };
+
   const usersMap = new Map();
 
   /* --------------------------------------------------
    * helper: extract prefs
    * -------------------------------------------------- */
   const extractPrefs = (user, role) => {
-    const raw = user.notificationPrefs?.[role];
-    console.log("🧪 DEBUG: extractPrefs", user.pk, role, raw);
+    const rawPrefs = user.notificationPrefs;
+    if (Array.isArray(rawPrefs)) {
+      console.log(
+        "🧪 DEBUG: extractPrefs (flat)",
+        user.pk,
+        role,
+        rawPrefs
+      );
+      return rawPrefs;
+    }
 
-    if (!raw) return [];
-    if (Array.isArray(raw)) return raw;
-    if (raw.L) return raw.L.map((x) => x.S);
+    const roleVariants = getRoleVariants(role);
+    for (const roleKey of roleVariants) {
+      const raw = rawPrefs?.[roleKey];
+      console.log("🧪 DEBUG: extractPrefs", user.pk, roleKey, raw);
+
+      if (!raw) continue;
+      if (Array.isArray(raw)) return raw;
+      if (typeof raw === "string") return [raw];
+      if (raw.L) return raw.L.map((x) => x.S);
+      if (raw.S) return [raw.S];
+    }
     return [];
   };
 
@@ -133,7 +160,8 @@ export async function getTargetUsers(eventType) {
       if (!u.playerIds?.length) continue;
 
       const role = String(u.role || "");
-      if (!allowedRoles.includes(role)) continue;
+      const roleVariants = getRoleVariants(role);
+      if (!roleVariants.some((r) => allowedRoles.includes(r))) continue;
 
       const prefs = extractPrefs(u, role);
       console.log("🧪 DEBUG: mobile user prefs =", prefs);
@@ -177,7 +205,8 @@ export async function getTargetUsers(eventType) {
         if (!u.playerIds?.length) continue;
 
         const role = String(u.role || "");
-        if (!allowedRoles.includes(role)) continue;
+        const roleVariants = getRoleVariants(role);
+        if (!roleVariants.some((r) => allowedRoles.includes(r))) continue;
 
         const prefs = extractPrefs(u, role);
         console.log("🧪 DEBUG: distributor prefs =", prefs);
