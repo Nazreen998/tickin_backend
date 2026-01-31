@@ -333,24 +333,24 @@ export const confirmDraftOrder = async (req, res) => {
       })
     );
 
+    // 🔔 THIS IS CORRECT PLACE
+    await dispatchEvent(
+      "ORDER_CONFIRMED",
+      {
+        orderId,
+        orderNo: orderId,
+        distributorName: order.distributorName,
+        amount: order.totalAmount,
+      },
+      { order }
+    );
+
     await addTimelineEvent({
       orderId,
       event: "ORDER_CONFIRMED",
       by: user.mobile,
       extra: { role: user.role, note: "Draft order confirmed directly" },
     });
-    await dispatchEvent(
-    "ORDER_CONFIRMED",
-    {
-      orderId,
-      orderNo: orderId,
-      distributorName: order.distributorName,
-      amount: order.totalAmount,
-    },
-    { order }
-  );
-
-
     return res.json({
       ok: true,
       message: "✅ Draft Order confirmed successfully",
@@ -527,20 +527,6 @@ const stops = await buildOrderStopsFromDistributorId({
         totalQty,
       },
     });
-    if (finalStatus === "CONFIRMED") {
-      await dispatchEvent(
-        "ORDER_CONFIRMED",
-        {
-          orderId,
-          orderNo: orderId,
-          distributorName,
-          amount: totalAmount,
-        },
-        { order: orderItem }
-      );
-    }
-
-
     return res.json({
       ok: true,
       message:
@@ -561,10 +547,6 @@ const stops = await buildOrderStopsFromDistributorId({
     return res.status(500).json({ message: "Error", error: err.message });
   }
 };
-/* ==========================
-   ✅ Pending Orders (Master / Manager)
-   
-========================== */
 /* ==========================
    ✅ Pending Orders (Manager / Master)
    - CONFIRMED
@@ -762,24 +744,24 @@ export const confirmOrder = async (req, res) => {
     },
   })
 );
+    await dispatchEvent(
+      "ORDER_CONFIRMED",
+      {
+        orderId,
+        orderNo: orderId,
+        distributorName: order.distributorName,
+        amount: order.totalAmount,
+      },
+      { order }
+    );
+
     await addTimelineEvent({
       orderId,
       event: "ORDER_CONFIRMED",
       by: user.mobile,
       extra: { role: user.role, note: "Order confirmed" },
     });
-    await dispatchEvent(
-      "ORDER_CONFIRMED",
-      {
-        orderId: order.orderId,
-        orderNo: order.orderId,
-        distributorName: order.distributorName,
-        amount: order.totalAmount,
-      },
-      { order }
-    );
                 
-
     // ✅ 3) Slot booking (if slot data provided)
     let slotBooked = false;
     let slotDetails = null;
