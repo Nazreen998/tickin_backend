@@ -97,7 +97,7 @@ export const addTimelineEvent = async ({
   // 🔔 auto notification based on EVENT_ROLE_MAP
   await handleTimelineNotification({
     event: evt,
-    orderId,
+    orderId: targetOrderId, // ✅ use resolved id
     data,
   });
 
