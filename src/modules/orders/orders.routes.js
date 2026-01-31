@@ -296,11 +296,13 @@ const getDriverAssignedOrders = async (req, res) => {
     }
 
     const orders = await getAssignedOrdersByDriver(driverId);
-
+const visibleOrders = (orders || []).filter(
+  (o) => o.deletedByDriver !== true
+);
     return res.json({
       ok: true,
-      count: orders.length,
-      orders,
+      count: visibleOrders.length,
+      orders: visibleOrders,
     });
   } catch (err) {
     return res.status(500).json({
