@@ -555,6 +555,31 @@ export const assignDriver = async (req, res) => {
     const allIds = [...new Set(orderIds.map(normalizeOrderId).filter(Boolean))];
     const childOrderIds = allIds.filter((id) => id !== fullOrderId);
 
+    /* 🔥 COLLECT distributors from CHILD orders */
+    let mergedDistributors = [];
+
+    for (const cid of childOrderIds) {
+      const g = await ddb.send(
+        new GetCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${cid}`, sk: "META" },
+        })
+      );
+
+      if (Array.isArray(g.Item?.distributors)) {
+        mergedDistributors.push(...g.Item.distributors);
+      }
+    }
+
+    // ❗ dedupe distributors
+    const seen = new Set();
+    mergedDistributors = mergedDistributors.filter((d) => {
+      const k = d.distributorCode || d.distributorName;
+      if (!k || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+
     // 🔹 Driver lookup
     const driverPk = normalizeUserPk(driverId);
     const dg = await ddb.send(
@@ -571,10 +596,10 @@ export const assignDriver = async (req, res) => {
     const driverName = dg.Item.name || dg.Item.userName || "Driver";
     const driverMobile = dg.Item.mobile || null;
 
-    // ✅ 1) FULL order gets driver
+    // ✅ FULL order update (🔥 MAIN FIX)
     await updateOrders([fullOrderId], {
       UpdateExpression:
-        "SET #s = :st, driverId = :d, driverName = :dn, driverMobile = :dm, vehicleNo = :vn",
+        "SET #s = :st, driverId = :d, driverName = :dn, driverMobile = :dm, vehicleNo = :vn, distributors = :dist, currentDistributorIndex = :i",
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
         ":st": "DRIVER_ASSIGNED",
@@ -582,10 +607,12 @@ export const assignDriver = async (req, res) => {
         ":dn": driverName,
         ":dm": driverMobile,
         ":vn": vehicleNo || null,
+        ":dist": mergedDistributors,
+        ":i": 0,
       },
     });
 
-    // ✅ 2) CHILD orders → MERGED (NO driver)
+    // ✅ CHILD orders → MERGED
     if (childOrderIds.length > 0) {
       await updateOrders(childOrderIds, {
         UpdateExpression:
@@ -598,7 +625,7 @@ export const assignDriver = async (req, res) => {
       });
     }
 
-    // ✅ Timeline ONLY for FULL
+    // ✅ Timeline
     const user = req.user || {};
     await addTimelineEvent({
       orderId: fullOrderId,
@@ -620,12 +647,6 @@ export const assignDriver = async (req, res) => {
       message: "✅ Driver assigned",
       flowKey: key,
       fullOrderId,
-      driver: {
-        driverId: driverPk,
-        name: driverName,
-        mobile: driverMobile,
-        vehicleNo: vehicleNo || null,
-      },
     });
   } catch (err) {
     return res.status(500).json({ ok: false, message: err.message });
