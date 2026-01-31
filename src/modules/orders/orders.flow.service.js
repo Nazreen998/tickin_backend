@@ -502,10 +502,16 @@ export const loadingEnd = async (req, res) => {
 
 /* ============================================================
    ✅ ASSIGN DRIVER (FINAL)
-   - FULL order மட்டும் driverId
-   - child orders => MERGED + REMOVE driverId
-   - timeline ONLY FULL
 ============================================================ */
+/* ============================================================
+   ✅ ASSIGN DRIVER (FINAL – SAFE + MERGE READY)
+   - FULL order மட்டும் driverId
+   - CHILD orders => MERGED
+   - ALL distributors copied into FULL order
+   - currentDistributorIndex = 0
+   - D1 / D2 reach logic WILL WORK
+============================================================ */
+
 export const assignDriver = async (req, res) => {
   try {
     const key = req.body.flowKey || req.body.mergeKey || req.body.orderId;
@@ -516,16 +522,24 @@ export const assignDriver = async (req, res) => {
     if (!driverId)
       return res.status(400).json({ ok: false, message: "driverId required" });
 
+    /* --------------------------------------------------------
+       1️⃣ Resolve all orderIds from flow
+    -------------------------------------------------------- */
     const orderIds = await resolveOrderIdsFromFlowKey(key);
-    if (orderIds.length === 0)
+    if (!orderIds || orderIds.length === 0) {
       return res.status(404).json({ ok: false, message: "No orders found" });
+    }
 
     const vehicleOk = await ensureVehicleSelected(orderIds);
     if (!vehicleOk) {
-      return res.status(400).json({ ok: false, message: "❌ Vehicle not selected" });
+      return res
+        .status(400)
+        .json({ ok: false, message: "❌ Vehicle not selected" });
     }
 
-    // 🔍 Find FULL order
+    /* --------------------------------------------------------
+       2️⃣ Find FULL order (ORD_FULL_)
+    -------------------------------------------------------- */
     let fullOrderId =
       orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
 
@@ -555,7 +569,9 @@ export const assignDriver = async (req, res) => {
     const allIds = [...new Set(orderIds.map(normalizeOrderId).filter(Boolean))];
     const childOrderIds = allIds.filter((id) => id !== fullOrderId);
 
-    /* 🔥 COLLECT distributors from CHILD orders */
+    /* --------------------------------------------------------
+       3️⃣ COLLECT distributors FROM CHILD ORDERS
+    -------------------------------------------------------- */
     let mergedDistributors = [];
 
     for (const cid of childOrderIds) {
@@ -571,16 +587,39 @@ export const assignDriver = async (req, res) => {
       }
     }
 
-    // ❗ dedupe distributors
+    /* --------------------------------------------------------
+       4️⃣ DEDUPE distributors (by code/name)
+    -------------------------------------------------------- */
     const seen = new Set();
     mergedDistributors = mergedDistributors.filter((d) => {
-      const k = d.distributorCode || d.distributorName;
+      const k = (d.distributorCode || d.distributorName || "")
+        .toString()
+        .trim()
+        .toUpperCase();
       if (!k || seen.has(k)) return false;
       seen.add(k);
       return true;
     });
 
-    // 🔹 Driver lookup
+    /* --------------------------------------------------------
+       5️⃣ SAFETY FALLBACK (single order / edge case)
+    -------------------------------------------------------- */
+    if (mergedDistributors.length === 0) {
+      const g = await ddb.send(
+        new GetCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
+        })
+      );
+
+      if (Array.isArray(g.Item?.distributors)) {
+        mergedDistributors = g.Item.distributors;
+      }
+    }
+
+    /* --------------------------------------------------------
+       6️⃣ Driver lookup
+    -------------------------------------------------------- */
     const driverPk = normalizeUserPk(driverId);
     const dg = await ddb.send(
       new GetCommand({
@@ -596,10 +635,19 @@ export const assignDriver = async (req, res) => {
     const driverName = dg.Item.name || dg.Item.userName || "Driver";
     const driverMobile = dg.Item.mobile || null;
 
-    // ✅ FULL order update (🔥 MAIN FIX)
+    /* --------------------------------------------------------
+       7️⃣ UPDATE FULL ORDER (🔥 MAIN FIX)
+    -------------------------------------------------------- */
     await updateOrders([fullOrderId], {
-      UpdateExpression:
-        "SET #s = :st, driverId = :d, driverName = :dn, driverMobile = :dm, vehicleNo = :vn, distributors = :dist, currentDistributorIndex = :i",
+      UpdateExpression: `
+        SET #s = :st,
+            driverId = :d,
+            driverName = :dn,
+            driverMobile = :dm,
+            vehicleNo = :vn,
+            distributors = :dist,
+            currentDistributorIndex = :i
+      `,
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
         ":st": "DRIVER_ASSIGNED",
@@ -612,11 +660,16 @@ export const assignDriver = async (req, res) => {
       },
     });
 
-    // ✅ CHILD orders → MERGED
+    /* --------------------------------------------------------
+       8️⃣ CHILD ORDERS → MERGED
+    -------------------------------------------------------- */
     if (childOrderIds.length > 0) {
       await updateOrders(childOrderIds, {
-        UpdateExpression:
-          "SET #s = :st, mergedIntoOrderId = :mid REMOVE driverId, driverName, driverMobile",
+        UpdateExpression: `
+          SET #s = :st,
+              mergedIntoOrderId = :mid
+          REMOVE driverId, driverName, driverMobile
+        `,
         ExpressionAttributeNames: { "#s": "status" },
         ExpressionAttributeValues: {
           ":st": "MERGED",
@@ -625,7 +678,9 @@ export const assignDriver = async (req, res) => {
       });
     }
 
-    // ✅ Timeline
+    /* --------------------------------------------------------
+       9️⃣ Timeline (ONLY FULL)
+    -------------------------------------------------------- */
     const user = req.user || {};
     await addTimelineEvent({
       orderId: fullOrderId,
@@ -644,11 +699,13 @@ export const assignDriver = async (req, res) => {
 
     return res.json({
       ok: true,
-      message: "✅ Driver assigned",
+      message: "✅ Driver assigned (MERGE READY)",
       flowKey: key,
       fullOrderId,
+      distributors: mergedDistributors.length,
     });
   } catch (err) {
+    console.error("assignDriver error", err);
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
