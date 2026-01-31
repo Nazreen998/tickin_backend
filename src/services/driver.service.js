@@ -61,17 +61,32 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
 function normalizeDistributors(order) {
   const list = Array.isArray(order.distributors) ? order.distributors : [];
 
+  function parseLatLngFromUrl(url) {
+    if (!url) return { lat: null, lng: null };
+    const m = url.match(/(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)/);
+    if (!m) return { lat: null, lng: null };
+    return { lat: Number(m[1]), lng: Number(m[3]) };
+  }
+
   return list.map((d) => {
-    // ✅ NO URL PARSING. Only use stored coordinates.
-    const lat = d.lat ?? d.latitude ?? null;
-    const lng = d.lng ?? d.longitude ?? null;
+    // 1️⃣ Prefer stored lat/lng
+    let lat = d.lat ?? d.latitude ?? null;
+    let lng = d.lng ?? d.longitude ?? null;
+
+    // 2️⃣ Fallback: parse from mapUrl / final_url
+    if ((!lat || !lng) && (d.mapUrl || d.final_url || d.finalUrl)) {
+      const parsed = parseLatLngFromUrl(
+        d.mapUrl || d.final_url || d.finalUrl
+      );
+      lat = lat ?? parsed.lat;
+      lng = lng ?? parsed.lng;
+    }
 
     return {
       distributorCode: d.distributorCode || d.code || null,
       distributorName: d.distributorName || d.name || null,
       lat,
       lng,
-      // ✅ keep mapUrl if you want, but not used for logic
       mapUrl: d.mapUrl || d.final_url || d.finalUrl || null,
       items: Array.isArray(d.items) ? d.items : [],
       reachedAt: d.reachedAt || null,
