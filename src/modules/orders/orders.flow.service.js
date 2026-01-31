@@ -497,35 +497,28 @@ export const assignDriver = async (req, res) => {
 
     const orderIds = await resolveOrderIdsFromFlowKey(key);
     if (orderIds.length === 0)
-      return res
-        .status(404)
-        .json({ ok: false, message: "No orders found for this key" });
+      return res.status(404).json({ ok: false, message: "No orders found" });
 
-    // ✅ Vehicle must be selected (only child orders check)
     const vehicleOk = await ensureVehicleSelected(orderIds);
     if (!vehicleOk) {
       return res.status(400).json({
         ok: false,
-        message: "❌ Vehicle not selected. Select vehicle first.",
+        message: "❌ Vehicle not selected",
       });
     }
 
-    // ✅ Find FULL order id (ORD_FULL_) if any
+    // 🔍 Find FULL order
     let fullOrderId = orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
 
     if (!fullOrderId) {
-      // try from child meta mergedIntoOrderId
       for (const raw of orderIds) {
         const oid = normalizeOrderId(raw);
-        if (!oid) continue;
-
         const g = await ddb.send(
           new GetCommand({
             TableName: ORDERS_TABLE,
             Key: { pk: `ORDER#${oid}`, sk: "META" },
           })
         );
-
         if (g.Item?.mergedIntoOrderId) {
           fullOrderId = normalizeOrderId(g.Item.mergedIntoOrderId);
           break;
@@ -533,61 +526,35 @@ export const assignDriver = async (req, res) => {
       }
     }
 
-    // ✅ FINAL list = child orders + FULL order (if exists)
-   // ✅ Normalize all ids
-const allIds = [...new Set(orderIds.map(normalizeOrderId).filter(Boolean))];
+    if (!fullOrderId) {
+      return res.status(400).json({
+        ok: false,
+        message: "Merged flow must have ORD_FULL order",
+      });
+    }
 
-// ✅ FULL order (must exist for merged)
-if (!fullOrderId) {
-  return res.status(400).json({
-    ok: false,
-    message: "Merged flow must have ORD_FULL order",
-  });
-}
+    // 🔹 Child orders
+    const allIds = [...new Set(orderIds.map(normalizeOrderId).filter(Boolean))];
+    const childOrderIds = allIds.filter((id) => id !== fullOrderId);
 
-// ✅ CHILD orders (exclude FULL)
-const childOrderIds = allIds.filter((id) => id !== fullOrderId);
+    // 🔹 Driver lookup
+    const driverPk = normalizeUserPk(driverId);
+    const dg = await ddb.send(
+      new GetCommand({
+        TableName: USERS_TABLE,
+        Key: { pk: driverPk, sk: "PROFILE" },
+      })
+    );
 
-// ===============================
-// ✅ 1) UPDATE ONLY FULL ORDER
-// ===============================
-await updateOrders([fullOrderId], {
-  UpdateExpression:
-    "SET #s = :st, driverId = :d, driverName = :dn, driverMobile = :dm, vehicleNo = :vn",
-  ExpressionAttributeNames: { "#s": "status" },
-  ExpressionAttributeValues: {
-    ":st": "DRIVER_ASSIGNED",
-    ":d": driverPk,
-    ":dn": driverName,
-    ":dm": driverMobile,
-    ":vn": vehicleNo || null,
-  },
-});
-
-// ===============================
-// ✅ 2) UPDATE CHILD ORDERS (NO driverId)
-// ===============================
-if (childOrderIds.length > 0) {
-  await updateOrders(childOrderIds, {
-    UpdateExpression:
-      "SET #s = :st, mergedIntoOrderId = :mid REMOVE driverId, driverName, driverMobile",
-    ExpressionAttributeNames: { "#s": "status" },
-    ExpressionAttributeValues: {
-      ":st": "MERGED",
-      ":mid": fullOrderId,
-    },
-  });
-}
-    const driver = dg.Item;
-    if (!driver) {
+    if (!dg.Item) {
       return res.status(404).json({ ok: false, message: "Driver not found" });
     }
 
-    const driverName = driver.name || driver.userName || "Driver";
-    const driverMobile = driver.mobile || null;
+    const driverName = dg.Item.name || dg.Item.userName || "Driver";
+    const driverMobile = dg.Item.mobile || null;
 
-    // ✅ Update ALL (child + FULL)
-    await updateOrders(finalOrderIds, {
+    // ✅ 1) FULL order gets driver
+    await updateOrders([fullOrderId], {
       UpdateExpression:
         "SET #s = :st, driverId = :d, driverName = :dn, driverMobile = :dm, vehicleNo = :vn",
       ExpressionAttributeNames: { "#s": "status" },
@@ -600,30 +567,35 @@ if (childOrderIds.length > 0) {
       },
     });
 
-    // ✅ Add timeline event for ALL (important for tracking FULL order timeline)
-    const user = req.user || {};
-    for (const oid of finalOrderIds) {
-      await addTimelineEvent({
-  orderId: fullOrderId,
-  event: "DRIVER_ASSIGNED",
-  by: user?.mobile || "system",
-  byUserName: user?.name || user?.userName || null,
-  role: user?.role || "MANAGER",
-  data: {
-    flowKey: key,
-    driverId: driverPk,
-    driverName,
-    driverMobile,
-    vehicleNo: vehicleNo || null,
-  },
-});
+    // ✅ 2) CHILD orders – NO driverId
+    if (childOrderIds.length > 0) {
+      await updateOrders(childOrderIds, {
+        UpdateExpression:
+          "SET #s = :st, mergedIntoOrderId = :mid REMOVE driverId, driverName, driverMobile",
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: {
+          ":st": "MERGED",
+          ":mid": fullOrderId,
+        },
+      });
     }
+
+    // ✅ Timeline ONLY for FULL
+    const user = req.user || {};
+    await addTimelineEvent({
+      orderId: fullOrderId,
+      event: "DRIVER_ASSIGNED",
+      by: user?.mobile || "system",
+      byUserName: user?.name || user?.userName || null,
+      role: user?.role || "MANAGER",
+      data: { driverId: driverPk, driverName, vehicleNo },
+    });
 
     return res.json({
       ok: true,
       message: "✅ Driver assigned",
       flowKey: key,
-      affectedOrders: finalOrderIds, // ✅ typo fix (finalorderIds இல்லை)
+      fullOrderId,
       driver: {
         driverId: driverPk,
         name: driverName,
@@ -635,7 +607,6 @@ if (childOrderIds.length > 0) {
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
-
 /* ============================================================
    ✅ NEW: List drivers for dropdown (Manager/Master)  (UNCHANGED)
 ============================================================ */
