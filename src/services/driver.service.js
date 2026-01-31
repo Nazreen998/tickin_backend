@@ -82,14 +82,28 @@ function normalizeDistributors(order) {
 }
 
 function getCurrentStop(order) {
-  const distributors = normalizeDistributors(order);
-  const idx = Number(order.currentDistributorIndex || 0);
+  let distributors = normalizeDistributors(order);
 
-  if (!Number.isFinite(idx) || idx < 0) {
-    return { distributors, idx: 0, stop: distributors[0] || null };
+  // 🔥 TEMP FALLBACK: if distributors empty but order has distributorName
+  if (distributors.length === 0 && order.distributorName) {
+    distributors = [{
+      distributorName: order.distributorName,
+      distributorCode: order.distributorCode || null,
+      lat: order.distributorLat || order.lat || null,
+      lng: order.distributorLng || order.lng || null,
+      reachedAt: null,
+      unloadStartAt: null,
+      unloadEndAt: null,
+      items: [],
+    }];
   }
 
-  return { distributors, idx, stop: distributors[idx] || null };
+  const idx = Number(order.currentDistributorIndex || 0);
+  return {
+    distributors,
+    idx,
+    stop: distributors[idx] || null,
+  };
 }
 
 /* ✅ D1 / D2 helpers */
