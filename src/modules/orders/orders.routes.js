@@ -296,11 +296,22 @@ const getDriverAssignedOrders = async (req, res) => {
     }
 
     const orders = await getAssignedOrdersByDriver(driverId);
+const visibleOrders = (orders || []).filter((o) => {
+  // ❌ hide child orders of merged flow
+  if (o.mergedIntoOrderId && !String(o.orderId).startsWith("ORD_FULL_")) {
+    return false;
+  }
+
+  // ❌ hide driver-deleted orders
+  if (o.deletedByDriver === true) return false;
+
+  return true;
+});
 
     return res.json({
       ok: true,
-      count: orders.length,
-      orders,
+      count: visibleOrders.length,
+      orders: visibleOrders,
     });
   } catch (err) {
     return res.status(500).json({
