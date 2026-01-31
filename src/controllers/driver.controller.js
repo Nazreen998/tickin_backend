@@ -118,12 +118,11 @@ export async function updateStatus(req, res) {
 export async function deleteDriverOrder(req, res) {
   try {
     const { orderId } = req.params;
-    const { driverId } = req.body;
 
-    if (!orderId || !driverId) {
+    if (!orderId) {
       return res.status(400).json({
         ok: false,
-        message: "orderId & driverId required",
+        message: "orderId required",
       });
     }
 
@@ -147,8 +146,9 @@ export async function deleteDriverOrder(req, res) {
   } catch (e) {
     return res.status(400).json({
       ok: false,
-      message: e.message || String(e),
+      message: e.message || "Delete failed",
     });
   }
 }
+
 
