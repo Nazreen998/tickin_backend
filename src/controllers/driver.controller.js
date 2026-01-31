@@ -134,11 +134,9 @@ export async function deleteDriverOrder(req, res) {
           pk: `ORDER#${orderId}`,
           sk: "META",
         },
-        ConditionExpression: "driverId = :d",
         UpdateExpression:
           "SET deletedByDriver = :t, deletedAt = :dt",
         ExpressionAttributeValues: {
-          ":d": String(driverId),
           ":t": true,
           ":dt": new Date().toISOString(),
         },
