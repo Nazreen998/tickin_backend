@@ -522,7 +522,7 @@ export const assignDriver = async (req, res) => {
       return res.status(400).json({ ok: false, message: "driverId required" });
 
     /* --------------------------------------------------------
-       1️⃣ Resolve all orderIds
+       1️⃣ Resolve all orderIds from ANY key
     -------------------------------------------------------- */
     const orderIds = await resolveOrderIdsFromFlowKey(key);
     if (!orderIds || orderIds.length === 0) {
@@ -537,11 +537,12 @@ export const assignDriver = async (req, res) => {
     }
 
     /* --------------------------------------------------------
-       2️⃣ Find FULL order
+       2️⃣ Find FULL order (MERGE + DIRECT FULL SAFE)
     -------------------------------------------------------- */
     let fullOrderId =
       orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
 
+    // merge case: child -> mergedIntoOrderId
     if (!fullOrderId) {
       for (const raw of orderIds) {
         const oid = normalizeOrderId(raw);
@@ -557,33 +558,28 @@ export const assignDriver = async (req, res) => {
         }
       }
     }
-// ✅ DIRECT FULL ORDER SUPPORT
-/* --------------------------------------------------------
-   ✅ DIRECT FULL ORDER RESOLUTION (FINAL FIX)
--------------------------------------------------------- */
-if (!fullOrderId && orderIds.length === 1) {
-  const oid = normalizeOrderId(orderIds[0]);
 
-  // try ORD_FULL_<orderId>
-  const tryFullId = oid.startsWith("ORD_FULL_")
-    ? oid
-    : `ORD_FULL_${oid.replace(/^ORD/, "")}`;
+    // 🔥 DIRECT FULL AUTO-DETECT (even if FE sends ORD123)
+    if (!fullOrderId && orderIds.length === 1) {
+      const oid = normalizeOrderId(orderIds[0]);
+      const tryFullId = oid.startsWith("ORD_FULL_")
+        ? oid
+        : `ORD_FULL_${oid.replace(/^ORD/, "")}`;
 
-  const fg = await ddb.send(
-    new GetCommand({
-      TableName: ORDERS_TABLE,
-      Key: { pk: `ORDER#${tryFullId}`, sk: "META" },
-    })
-  );
+      const fg = await ddb.send(
+        new GetCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${tryFullId}`, sk: "META" },
+        })
+      );
 
-  if (fg.Item) {
-    fullOrderId = tryFullId;
-  }
-}
+      if (fg.Item) fullOrderId = tryFullId;
+    }
+
     if (!fullOrderId) {
       return res.status(400).json({
         ok: false,
-        message: "Merged flow must have ORD_FULL order",
+        message: "ORD_FULL order required to assign driver",
       });
     }
 
@@ -591,7 +587,7 @@ if (!fullOrderId && orderIds.length === 1) {
     const childOrderIds = allIds.filter((id) => id !== fullOrderId);
 
     /* --------------------------------------------------------
-       3️⃣ COLLECT distributors from CHILD orders
+       3️⃣ Collect distributors from CHILD orders
     -------------------------------------------------------- */
     let mergedDistributors = [];
 
@@ -606,7 +602,6 @@ if (!fullOrderId && orderIds.length === 1) {
       const item = g.Item;
       if (!item) continue;
 
-      // ✅ Case 1: distributors array exists
       if (Array.isArray(item.distributors) && item.distributors.length > 0) {
         for (const d of item.distributors) {
           mergedDistributors.push({
@@ -621,11 +616,7 @@ if (!fullOrderId && orderIds.length === 1) {
             unloadEndAt: null,
           });
         }
-        continue;
-      }
-
-      // ✅ Case 2: single order structure
-      if (item.distributorName && item.lat != null && item.lng != null) {
+      } else if (item.distributorName && item.lat != null && item.lng != null) {
         mergedDistributors.push({
           distributorCode: item.distributorId || null,
           distributorName: item.distributorName,
@@ -641,33 +632,32 @@ if (!fullOrderId && orderIds.length === 1) {
     }
 
     /* --------------------------------------------------------
-       4️⃣ DEDUPE distributors (ONLY ONCE 🔥)
+       4️⃣ Dedupe distributors
     -------------------------------------------------------- */
     const seen = new Set();
     mergedDistributors = mergedDistributors.filter((d) => {
-      const key = (d.distributorCode || d.distributorName || "")
+      const k = (d.distributorCode || d.distributorName || "")
         .toString()
         .trim()
         .toUpperCase();
-
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
+      if (!k || seen.has(k)) return false;
+      seen.add(k);
       return true;
     });
 
     /* --------------------------------------------------------
-       5️⃣ SAFETY FALLBACK (rare case)
+       5️⃣ Fallback: take distributors from FULL order
     -------------------------------------------------------- */
     if (mergedDistributors.length === 0) {
-      const g = await ddb.send(
+      const fg = await ddb.send(
         new GetCommand({
           TableName: ORDERS_TABLE,
           Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
         })
       );
 
-      if (Array.isArray(g.Item?.distributors)) {
-        mergedDistributors = g.Item.distributors.map((d) => ({
+      if (Array.isArray(fg.Item?.distributors)) {
+        mergedDistributors = fg.Item.distributors.map((d) => ({
           distributorCode: d.distributorCode || null,
           distributorName: d.distributorName || null,
           lat: d.lat != null ? Number(d.lat) : null,
@@ -692,15 +682,14 @@ if (!fullOrderId && orderIds.length === 1) {
       })
     );
 
-    if (!dg.Item) {
+    if (!dg.Item)
       return res.status(404).json({ ok: false, message: "Driver not found" });
-    }
 
     const driverName = dg.Item.name || dg.Item.userName || "Driver";
     const driverMobile = dg.Item.mobile || null;
 
     /* --------------------------------------------------------
-       7️⃣ UPDATE FULL ORDER  ✅ MAIN FIX
+       7️⃣ UPDATE FULL ORDER
     -------------------------------------------------------- */
     await updateOrders([fullOrderId], {
       UpdateExpression: `
@@ -752,18 +741,12 @@ if (!fullOrderId && orderIds.length === 1) {
       by: user?.mobile || "system",
       byUserName: user?.name || user?.userName || null,
       role: user?.role || "MANAGER",
-      data: {
-        flowKey: key,
-        driverId: driverPk,
-        driverName,
-        driverMobile,
-        vehicleNo: vehicleNo || null,
-      },
+      data: { flowKey: key, driverId: driverPk },
     });
 
     return res.json({
       ok: true,
-      message: "✅ Driver assigned (MERGE + LOCATION READY)",
+      message: "✅ Driver assigned successfully",
       flowKey: key,
       fullOrderId,
       distributors: mergedDistributors.length,
