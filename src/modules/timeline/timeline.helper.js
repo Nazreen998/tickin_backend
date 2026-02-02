@@ -1,7 +1,6 @@
 import dayjs from "dayjs";
 import { PutCommand, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "../../config/dynamo.js";
-import { handleTimelineNotification } from "../notifications/timelineNotification.helper.js";
 import utc from "dayjs/plugin/utc.js";
 import timezone from "dayjs/plugin/timezone.js";
 
