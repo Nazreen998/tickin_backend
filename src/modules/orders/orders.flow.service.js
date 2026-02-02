@@ -405,8 +405,12 @@ export const vehicleSelected = async (req, res) => {
 
     // ✅ Update ONLY FULL order
     await updateOrders([fullOrderId], {
-      UpdateExpression: "SET vehicleType = :v, vehicleNo = :vn",
+      UpdateExpression: "SET #s = :st, vehicleType = :v, vehicleNo = :vn",
+      ExpressionAttributeNames: {
+    "#s": "status",
+  },
       ExpressionAttributeValues: {
+         ":st": "VEHICLE_SELECTED",
         ":v": vehicleType || vehicleNo,
         ":vn": vehicleNo || null,
       },
