@@ -222,9 +222,12 @@ export const getOrderFlowByKey = async (req, res) => {
               Key: { pk: `ORDER#${oid}`, sk: "META" },
               UpdateExpression: `
                 SET orderId = :o,
-                    status = :s,
+                    #st = :s,
                     mergeKey = :m
               `,
+              ExpressionAttributeNames: {
+      "#st": "status"
+    },
               ExpressionAttributeValues: {
                 ":o": oid,
                 ":s": child.Item.status || "CONFIRMED",
