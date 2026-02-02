@@ -165,20 +165,24 @@ async function ensureVehicleSelected(orderIds) {
 export const getOrderFlowByKey = async (req, res) => {
   console.log("🔥🔥 FLOW SERVICE HIT", req.params.flowKey);
   try {
-    const key = req.params.flowKey;
+    const key = String(req.params.flowKey || "").trim();
     if (!key) {
       return res.status(400).json({ ok: false, message: "flowKey required" });
     }
 
-    const orderIds = await resolveOrderIdsFromFlowKey(key);
-    // 🔥 FORCE include ORD_FULL order for direct orders
-if (orderIds.length === 1) {
-  const oid = normalizeOrderId(orderIds[0]);
-  if (oid && !oid.startsWith("ORD_FULL_")) {
-    const tryFull = `ORD_FULL_${oid.replace(/^ORD/, "")}`;
-    orderIds.unshift(tryFull); // ensure FULL order is fetched
-  }
-}
+    /* --------------------------------------------------
+       1️⃣ Resolve orderIds from ANY key
+    -------------------------------------------------- */
+    let orderIds = await resolveOrderIdsFromFlowKey(key);
+
+    // 🔥 FORCE include ORD_FULL for direct ORD
+    if (orderIds.length === 1) {
+      const oid = normalizeOrderId(orderIds[0]);
+      if (oid && !oid.startsWith("ORD_FULL_")) {
+        const tryFull = `ORD_FULL_${oid.replace(/^ORD/, "")}`;
+        orderIds.unshift(tryFull);
+      }
+    }
 
     if (orderIds.length === 0) {
       return res
@@ -186,7 +190,55 @@ if (orderIds.length === 1) {
         .json({ ok: false, message: "No orders found for this flowKey" });
     }
 
-    // fetch all orders meta
+    /* --------------------------------------------------
+       2️⃣ 🔥 AUTO-CREATE ORD_FULL META IF MISSING
+    -------------------------------------------------- */
+    for (const raw of orderIds) {
+      const oid = normalizeOrderId(raw);
+      if (!oid || !oid.startsWith("ORD_FULL_")) continue;
+
+      const fg = await ddb.send(
+        new GetCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${oid}`, sk: "META" },
+        })
+      );
+
+      // ❌ FULL META missing → CREATE from child ORD
+      if (!fg.Item) {
+        const baseOrd = `ORD${oid.replace("ORD_FULL_", "")}`;
+
+        const child = await ddb.send(
+          new GetCommand({
+            TableName: ORDERS_TABLE,
+            Key: { pk: `ORDER#${baseOrd}`, sk: "META" },
+          })
+        );
+
+        if (child.Item) {
+          await ddb.send(
+            new UpdateCommand({
+              TableName: ORDERS_TABLE,
+              Key: { pk: `ORDER#${oid}`, sk: "META" },
+              UpdateExpression: `
+                SET orderId = :o,
+                    status = :s,
+                    mergeKey = :m
+              `,
+              ExpressionAttributeValues: {
+                ":o": oid,
+                ":s": child.Item.status || "CONFIRMED",
+                ":m": child.Item.mergeKey || null,
+              },
+            })
+          );
+        }
+      }
+    }
+
+    /* --------------------------------------------------
+       3️⃣ Fetch all order META
+    -------------------------------------------------- */
     const orders = [];
     for (const raw of orderIds) {
       const oid = normalizeOrderId(raw);
@@ -198,6 +250,7 @@ if (orderIds.length === 1) {
           Key: { pk: `ORDER#${oid}`, sk: "META" },
         })
       );
+
       if (g.Item) orders.push(g.Item);
     }
 
@@ -207,7 +260,9 @@ if (orderIds.length === 1) {
         .json({ ok: false, message: "Orders meta not found" });
     }
 
-    // ✅ decide master order id for tracking
+    /* --------------------------------------------------
+       4️⃣ Decide MASTER / TRACKING order
+    -------------------------------------------------- */
     const masterFromFull = orders.find((o) =>
       String(o.orderId || "").startsWith("ORD_FULL_")
     )?.orderId;
@@ -218,15 +273,22 @@ if (orderIds.length === 1) {
         .find((x) => x && String(x).trim() !== "") || null;
 
     const masterOrderId =
-      masterFromFull || masterFromChildren || orders[0]?.orderId || orderIds[0];
+      masterFromFull ||
+      masterFromChildren ||
+      orders[0]?.orderId ||
+      orderIds[0];
 
-    // ✅ Do not include ORD_FULL in calcOrders (it may be combined / empty)
+    /* --------------------------------------------------
+       5️⃣ Calc orders (exclude FULL)
+    -------------------------------------------------- */
     const childOrders = orders.filter(
       (o) => !String(o.orderId || "").startsWith("ORD_FULL_")
     );
     const calcOrders = childOrders.length > 0 ? childOrders : orders;
 
-    // ✅ base totals from orders table (fallback)
+    /* --------------------------------------------------
+       6️⃣ Totals + Items
+    -------------------------------------------------- */
     let totalQty = 0;
     let grandTotal = 0;
     const loadingItems = [];
@@ -239,7 +301,9 @@ if (orderIds.length === 1) {
       items.forEach((it) => loadingItems.push(it));
     });
 
-    // ✅ status: prefer most advanced among calcOrders
+    /* --------------------------------------------------
+       7️⃣ Status priority
+    -------------------------------------------------- */
     let status = "UNKNOWN";
     const priority = [
       "CONFIRMED",
@@ -257,8 +321,10 @@ if (orderIds.length === 1) {
     }
     if (status === "UNKNOWN") status = calcOrders[0]?.status || "UNKNOWN";
 
-    // ✅ distributors fallback from ORDERS
-    let distributors = calcOrders.map((o, idx) => ({
+    /* --------------------------------------------------
+       8️⃣ Distributors
+    -------------------------------------------------- */
+    const distributors = calcOrders.map((o, idx) => ({
       label: `D${idx + 1}`,
       distributorId: o.distributorId || null,
       distributorName: o.distributorName || null,
@@ -267,92 +333,38 @@ if (orderIds.length === 1) {
       qty: Number(o.totalQty || o.qty || 0),
     }));
 
-    // ✅ FIX: For GEO/slot flows, compute AMOUNT + QTY + D1/D2 from BOOKINGS table
-    let fixedGrandTotal = grandTotal;
-    let fixedTotalQty = totalQty;
-
-    const looksLikeGeo =
-      String(key || "").startsWith("GEO_") || String(key || "").includes("GEO_");
-
-    if (looksLikeGeo) {
-      const bRes = await ddb.send(
-        new ScanCommand({
-          TableName: BOOKINGS_TABLE,
-          FilterExpression: "mergeKey = :m OR flowKey = :m",
-          ExpressionAttributeValues: { ":m": key },
-          ProjectionExpression:
-            "orderId, distributorName, distributorCode, qty, amount",
-        })
-      );
-
-      const seen = new Set();
-      let sumAmt = 0;
-      let sumQty = 0;
-
-      const distMap = {}; // name -> {qty, amount}
-
-      for (const b of bRes.Items || []) {
-        const oid = normalizeOrderId(b.orderId);
-        if (!oid || seen.has(oid)) continue;
-        seen.add(oid);
-
-        const q = Number(b.qty || 0);
-        const a = Number(b.amount || 0);
-
-        sumQty += q;
-        sumAmt += a;
-
-        const name = String(b.distributorName || "-").trim() || "-";
-        if (!distMap[name]) distMap[name] = { distributorName: name, qty: 0, amount: 0 };
-        distMap[name].qty += q;
-        distMap[name].amount += a;
-      }
-
-      if (sumAmt > 0) fixedGrandTotal = sumAmt;
-      if (sumQty > 0) fixedTotalQty = sumQty;
-
-      const distArr = Object.values(distMap);
-      if (distArr.length > 0) {
-        distributors = distArr.map((d, i) => ({
-          label: `D${i + 1}`,
-          distributorId: null,
-          distributorName: d.distributorName,
-          orderId: null,
-          amount: Number(d.amount || 0),
-          qty: Number(d.qty || 0),
-        }));
-      }
-    }
-
     const distributorDisplay =
       distributors.length <= 1
-        ? (distributors[0]?.distributorName || "-")
+        ? distributors[0]?.distributorName || "-"
         : distributors
             .map((d) => `${d.label}: ${d.distributorName || "-"}`)
             .join(" | ");
 
+    /* --------------------------------------------------
+       9️⃣ RESPONSE
+    -------------------------------------------------- */
     return res.json({
       ok: true,
       mergeKey: orders[0]?.mergeKey || null,
-      flowKey: masterOrderId,          // 🔥 IMPORTANT
-      masterOrderId: masterOrderId,
+      flowKey: masterOrderId,
+      masterOrderId,
       trackingOrderId: masterOrderId,
       orderIds: calcOrders.map((o) => o.orderId).filter(Boolean),
-      totalQty: fixedTotalQty,              // ✅ FIX
-      grandTotal: fixedGrandTotal,          // ✅ FIX
+      totalQty,
+      grandTotal,
       status,
       vehicleType: calcOrders[0]?.vehicleType || null,
       vehicleNo: calcOrders[0]?.vehicleNo || null,
       loadingItems,
       distributors,
       distributorDisplay,
-      orders: calcOrders, // child orders meta
+      orders: calcOrders,
     });
   } catch (err) {
+    console.error("getOrderFlowByKey error", err);
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
-
 /* ============================================================
    ✅ VEHICLE SELECTED (Manager selects vehicle)
    ✅ FIX: removed stray '+'
