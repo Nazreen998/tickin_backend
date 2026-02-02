@@ -308,19 +308,20 @@ export const getOrderFlowByKey = async (req, res) => {
        7️⃣ Status priority
     -------------------------------------------------- */
     let status = "UNKNOWN";
-    const priority = [
-      "CONFIRMED",
-      "SLOT_BOOKED",
-      "VEHICLE_SELECTED",
-      "LOADING_STARTED",
-      "LOADING_COMPLETED",
-      "DRIVER_ASSIGNED",
-      "OUT_FOR_DELIVERY",
-      "DELIVERED",
-    ];
+ const priority = [
+  "DELIVERED",
+  "OUT_FOR_DELIVERY",
+  "DRIVER_ASSIGNED",
+  "LOADING_COMPLETED",
+  "LOADING_STARTED",
+  "VEHICLE_SELECTED",
+  "SLOT_BOOKED",
+  "CONFIRMED",
+];
     const stList = calcOrders.map((o) => String(o.status || "").toUpperCase());
     for (const p of priority) {
       if (stList.includes(p)) status = p;
+      break;
     }
     if (status === "UNKNOWN") status = calcOrders[0]?.status || "UNKNOWN";
 
