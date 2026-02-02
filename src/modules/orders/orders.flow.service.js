@@ -140,11 +140,9 @@ async function updateOrders(orderIds, updatePayload) {
    (FULL order might have vehicleNo; child might have vehicleType)
 ============================================================ */
 async function ensureVehicleSelected(orderIds) {
-  let fullHasVehicle = false;
-
   for (const raw of orderIds) {
     const oid = normalizeOrderId(raw);
-    if (!oid) continue;
+    if (!oid || !oid.startsWith("ORD_FULL_")) continue;
 
     const g = await ddb.send(
       new GetCommand({
@@ -154,18 +152,11 @@ async function ensureVehicleSelected(orderIds) {
     );
 
     const item = g.Item;
-    if (!item) continue;
-
-    // ✅ If FULL order has vehicle → OK
-    if (
-      String(item.orderId || "").startsWith("ORD_FULL_") &&
-      (item.vehicleNo || item.vehicleType)
-    ) {
-      fullHasVehicle = true;
+    if (item?.vehicleNo || item?.vehicleType) {
+      return true;
     }
   }
-
-  return fullHasVehicle;
+  return false;
 }
 /* ============================================================
    ✅ GET FLOW (flowKey = orderId OR mergeKey OR ORD_FULL_)
@@ -367,21 +358,37 @@ if (orderIds.length === 1) {
 ============================================================ */
 export const vehicleSelected = async (req, res) => {
   try {
-    const flowKey = req.params.flowKey;
+    const key = req.params.flowKey;
     const { vehicleType, vehicleNo } = req.body;
 
-    if (!flowKey)
+    if (!key)
       return res.status(400).json({ ok: false, message: "flowKey required" });
     if (!vehicleType && !vehicleNo)
-      return res
-        .status(400)
-        .json({ ok: false, message: "vehicleType or vehicleNo required" });
+      return res.status(400).json({
+        ok: false,
+        message: "vehicleType or vehicleNo required",
+      });
 
-    const orderIds = await resolveOrderIdsFromFlowKey(flowKey);
-    if (orderIds.length === 0)
-      return res.status(404).json({ ok: false, message: "No orders found" });
+    const orderIds = await resolveOrderIdsFromFlowKey(key);
 
-    await updateOrders(orderIds, {
+    // 🔥 FORCE FULL ORDER
+    let fullOrderId =
+      orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
+
+    if (!fullOrderId && orderIds.length === 1) {
+      const oid = normalizeOrderId(orderIds[0]);
+      fullOrderId = `ORD_FULL_${oid.replace(/^ORD/, "")}`;
+    }
+
+    if (!fullOrderId) {
+      return res.status(400).json({
+        ok: false,
+        message: "ORD_FULL order required",
+      });
+    }
+
+    // ✅ Update ONLY FULL order
+    await updateOrders([fullOrderId], {
       UpdateExpression: "SET vehicleType = :v, vehicleNo = :vn",
       ExpressionAttributeValues: {
         ":v": vehicleType || vehicleNo,
@@ -392,8 +399,7 @@ export const vehicleSelected = async (req, res) => {
     return res.json({
       ok: true,
       message: "✅ Vehicle selected",
-      flowKey,
-      affectedOrders: orderIds,
+      fullOrderId,
     });
   } catch (err) {
     return res.status(500).json({ ok: false, message: err.message });
