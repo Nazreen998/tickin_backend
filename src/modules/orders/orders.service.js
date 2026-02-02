@@ -229,66 +229,6 @@ export async function forceResetOrderSlotMeta(orderId) {
 
   return { ok: true, message: "FORCE RESET DONE", orderId };
 }
-
-/*FLOW KEY*/ 
-export const getOrderFlowByKey = async (req, res) => {
-  try {
-    const { flowKey } = req.params;
-    if (!flowKey) return res.status(400).json({ ok: false, message: "flowKey required" });
-
-    // ✅ orderId case
-    if (flowKey.startsWith("ORD")) {
-      const result = await ddb.send(new GetCommand({
-        TableName: ORDERS_TABLE,
-        Key: { pk: `ORDER#${flowKey}`, sk: "META" },
-      }));
-      if (!result.Item) return res.status(404).json({ ok: false, message: "Order not found" });
-      return res.json({ ok: true, flowKey, order: result.Item });
-    }
-
-    // ✅ mergeKey case → scan orders
-    const scanRes = await ddb.send(new ScanCommand({
-      TableName: ORDERS_TABLE,
-      FilterExpression: "mergeKey = :mk",
-      ExpressionAttributeValues: { ":mk": flowKey },
-    }));
-    const orders = scanRes.Items || [];
-    if (orders.length === 0) return res.status(404).json({ ok: false, message: "No orders found for mergeKey" });
-    // ✅ Combine items
-    const combinedItems = [];
-    let totalQty = 0;
-    let totalAmount = 0;
-    let status = "CONFIRMED";
-    for (const o of orders) {
-      totalQty += Number(o.totalQty || 0);
-      totalAmount += Number(o.totalAmount || 0);
-      const st = String(o.status || "").toUpperCase();
-      if (st !== "CONFIRMED") status = st;
-      (o.items || []).forEach((it) => {
-        combinedItems.push({
-          ...it,
-          orderId: o.orderId,
-        });
-      });
-    }
-    return res.json({
-      ok: true,
-      flowKey,
-      mergeKey: flowKey,
-      order: {
-        flowKey,
-        mergeKey: flowKey,
-        orderIds: orders.map((x) => x.orderId),
-        items: combinedItems,
-        totalQty,
-        totalAmount,
-        status,
-      },
-    });
-  } catch (err) {
-    return res.status(500).json({ ok: false, message: err.message });
-  }
-};
 /* ==========================
    ✅ Confirm Draft Order
    DRAFT → PENDING (Salesman)
