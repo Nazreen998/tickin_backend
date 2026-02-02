@@ -163,6 +163,7 @@ async function ensureVehicleSelected(orderIds) {
    ✅ FIX: GEO/FULL flows totals + distributors should match BOOKING (no mismatch)
 ============================================================ */
 export const getOrderFlowByKey = async (req, res) => {
+  console.log("🔥🔥 FLOW SERVICE HIT", req.params.flowKey);
   try {
     const key = req.params.flowKey;
     if (!key) {
