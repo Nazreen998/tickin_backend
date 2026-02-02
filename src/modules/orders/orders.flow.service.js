@@ -558,13 +558,28 @@ export const assignDriver = async (req, res) => {
       }
     }
 // ✅ DIRECT FULL ORDER SUPPORT
+/* --------------------------------------------------------
+   ✅ DIRECT FULL ORDER RESOLUTION (FINAL FIX)
+-------------------------------------------------------- */
 if (!fullOrderId && orderIds.length === 1) {
-  const singleId = normalizeOrderId(orderIds[0]);
-  if (singleId && singleId.startsWith("ORD_FULL_")) {
-    fullOrderId = singleId;
+  const oid = normalizeOrderId(orderIds[0]);
+
+  // try ORD_FULL_<orderId>
+  const tryFullId = oid.startsWith("ORD_FULL_")
+    ? oid
+    : `ORD_FULL_${oid.replace(/^ORD/, "")}`;
+
+  const fg = await ddb.send(
+    new GetCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${tryFullId}`, sk: "META" },
+    })
+  );
+
+  if (fg.Item) {
+    fullOrderId = tryFullId;
   }
 }
-
     if (!fullOrderId) {
       return res.status(400).json({
         ok: false,
