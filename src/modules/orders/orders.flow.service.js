@@ -140,9 +140,11 @@ async function updateOrders(orderIds, updatePayload) {
    (FULL order might have vehicleNo; child might have vehicleType)
 ============================================================ */
 async function ensureVehicleSelected(orderIds) {
+  let fullHasVehicle = false;
+
   for (const raw of orderIds) {
     const oid = normalizeOrderId(raw);
-    if (!oid) return false;
+    if (!oid) continue;
 
     const g = await ddb.send(
       new GetCommand({
@@ -152,12 +154,19 @@ async function ensureVehicleSelected(orderIds) {
     );
 
     const item = g.Item;
-    if (!item) return false;
-    if (!item.vehicleType && !item.vehicleNo) return false; // ✅ FIX
-  }
-  return true;
-}
+    if (!item) continue;
 
+    // ✅ If FULL order has vehicle → OK
+    if (
+      String(item.orderId || "").startsWith("ORD_FULL_") &&
+      (item.vehicleNo || item.vehicleType)
+    ) {
+      fullHasVehicle = true;
+    }
+  }
+
+  return fullHasVehicle;
+}
 /* ============================================================
    ✅ GET FLOW (flowKey = orderId OR mergeKey OR ORD_FULL_)
    ✅ FIX: GEO/FULL flows totals + distributors should match BOOKING (no mismatch)
@@ -170,6 +179,15 @@ export const getOrderFlowByKey = async (req, res) => {
     }
 
     const orderIds = await resolveOrderIdsFromFlowKey(key);
+    // 🔥 FORCE include ORD_FULL order for direct orders
+if (orderIds.length === 1) {
+  const oid = normalizeOrderId(orderIds[0]);
+  if (oid && !oid.startsWith("ORD_FULL_")) {
+    const tryFull = `ORD_FULL_${oid.replace(/^ORD/, "")}`;
+    orderIds.unshift(tryFull); // ensure FULL order is fetched
+  }
+}
+
     if (orderIds.length === 0) {
       return res
         .status(404)
@@ -323,12 +341,10 @@ export const getOrderFlowByKey = async (req, res) => {
 
     return res.json({
       ok: true,
-      flowKey: key,
       mergeKey: orders[0]?.mergeKey || null,
-
-      masterOrderId,
+      flowKey: masterOrderId,          // 🔥 IMPORTANT
+      masterOrderId: masterOrderId,
       trackingOrderId: masterOrderId,
-
       orderIds: calcOrders.map((o) => o.orderId).filter(Boolean),
       totalQty: fixedTotalQty,              // ✅ FIX
       grandTotal: fixedGrandTotal,          // ✅ FIX
