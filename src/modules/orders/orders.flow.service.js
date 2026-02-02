@@ -418,13 +418,23 @@ export const loadingStart = async (req, res) => {
       return res.status(400).json({ ok: false, message: "flowKey required" });
 
     const orderIds = req.body.orderId
-      ? [req.body.orderId]
-      : await resolveOrderIdsFromFlowKey(key);
+  ? [req.body.orderId]
+  : await resolveOrderIdsFromFlowKey(key);
 
-    if (orderIds.length === 0)
-      return res.status(404).json({ ok: false, message: "No orders found" });
+// 🔥 ADD HERE
+let fullOrderId =
+  orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
 
-    const vehicleOk = await ensureVehicleSelected(orderIds);
+if (!fullOrderId && orderIds.length > 0) {
+  const base = normalizeOrderId(orderIds[0]);
+  if (base && !base.startsWith("ORD_FULL_")) {
+    fullOrderId = `ORD_FULL_${base.replace(/^ORD/, "")}`;
+    orderIds.unshift(fullOrderId);
+  }
+}
+
+const vehicleOk = await ensureVehicleSelected(orderIds);
+
     if (!vehicleOk) {
       return res.status(400).json({
         ok: false,
@@ -477,13 +487,23 @@ export const loadingEnd = async (req, res) => {
       return res.status(400).json({ ok: false, message: "flowKey required" });
 
     const orderIds = req.body.orderId
-      ? [req.body.orderId]
-      : await resolveOrderIdsFromFlowKey(key);
+  ? [req.body.orderId]
+  : await resolveOrderIdsFromFlowKey(key);
 
-    if (orderIds.length === 0)
-      return res.status(404).json({ ok: false, message: "No orders found" });
+// 🔥 ADD HERE
+let fullOrderId =
+  orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
 
-    const vehicleOk = await ensureVehicleSelected(orderIds);
+if (!fullOrderId && orderIds.length > 0) {
+  const base = normalizeOrderId(orderIds[0]);
+  if (base && !base.startsWith("ORD_FULL_")) {
+    fullOrderId = `ORD_FULL_${base.replace(/^ORD/, "")}`;
+    orderIds.unshift(fullOrderId);
+  }
+}
+
+const vehicleOk = await ensureVehicleSelected(orderIds);
+
     if (!vehicleOk) {
       return res.status(400).json({
         ok: false,
@@ -547,23 +567,27 @@ export const assignDriver = async (req, res) => {
        1️⃣ Resolve all orderIds from ANY key
     -------------------------------------------------------- */
     const orderIds = await resolveOrderIdsFromFlowKey(key);
-    if (!orderIds || orderIds.length === 0) {
-      return res.status(404).json({ ok: false, message: "No orders found" });
-    }
 
-    const vehicleOk = await ensureVehicleSelected(orderIds);
+// 🔥 FORCE FULL ORDER (MISSING FIX)
+let fullOrderId =
+  orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
+
+if (!fullOrderId && orderIds.length > 0) {
+  const base = normalizeOrderId(orderIds[0]);
+  if (base && !base.startsWith("ORD_FULL_")) {
+    fullOrderId = `ORD_FULL_${base.replace(/^ORD/, "")}`;
+    orderIds.unshift(fullOrderId);
+  }
+}
+const vehicleOk = await ensureVehicleSelected(orderIds);
     if (!vehicleOk) {
       return res
         .status(400)
         .json({ ok: false, message: "❌ Vehicle not selected" });
     }
-
     /* --------------------------------------------------------
        2️⃣ Find FULL order (MERGE + DIRECT FULL SAFE)
     -------------------------------------------------------- */
-    let fullOrderId =
-      orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
-
     // merge case: child -> mergedIntoOrderId
     if (!fullOrderId) {
       for (const raw of orderIds) {
