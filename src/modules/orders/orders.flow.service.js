@@ -511,7 +511,6 @@ export const loadingEnd = async (req, res) => {
    - currentDistributorIndex = 0
    - D1 / D2 reach logic WILL WORK
 ============================================================ */
-
 export const assignDriver = async (req, res) => {
   try {
     const key = req.body.flowKey || req.body.mergeKey || req.body.orderId;
@@ -523,7 +522,7 @@ export const assignDriver = async (req, res) => {
       return res.status(400).json({ ok: false, message: "driverId required" });
 
     /* --------------------------------------------------------
-       1️⃣ Resolve all orderIds from flow
+       1️⃣ Resolve all orderIds
     -------------------------------------------------------- */
     const orderIds = await resolveOrderIdsFromFlowKey(key);
     if (!orderIds || orderIds.length === 0) {
@@ -538,7 +537,7 @@ export const assignDriver = async (req, res) => {
     }
 
     /* --------------------------------------------------------
-       2️⃣ Find FULL order (ORD_FULL_)
+       2️⃣ Find FULL order
     -------------------------------------------------------- */
     let fullOrderId =
       orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
@@ -558,6 +557,13 @@ export const assignDriver = async (req, res) => {
         }
       }
     }
+// ✅ DIRECT FULL ORDER SUPPORT
+if (!fullOrderId && orderIds.length === 1) {
+  const singleId = normalizeOrderId(orderIds[0]);
+  if (singleId && singleId.startsWith("ORD_FULL_")) {
+    fullOrderId = singleId;
+  }
+}
 
     if (!fullOrderId) {
       return res.status(400).json({
@@ -570,7 +576,7 @@ export const assignDriver = async (req, res) => {
     const childOrderIds = allIds.filter((id) => id !== fullOrderId);
 
     /* --------------------------------------------------------
-       3️⃣ COLLECT distributors FROM CHILD ORDERS
+       3️⃣ COLLECT distributors from CHILD orders
     -------------------------------------------------------- */
     let mergedDistributors = [];
 
@@ -582,27 +588,60 @@ export const assignDriver = async (req, res) => {
         })
       );
 
-      if (Array.isArray(g.Item?.distributors)) {
-        mergedDistributors.push(...g.Item.distributors);
+      const item = g.Item;
+      if (!item) continue;
+
+      // ✅ Case 1: distributors array exists
+      if (Array.isArray(item.distributors) && item.distributors.length > 0) {
+        for (const d of item.distributors) {
+          mergedDistributors.push({
+            distributorCode: d.distributorCode || null,
+            distributorName: d.distributorName || null,
+            lat: d.lat != null ? Number(d.lat) : null,
+            lng: d.lng != null ? Number(d.lng) : null,
+            mapUrl: d.mapUrl || null,
+            items: d.items || [],
+            reachedAt: null,
+            unloadStartAt: null,
+            unloadEndAt: null,
+          });
+        }
+        continue;
+      }
+
+      // ✅ Case 2: single order structure
+      if (item.distributorName && item.lat != null && item.lng != null) {
+        mergedDistributors.push({
+          distributorCode: item.distributorId || null,
+          distributorName: item.distributorName,
+          lat: Number(item.lat),
+          lng: Number(item.lng),
+          mapUrl: item.mapUrl || null,
+          items: item.items || [],
+          reachedAt: null,
+          unloadStartAt: null,
+          unloadEndAt: null,
+        });
       }
     }
 
     /* --------------------------------------------------------
-       4️⃣ DEDUPE distributors (by code/name)
+       4️⃣ DEDUPE distributors (ONLY ONCE 🔥)
     -------------------------------------------------------- */
     const seen = new Set();
     mergedDistributors = mergedDistributors.filter((d) => {
-      const k = (d.distributorCode || d.distributorName || "")
+      const key = (d.distributorCode || d.distributorName || "")
         .toString()
         .trim()
         .toUpperCase();
-      if (!k || seen.has(k)) return false;
-      seen.add(k);
+
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
       return true;
     });
 
     /* --------------------------------------------------------
-       5️⃣ SAFETY FALLBACK (single order / edge case)
+       5️⃣ SAFETY FALLBACK (rare case)
     -------------------------------------------------------- */
     if (mergedDistributors.length === 0) {
       const g = await ddb.send(
@@ -613,7 +652,17 @@ export const assignDriver = async (req, res) => {
       );
 
       if (Array.isArray(g.Item?.distributors)) {
-        mergedDistributors = g.Item.distributors;
+        mergedDistributors = g.Item.distributors.map((d) => ({
+          distributorCode: d.distributorCode || null,
+          distributorName: d.distributorName || null,
+          lat: d.lat != null ? Number(d.lat) : null,
+          lng: d.lng != null ? Number(d.lng) : null,
+          mapUrl: d.mapUrl || null,
+          items: d.items || [],
+          reachedAt: null,
+          unloadStartAt: null,
+          unloadEndAt: null,
+        }));
       }
     }
 
@@ -636,7 +685,7 @@ export const assignDriver = async (req, res) => {
     const driverMobile = dg.Item.mobile || null;
 
     /* --------------------------------------------------------
-       7️⃣ UPDATE FULL ORDER (🔥 MAIN FIX)
+       7️⃣ UPDATE FULL ORDER  ✅ MAIN FIX
     -------------------------------------------------------- */
     await updateOrders([fullOrderId], {
       UpdateExpression: `
@@ -679,7 +728,7 @@ export const assignDriver = async (req, res) => {
     }
 
     /* --------------------------------------------------------
-       9️⃣ Timeline (ONLY FULL)
+       9️⃣ Timeline
     -------------------------------------------------------- */
     const user = req.user || {};
     await addTimelineEvent({
@@ -699,7 +748,7 @@ export const assignDriver = async (req, res) => {
 
     return res.json({
       ok: true,
-      message: "✅ Driver assigned (MERGE READY)",
+      message: "✅ Driver assigned (MERGE + LOCATION READY)",
       flowKey: key,
       fullOrderId,
       distributors: mergedDistributors.length,
@@ -709,7 +758,6 @@ export const assignDriver = async (req, res) => {
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
-
 /* ============================================================
    ✅ NEW: List drivers for dropdown (Manager/Master)
 ============================================================ */
