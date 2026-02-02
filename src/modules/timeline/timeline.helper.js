@@ -94,15 +94,7 @@ export const addTimelineEvent = async ({
       ConditionExpression: eventId ? "attribute_not_exists(eventId)" : undefined,
     })
   );
-  // 🔔 auto notification based on EVENT_ROLE_MAP
-  await handleTimelineNotification({
-    event: evt,
-    orderId: targetOrderId, // ✅ use resolved id
-    data,
-  });
-
-
-  return true;
+   return true;
 };
 
 /**
