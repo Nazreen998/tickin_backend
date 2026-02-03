@@ -99,23 +99,30 @@ export const assignDriver = async (req, res) => {
       }
 
       // CASE 2: single-order shape
-      if (
-        o.distributorName &&
-        Number.isFinite(Number(o.lat)) &&
-        Number.isFinite(Number(o.lng))
-      ) {
-        distributors.push({
-          distributorCode: o.distributorId || null,
-          distributorName: o.distributorName,
-          lat: Number(o.lat),
-          lng: Number(o.lng),
-          mapUrl: o.mapUrl || null,
-          items: Array.isArray(o.items) ? o.items : [],
-          reachedAt: null,
-          unloadStartAt: null,
-          unloadEndAt: null,
-        });
-      }
+      if (o.distributorName) {
+  const lat =
+    Number(o.lat) ||
+    Number(o.distributorLat) ||
+    null;
+
+  const lng =
+    Number(o.lng) ||
+    Number(o.distributorLng) ||
+    null;
+
+  distributors.push({
+    distributorCode: o.distributorId || null,
+    distributorName: o.distributorName,
+    lat,
+    lng,
+    mapUrl: o.mapUrl || null,
+    items: o.items || [],
+    reachedAt: null,
+    unloadStartAt: null,
+    unloadEndAt: null,
+  });
+}
+
     }
 
     /* --------------------------------------------------
