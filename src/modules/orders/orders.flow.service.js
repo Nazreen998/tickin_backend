@@ -397,17 +397,26 @@ export const vehicleSelected = async (req, res) => {
 
     // ✅ Update ONLY FULL order
     await updateOrders([fullOrderId], {
-      UpdateExpression: "SET #s = :st, vehicleType = :v, vehicleNo = :vn",
-      ExpressionAttributeNames: {
-    "#s": "status",
+  UpdateExpression: `
+    SET #s = :st,
+        driverId = :d,
+        driverName = :dn,
+        driverMobile = :dm,
+        vehicleNo = :vn,
+        distributors = :dist,
+        currentDistributorIndex = :i
+  `,
+  ExpressionAttributeNames: { "#s": "status" },
+  ExpressionAttributeValues: {
+    ":st": "DRIVER_ASSIGNED",
+    ":d": driverPk,
+    ":dn": driverName,
+    ":dm": driverMobile,
+    ":vn": vehicleNo || null,
+    ":dist": mergedDistributors,
+    ":i": 0,
   },
-      ExpressionAttributeValues: {
-         ":st": "VEHICLE_SELECTED",
-        ":v": vehicleType || vehicleNo,
-        ":vn": vehicleNo || null,
-      },
-    });
-
+});
     return res.json({
       ok: true,
       message: "✅ Vehicle selected",
@@ -601,10 +610,9 @@ export const assignDriver = async (req, res) => {
 
       // CASE 1: already has distributors[]
       if (Array.isArray(o.distributors) && o.distributors.length) {
-        distributors.push(...o.distributors);
-        continue;
-      }
-
+  distributors.push(...o.distributors);
+  continue;
+}
       // CASE 2: single order shape
       if (o.distributorName && (o.lat || o.lng)) {
         distributors.push({
@@ -622,13 +630,16 @@ export const assignDriver = async (req, res) => {
     }
 
     // ❗ dedupe distributors
-    const seen = new Set();
-    distributors = distributors.filter((d) => {
-      const k = (d.distributorCode || d.distributorName || "").toUpperCase();
-      if (!k || seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
+   const seen = new Set();
+distributors = distributors.filter((d) => {
+  const k = (d.distributorCode || d.distributorName || "")
+    .toString()
+    .trim()
+    .toUpperCase();
+  if (!k || seen.has(k)) return false;
+  seen.add(k);
+  return true;
+});
 
     if (!distributors.length) {
       return res.status(400).json({
