@@ -33,21 +33,26 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
 
   // ✅ SPECIAL: If ORD_FULL_* flowKey => expand to child orders
   if (key.startsWith("ORD_FULL_")) {
-    const fullMeta = await ddb.send(
-      new GetCommand({
-        TableName: ORDERS_TABLE,
-        Key: { pk: `ORDER#${key}`, sk: "META" },
-      })
-    );
+  const fullMeta = await ddb.send(
+    new GetCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${key}`, sk: "META" },
+    })
+  );
 
-    const merged = Array.isArray(fullMeta?.Item?.mergedOrderIds)
-      ? fullMeta.Item.mergedOrderIds
-      : [];
+  const merged = Array.isArray(fullMeta?.Item?.mergedOrderIds)
+    ? fullMeta.Item.mergedOrderIds
+    : [];
 
-    const all = [key, ...merged].map(normalizeOrderId).filter(Boolean);
-    return [...new Set(all)];
-  }
+  // ✅ ALWAYS include the base child order for single flows
+  const baseOrd = `ORD${key.replace("ORD_FULL_", "")}`;
 
+  const all = [key, baseOrd, ...merged]
+    .map(normalizeOrderId)
+    .filter(Boolean);
+
+  return [...new Set(all)];
+}
   // ✅ orderId direct (normal orders)
   if (key.startsWith("ORD")) return [key];
   if (/^\d+$/.test(key)) return [`ORD${key}`];
