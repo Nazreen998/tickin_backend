@@ -155,8 +155,25 @@ export const assignDriver = async (req, res) => {
       }
 
       // CASE 2: single-order shape → BUILD distributor
-      if (o.distributorName) {
-        const { lat, lng } = extractLatLng(o);
+      if (o.distributorName) {  let lat =
+    Number(o.lat) ||
+    Number(o.distributorLat) ||
+    null;
+
+  let lng =
+    Number(o.lng) ||
+    Number(o.distributorLng) ||
+    null;
+
+  // 🔥 HARD FALLBACK (same location allowed)
+  if (!lat || !lng) {
+    // 🔁 COPY FROM PREVIOUS DISTRIBUTOR IF EXISTS
+    const prev = distributors[distributors.length - 1];
+    if (prev?.lat && prev?.lng) {
+      lat = prev.lat;
+      lng = prev.lng;
+    }
+  }
         if (!lat || !lng) continue; // 🔥 THIS LINE IS CRITICAL
         distributors.push({
           distributorCode: o.distributorId || null,
