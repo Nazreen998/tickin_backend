@@ -20,7 +20,6 @@ import {
   getSlotConfirmedOrders,
   getAssignedOrdersByDriver
 } from "./orders.service.js";
-
 import {
   vehicleSelected,
   loadingStart,
@@ -29,6 +28,9 @@ import {
    assignDriver,
   getDriversForDropdown, 
 } from "./orders.flow.service.js";
+import { fixDistributors } from "../controllers/orders.controller.js";
+
+router.post("/fix-distributors", fixDistributors);
 
 const router = express.Router();
 router.get(
