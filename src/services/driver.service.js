@@ -99,28 +99,38 @@ function normalizeDistributors(order) {
 function getCurrentStop(order) {
   let distributors = normalizeDistributors(order);
 
-  // 🔥 TEMP FALLBACK: if distributors empty but order has distributorName
-  if (distributors.length === 0 && order.distributorName) {
+  // ✅ HARD FIX: if FULL order distributors empty → rebuild from root fields
+  if (
+    (!Array.isArray(distributors) || distributors.length === 0) &&
+    order.distributorName
+  ) {
     distributors = [{
+      distributorCode: order.distributorCode || order.distributorId || null,
       distributorName: order.distributorName,
-      distributorCode: order.distributorCode || null,
-      lat: order.distributorLat || order.lat || null,
-      lng: order.distributorLng || order.lng || null,
+      lat:
+        Number(order.lat) ||
+        Number(order.distributorLat) ||
+        null,
+      lng:
+        Number(order.lng) ||
+        Number(order.distributorLng) ||
+        null,
+      mapUrl: order.mapUrl || null,
       reachedAt: null,
       unloadStartAt: null,
       unloadEndAt: null,
-      items: [],
+      items: order.items || [],
     }];
   }
 
   const idx = Number(order.currentDistributorIndex || 0);
+
   return {
     distributors,
     idx,
     stop: distributors[idx] || null,
   };
 }
-
 /* ✅ D1 / D2 helpers */
 function stopLabel(idx) {
   return idx === 0 ? "D1" : "D2";
