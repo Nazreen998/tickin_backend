@@ -45,9 +45,7 @@ export const assignDriver = async (req, res) => {
       });
     }
 
-    const orderIds = rawOrderIds
-      .map(normalizeOrderId)
-      .filter(Boolean);
+    const orderIds = rawOrderIds.map(normalizeOrderId).filter(Boolean);
 
     /* --------------------------------------------------
        2️⃣ Find FULL order
@@ -65,16 +63,43 @@ export const assignDriver = async (req, res) => {
     const childOrderIds = orderIds.filter((id) => id !== fullOrderId);
 
     /* --------------------------------------------------
+       🔧 helper: extract lat/lng safely (🔥 IMPORTANT)
+    -------------------------------------------------- */
+    function extractLatLng(o = {}) {
+      if (Number(o.lat) && Number(o.lng)) {
+        return { lat: Number(o.lat), lng: Number(o.lng) };
+      }
+
+      if (Number(o.distributorLat) && Number(o.distributorLng)) {
+        return {
+          lat: Number(o.distributorLat),
+          lng: Number(o.distributorLng),
+        };
+      }
+
+      if (o.mapUrl) {
+        const m = String(o.mapUrl).match(
+          /(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)/,
+        );
+        if (m) {
+          return { lat: Number(m[1]), lng: Number(m[3]) };
+        }
+      }
+
+      return { lat: null, lng: null };
+    }
+
+    /* --------------------------------------------------
        3️⃣ BUILD distributors[] FOR FULL ORDER
     -------------------------------------------------- */
     let distributors = [];
 
-    // 🔹 3A: from FULL order itself
+    // 🔹 3A: from FULL order (if already exists)
     const fullRes = await ddb.send(
       new GetCommand({
         TableName: ORDERS_TABLE,
         Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
-      })
+      }),
     );
 
     if (Array.isArray(fullRes.Item?.distributors)) {
@@ -87,42 +112,35 @@ export const assignDriver = async (req, res) => {
         new GetCommand({
           TableName: ORDERS_TABLE,
           Key: { pk: `ORDER#${cid}`, sk: "META" },
-        })
+        }),
       );
+
       const o = g.Item;
       if (!o) continue;
 
-      // CASE 1: distributors[]
+      // CASE 1: already has distributors[]
       if (Array.isArray(o.distributors) && o.distributors.length > 0) {
         distributors.push(...o.distributors);
         continue;
       }
 
-      // CASE 2: single-order shape
+      // CASE 2: single-order shape → BUILD distributor
       if (o.distributorName) {
-  const lat =
-    Number(o.lat) ||
-    Number(o.distributorLat) ||
-    null;
+        const { lat, lng } = extractLatLng(o);
+        if (!lat || !lng) continue; // ❗ SKIP invalid distributor
 
-  const lng =
-    Number(o.lng) ||
-    Number(o.distributorLng) ||
-    null;
-
-  distributors.push({
-    distributorCode: o.distributorId || null,
-    distributorName: o.distributorName,
-    lat,
-    lng,
-    mapUrl: o.mapUrl || null,
-    items: o.items || [],
-    reachedAt: null,
-    unloadStartAt: null,
-    unloadEndAt: null,
-  });
-}
-
+        distributors.push({
+          distributorCode: o.distributorId || null,
+          distributorName: o.distributorName,
+          lat,
+          lng,
+          mapUrl: o.mapUrl || null,
+          items: o.items || [],
+          reachedAt: null,
+          unloadStartAt: null,
+          unloadEndAt: null,
+        });
+      }
     }
 
     /* --------------------------------------------------
@@ -154,7 +172,7 @@ export const assignDriver = async (req, res) => {
       new GetCommand({
         TableName: USERS_TABLE,
         Key: { pk: driverPk, sk: "PROFILE" },
-      })
+      }),
     );
 
     if (!dg.Item) {
@@ -168,7 +186,7 @@ export const assignDriver = async (req, res) => {
     const driverMobile = dg.Item.mobile || null;
 
     /* --------------------------------------------------
-       6️⃣ UPDATE FULL ORDER  (🔥 MAIN FIX)
+       6️⃣ UPDATE FULL ORDER (🔥 FINAL FIX)
     -------------------------------------------------- */
     await ddb.send(
       new UpdateCommand({
@@ -193,7 +211,7 @@ export const assignDriver = async (req, res) => {
           ":dist": distributors,
           ":i": 0,
         },
-      })
+      }),
     );
 
     /* --------------------------------------------------
@@ -211,7 +229,7 @@ export const assignDriver = async (req, res) => {
             ":st": "MERGED",
             ":mid": fullOrderId,
           },
-        })
+        }),
       );
     }
 
@@ -238,7 +256,7 @@ export const assignDriver = async (req, res) => {
       ok: true,
       message: "✅ Driver assigned successfully",
       fullOrderId,
-      distributors: distributors.length,
+      distributorCount: distributors.length,
     });
   } catch (err) {
     console.error("assignDriver error", err);
@@ -248,7 +266,6 @@ export const assignDriver = async (req, res) => {
     });
   }
 };
-
 /* ============================================================
    ✅ DRIVER DROPDOWN
 ============================================================ */
