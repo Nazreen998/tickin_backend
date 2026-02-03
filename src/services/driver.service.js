@@ -57,41 +57,60 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
 }
 
 /* -------- distributors -------- */
-
 function normalizeDistributors(order) {
-  const list = Array.isArray(order.distributors) ? order.distributors : [];
+  // ✅ Support BOTH DocumentClient + Raw Dynamo JSON
+  const unwrap = (v) => {
+    if (v == null) return null;
+    if (typeof v === "object") {
+      if ("S" in v) return v.S;
+      if ("N" in v) return Number(v.N);
+      if ("BOOL" in v) return Boolean(v.BOOL);
+      if ("NULL" in v) return null;
+      if ("M" in v) return v.M;
+      if ("L" in v) return v.L;
+    }
+    return v;
+  };
+
+  const raw = order?.distributors;
+
+  // ✅ list can be: [] OR {L:[{M:{...}}]}
+  let list = [];
+  if (Array.isArray(raw)) list = raw;
+  else if (raw && Array.isArray(raw.L)) list = raw.L.map((x) => x.M ?? x);
+  else list = [];
 
   function parseLatLngFromUrl(url) {
     if (!url) return { lat: null, lng: null };
-    const m = url.match(/(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)/);
+    const m = String(url).match(/(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)/);
     if (!m) return { lat: null, lng: null };
     return { lat: Number(m[1]), lng: Number(m[3]) };
   }
 
-  return list.map((d) => {
-    // 1️⃣ Prefer stored lat/lng
-    let lat = d.lat ?? d.latitude ?? null;
-    let lng = d.lng ?? d.longitude ?? null;
+  return list.map((d0) => {
+    const d = d0?.M ? d0.M : d0; // extra safety
 
-    // 2️⃣ Fallback: parse from mapUrl / final_url
-    if ((!lat || !lng) && (d.mapUrl || d.final_url || d.finalUrl)) {
-      const parsed = parseLatLngFromUrl(
-        d.mapUrl || d.final_url || d.finalUrl
-      );
+    let lat = unwrap(d.lat ?? d.latitude);
+    let lng = unwrap(d.lng ?? d.longitude);
+
+    const mapUrl = unwrap(d.mapUrl ?? d.final_url ?? d.finalUrl);
+
+    if ((!lat || !lng) && mapUrl) {
+      const parsed = parseLatLngFromUrl(mapUrl);
       lat = lat ?? parsed.lat;
       lng = lng ?? parsed.lng;
     }
 
     return {
-      distributorCode: d.distributorCode || d.code || null,
-      distributorName: d.distributorName || d.name || null,
-      lat,
-      lng,
-      mapUrl: d.mapUrl || d.final_url || d.finalUrl || null,
-      items: Array.isArray(d.items) ? d.items : [],
-      reachedAt: d.reachedAt || null,
-      unloadStartAt: d.unloadStartAt || null,
-      unloadEndAt: d.unloadEndAt || null,
+      distributorCode: unwrap(d.distributorCode ?? d.code) ?? null,
+      distributorName: unwrap(d.distributorName ?? d.name) ?? null,
+      lat: lat == null ? null : Number(lat),
+      lng: lng == null ? null : Number(lng),
+      mapUrl: mapUrl ?? null,
+      items: Array.isArray(unwrap(d.items)) ? unwrap(d.items) : [],
+      reachedAt: unwrap(d.reachedAt) ?? null,
+      unloadStartAt: unwrap(d.unloadStartAt) ?? null,
+      unloadEndAt: unwrap(d.unloadEndAt) ?? null,
     };
   });
 }
