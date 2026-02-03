@@ -557,6 +557,33 @@ const vehicleOk = await ensureVehicleSelected(orderIds);
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
+const DISTRIBUTORS_TABLE =
+  process.env.DISTRIBUTORS_TABLE || "tickin_distributors";
+
+async function getDistributorFromMaster(distributorId) {
+  if (!distributorId) return null;
+
+  const res = await ddb.send(
+    new GetCommand({
+      TableName: DISTRIBUTORS_TABLE,
+      Key: {
+        pk: `DISTRIBUTOR#${distributorId}`,
+        sk: "PROFILE",
+      },
+    })
+  );
+
+  if (!res.Item) return null;
+
+  return {
+    distributorCode: distributorId,
+    distributorName:
+      res.Item.name || res.Item.distributorName || null,
+    lat: Number(res.Item.lat) || null,
+    lng: Number(res.Item.lng) || null,
+    mapUrl: res.Item.mapUrl || null,
+  };
+}
 
 /* ============================================================
    ✅ ASSIGN DRIVER (FINAL)
@@ -609,22 +636,25 @@ export const assignDriver = async (req, res) => {
   continue;
 }
       // CASE 2: single order shape
-      if (
-  o.distributorName &&
-  (o.lat != null || o.lng != null || o.mapUrl)
-) {
-        distributors.push({
-          distributorCode: o.distributorId || null,
-          distributorName: o.distributorName,
-          lat: Number(o.lat),
-          lng: Number(o.lng),
-          mapUrl: o.mapUrl || null,
-          items: o.items || [],
-          reachedAt: null,
-          unloadStartAt: null,
-          unloadEndAt: null,
-        });
-      }
+      // ✅ NEW CORRECT LOGIC
+if (!o.distributorId) continue;
+
+const master = await getDistributorFromMaster(o.distributorId);
+
+// ❌ if master location missing, skip
+if (!master || !master.lat || !master.lng) continue;
+
+distributors.push({
+  distributorCode: master.distributorCode,
+  distributorName: master.distributorName || o.distributorName,
+  lat: master.lat,
+  lng: master.lng,
+  mapUrl: master.mapUrl || null,
+  items: o.items || [],
+  reachedAt: null,
+  unloadStartAt: null,
+  unloadEndAt: null,
+});
     }
 
     // ❗ dedupe distributors
