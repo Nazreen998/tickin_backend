@@ -4,7 +4,7 @@ import {
   getOrders,
   deleteDriverOrder,
   validateReach,
-} from "../controllers/driver.controller.js";
+} from "../controllers/drivers.controller.js";
 
 const router = express.Router();
 

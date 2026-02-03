@@ -28,11 +28,10 @@ import {
    assignDriver,
   getDriversForDropdown, 
 } from "./orders.flow.service.js";
-import { fixDistributors } from "../controllers/orders.controller.js";
+import { fixDistributors } from "./orders.controller.js";
+const router = express.Router();
 
 router.post("/fix-distributors", fixDistributors);
-
-const router = express.Router();
 router.get(
   "/drivers",
   verifyToken,
