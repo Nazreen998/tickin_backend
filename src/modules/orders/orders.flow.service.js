@@ -98,7 +98,8 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
 /* ============================================================
    ✅ Helper: Update multiple orders safely
 ============================================================ */
-async function updateOrders(orderIds, updatePayload) {
+async function updateOrders(fullOrderId, updatePayload) {
+  const orderIds = await resolveOrderIdsFromFlowKey(fullOrderId);
   for (const raw of orderIds) {
     const oid = normalizeOrderId(raw);
     if (!oid) continue;
@@ -369,23 +370,25 @@ export const vehicleSelected = async (req, res) => {
     const key = req.params.flowKey;
     const { vehicleType, vehicleNo } = req.body;
 
-    if (!key)
+    if (!key) {
       return res.status(400).json({ ok: false, message: "flowKey required" });
-    if (!vehicleType && !vehicleNo)
+    }
+
+    if (!vehicleType && !vehicleNo) {
       return res.status(400).json({
         ok: false,
         message: "vehicleType or vehicleNo required",
       });
+    }
 
     const orderIds = await resolveOrderIdsFromFlowKey(key);
 
-    // 🔥 FORCE FULL ORDER
     let fullOrderId =
       orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
 
-    if (!fullOrderId && orderIds.length === 1) {
-      const oid = normalizeOrderId(orderIds[0]);
-      fullOrderId = `ORD_FULL_${oid.replace(/^ORD/, "")}`;
+    if (!fullOrderId && orderIds.length > 0) {
+      const base = normalizeOrderId(orderIds[0]);
+      fullOrderId = `ORD_FULL_${base.replace(/^ORD/, "")}`;
     }
 
     if (!fullOrderId) {
@@ -395,28 +398,20 @@ export const vehicleSelected = async (req, res) => {
       });
     }
 
-    // ✅ Update ONLY FULL order
     await updateOrders([fullOrderId], {
-  UpdateExpression: `
-    SET #s = :st,
-        driverId = :d,
-        driverName = :dn,
-        driverMobile = :dm,
-        vehicleNo = :vn,
-        distributors = :dist,
-        currentDistributorIndex = :i
-  `,
-  ExpressionAttributeNames: { "#s": "status" },
-  ExpressionAttributeValues: {
-    ":st": "DRIVER_ASSIGNED",
-    ":d": driverPk,
-    ":dn": driverName,
-    ":dm": driverMobile,
-    ":vn": vehicleNo || null,
-    ":dist": mergedDistributors,
-    ":i": 0,
-  },
-});
+      UpdateExpression: `
+        SET #s = :st,
+            vehicleType = :vt,
+            vehicleNo = :vn
+      `,
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: {
+        ":st": "VEHICLE_SELECTED",
+        ":vt": vehicleType || null,
+        ":vn": vehicleNo || null,
+      },
+    });
+
     return res.json({
       ok: true,
       message: "✅ Vehicle selected",
@@ -463,7 +458,7 @@ const vehicleOk = await ensureVehicleSelected(orderIds);
       });
     }
 
-    await updateOrders(orderIds, {
+    await updateOrders([fullOrderId], {
       UpdateExpression:
         "SET #s = :st, loadingStarted = :ls, loadingStartedAt = :t",
       ExpressionAttributeNames: { "#s": "status" },
@@ -532,7 +527,7 @@ const vehicleOk = await ensureVehicleSelected(orderIds);
       });
     }
 
-    await updateOrders(orderIds, {
+    await updateOrders([fullOrderId], {
       UpdateExpression: "SET #s = :st, loadingEndAt = :t",
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
@@ -614,7 +609,10 @@ export const assignDriver = async (req, res) => {
   continue;
 }
       // CASE 2: single order shape
-      if (o.distributorName && (o.lat || o.lng)) {
+      if (
+  o.distributorName &&
+  (o.lat != null || o.lng != null || o.mapUrl)
+) {
         distributors.push({
           distributorCode: o.distributorId || null,
           distributorName: o.distributorName,
