@@ -10,7 +10,7 @@ import "./src/appInit.js";
 
 // ✅ Dynamo imports AFTER env
 import { ListTablesCommand } from "@aws-sdk/client-dynamodb";
-import { dynamoClient } from "./src/config/dynamo.js";
+import { ddb } from "./src/config/dynamo.js";
 
 // ✅ modules imports
 import authRoutes from "./src/modules/auth/auth.routes.js";

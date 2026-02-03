@@ -1,4 +1,6 @@
 import express from "express";
+import { ddb } from "../../config/dynamo.js";
+import { GetCommand } from "@aws-sdk/lib-dynamodb";
 import { verifyToken } from "../../middleware/auth.middleware.js";
 import { allowRoles } from "../../middleware/role.middleware.js";
 import { forceResetOrderSlotMeta } from "./orders.service.js"; // ✅ ADD THIS
@@ -28,10 +30,27 @@ import {
    assignDriver,
   getDriversForDropdown, 
 } from "./orders.flow.service.js";
+
 import { fixDistributors } from "./orders.controller.js";
 const router = express.Router();
 
 router.post("/fix-distributors", fixDistributors);
+router.get("/distributors/:code", async (req, res) => {
+  try {
+    const code = req.params.code;
+    const out = await ddb.send(
+      new GetCommand({
+        TableName: "tickin_distributors",
+        Key: { pk: "DISTRIBUTOR", sk: code },
+      })
+    );
+    if (!out.Item) return res.status(404).json({ ok: false, message: "Not found" });
+    return res.json({ ok: true, item: out.Item });
+  } catch (e) {
+    return res.status(500).json({ ok: false, message: e.message });
+  }
+});
+
 router.get(
   "/drivers",
   verifyToken,

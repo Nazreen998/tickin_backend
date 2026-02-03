@@ -563,28 +563,42 @@ const DISTRIBUTORS_TABLE =
 async function getDistributorFromMaster(distributorId) {
   if (!distributorId) return null;
 
+  // ✅ Your table keys: pk="DISTRIBUTOR", sk="<D001>"
   const res = await ddb.send(
     new GetCommand({
       TableName: DISTRIBUTORS_TABLE,
       Key: {
-        pk: `DISTRIBUTOR#${distributorId}`,
-        sk: "PROFILE",
+        pk: "DISTRIBUTOR",
+        sk: String(distributorId), // ex: "D001"
       },
     })
   );
 
   if (!res.Item) return null;
 
+  // ✅ Your field is final_url
+  const mapUrl = res.Item.final_url || res.Item.mapUrl || null;
+
+  // ✅ parse lat/lng from URL if needed
+  let lat = Number(res.Item.lat) || null;
+  let lng = Number(res.Item.lng) || null;
+
+  if ((!lat || !lng) && mapUrl) {
+    const m = String(mapUrl).match(/(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)/);
+    if (m) {
+      lat = Number(m[1]);
+      lng = Number(m[3]);
+    }
+  }
+
   return {
-    distributorCode: distributorId,
-    distributorName:
-      res.Item.name || res.Item.distributorName || null,
-    lat: Number(res.Item.lat) || null,
-    lng: Number(res.Item.lng) || null,
-    mapUrl: res.Item.mapUrl || null,
+    distributorCode: res.Item.distributorCode || String(distributorId),
+    distributorName: res.Item.agencyName || res.Item.name || null,
+    lat,
+    lng,
+    mapUrl,
   };
 }
-
 /* ============================================================
    ✅ ASSIGN DRIVER (FINAL)
 ============================================================ */
@@ -628,6 +642,11 @@ export const assignDriver = async (req, res) => {
         })
       );
       const o = g.Item;
+      console.log("📦 CHILD ORDER META", {
+    orderId: cid,
+    distributorId: o?.distributorId,
+    distributorName: o?.distributorName,
+  });
       if (!o) continue;
 
       // CASE 1: already has distributors[]
