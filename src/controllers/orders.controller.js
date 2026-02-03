@@ -15,6 +15,37 @@ import { addTimelineEvent } from "../modules/timeline/timeline.helper.js";
 
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const USERS_TABLE = process.env.USERS_TABLE || "tickin_users";
+function parseLatLngFromUrl(url) {
+  if (!url) return { lat: null, lng: null };
+  const m = String(url).match(/(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)/);
+  if (!m) return { lat: null, lng: null };
+  return { lat: Number(m[1]), lng: Number(m[3]) };
+}
+
+function normalizeStop(d = {}) {
+  let lat = d.lat ?? d.latitude ?? null;
+  let lng = d.lng ?? d.longitude ?? null;
+  const mapUrl = d.mapUrl ?? d.final_url ?? d.finalUrl ?? null;
+
+  // if lat/lng missing, try parse from mapUrl
+  if ((!lat || !lng) && mapUrl) {
+    const p = parseLatLngFromUrl(mapUrl);
+    lat = lat ?? p.lat;
+    lng = lng ?? p.lng;
+  }
+
+  return {
+    distributorCode: d.distributorCode || d.code || d.distributorId || null,
+    distributorName: d.distributorName || d.name || null,
+    lat: lat == null ? null : Number(lat),
+    lng: lng == null ? null : Number(lng),
+    mapUrl,
+    items: Array.isArray(d.items) ? d.items : [],
+    reachedAt: d.reachedAt || null,
+    unloadStartAt: d.unloadStartAt || null,
+    unloadEndAt: d.unloadEndAt || null,
+  };
+}
 
 /* ============================================================
    ✅ ASSIGN DRIVER (FULL + MERGE SAFE)
@@ -33,7 +64,6 @@ export const assignDriver = async (req, res) => {
         message: "flowKey & driverId required",
       });
     }
-
     /* --------------------------------------------------
        1️⃣ Resolve orderIds
     -------------------------------------------------- */
@@ -127,13 +157,11 @@ export const assignDriver = async (req, res) => {
       // CASE 2: single-order shape → BUILD distributor
       if (o.distributorName) {
         const { lat, lng } = extractLatLng(o);
-        if (!lat || !lng) continue; // ❗ SKIP invalid distributor
-
         distributors.push({
           distributorCode: o.distributorId || null,
           distributorName: o.distributorName,
-          lat,
-          lng,
+          lat: lat ?? null,
+          lng: lng ?? null,
           mapUrl: o.mapUrl || null,
           items: o.items || [],
           reachedAt: null,
@@ -142,7 +170,8 @@ export const assignDriver = async (req, res) => {
         });
       }
     }
-
+    // 🔥 ADD THIS LINE
+distributors = distributors.map(normalizeStop);
     /* --------------------------------------------------
        4️⃣ DEDUPE distributors
     -------------------------------------------------- */

@@ -33,8 +33,14 @@ export function validateTransition(current, next) {
   const c = groupStatus(current);
   const n = groupStatus(next);
 
+  // ❌ Block REACHED → REACHED (D2 duplicate reach)
+  if (c === "REACHED" && n === "REACHED") {
+    throw new Error(`Invalid status transition: ${c} -> ${n}`);
+  }
+
   const allowed = transitions[c] || [];
   if (!allowed.includes(n)) {
     throw new Error(`Invalid status transition: ${c} -> ${n}`);
   }
 }
+
