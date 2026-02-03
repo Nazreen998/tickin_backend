@@ -157,6 +157,7 @@ export const assignDriver = async (req, res) => {
       // CASE 2: single-order shape → BUILD distributor
       if (o.distributorName) {
         const { lat, lng } = extractLatLng(o);
+        if (!lat || !lng) continue; // 🔥 THIS LINE IS CRITICAL
         distributors.push({
           distributorCode: o.distributorId || null,
           distributorName: o.distributorName,
