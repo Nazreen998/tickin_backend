@@ -1200,9 +1200,40 @@ export async function getAssignedOrdersByDriver(driverId) {
     ExpressionAttributeValues: {
       ":d": driverId,
     },
-    ScanIndexForward: false, // latest first
+    ScanIndexForward: false,
   };
 
   const result = await ddb.send(new QueryCommand(params));
-  return result.Items || [];
+  const orders = result.Items || [];
+
+  // ✅ STEP 1: remove merged CHILD orders
+  const visible = orders.filter((o) => {
+    if (o.mergedIntoOrderId && !String(o.orderId).startsWith("ORD_FULL_")) {
+      return false;
+    }
+    return true;
+  });
+
+  // ✅ STEP 2: normalize data for UI (HALF + FULL)
+  return visible.map((o) => {
+    // FULL order (merged or single)
+    if (String(o.orderId).startsWith("ORD_FULL_")) {
+      return {
+        ...o,
+        displayAmount: Number(o.totalAmount || 0),
+        displayQty: Number(o.totalQty || 0),
+        displayDistributors: Array.isArray(o.distributors)
+          ? o.distributors.map((d) => d.distributorName).join(" + ")
+          : "-",
+      };
+    }
+
+    // HALF order (single, non-merged)
+    return {
+      ...o,
+      displayAmount: Number(o.totalAmount || 0),
+      displayQty: Number(o.totalQty || 0),
+      displayDistributors: o.distributorName || "-",
+    };
+  });
 }
