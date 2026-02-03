@@ -118,28 +118,26 @@ function normalizeDistributors(order) {
 function getCurrentStop(order) {
   let distributors = normalizeDistributors(order);
 
-  // ✅ HARD FIX: if FULL order distributors empty → rebuild from root fields
-  if (
-    (!Array.isArray(distributors) || distributors.length === 0) &&
-    order.distributorName
-  ) {
-    distributors = [{
-      distributorCode: order.distributorCode || order.distributorId || null,
-      distributorName: order.distributorName,
-      lat:
-        Number(order.lat) ||
-        Number(order.distributorLat) ||
-        null,
-      lng:
-        Number(order.lng) ||
-        Number(order.distributorLng) ||
-        null,
-      mapUrl: order.mapUrl || null,
-      reachedAt: null,
-      unloadStartAt: null,
-      unloadEndAt: null,
-      items: order.items || [],
-    }];
+  // 🔥 ULTIMATE FALLBACK (MERGE SAFE)
+  if (!Array.isArray(distributors) || distributors.length === 0) {
+    if (order.distributorName) {
+      distributors = [{
+        distributorCode: order.distributorCode || order.distributorId || null,
+        distributorName: order.distributorName,
+        lat: Number(order.lat) || Number(order.distributorLat) || null,
+        lng: Number(order.lng) || Number(order.distributorLng) || null,
+        mapUrl: order.mapUrl || null,
+        reachedAt: null,
+        unloadStartAt: null,
+        unloadEndAt: null,
+        items: order.items || [],
+      }];
+    }
+  }
+
+  // 🔥 STILL EMPTY? → HARD STOP LOG
+  if (!distributors.length) {
+    console.error("❌ NO DISTRIBUTORS EVEN AFTER FALLBACK", order.orderId);
   }
 
   const idx = Number(order.currentDistributorIndex || 0);
