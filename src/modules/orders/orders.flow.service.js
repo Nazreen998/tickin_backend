@@ -557,97 +557,37 @@ const vehicleOk = await ensureVehicleSelected(orderIds);
 /* ============================================================
    ✅ ASSIGN DRIVER (FINAL)
 ============================================================ */
-/* ============================================================
-   ✅ ASSIGN DRIVER (FINAL – SAFE + MERGE READY)
-   - FULL order மட்டும் driverId
-   - CHILD orders => MERGED
-   - ALL distributors copied into FULL order
-   - currentDistributorIndex = 0
-   - D1 / D2 reach logic WILL WORK
-============================================================ */
 export const assignDriver = async (req, res) => {
   try {
     const key = req.body.flowKey || req.body.mergeKey || req.body.orderId;
     const { driverId, vehicleNo } = req.body;
 
-    if (!key)
-      return res.status(400).json({ ok: false, message: "flowKey required" });
-    if (!driverId)
-      return res.status(400).json({ ok: false, message: "driverId required" });
+    if (!key || !driverId) {
+      return res.status(400).json({ ok: false, message: "flowKey & driverId required" });
+    }
 
-    /* --------------------------------------------------------
-       1️⃣ Resolve all orderIds from ANY key
-    -------------------------------------------------------- */
     const orderIds = await resolveOrderIdsFromFlowKey(key);
-
-// 🔥 FORCE FULL ORDER (MISSING FIX)
-let fullOrderId =
-  orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
-
-if (!fullOrderId && orderIds.length > 0) {
-  const base = normalizeOrderId(orderIds[0]);
-  if (base && !base.startsWith("ORD_FULL_")) {
-    fullOrderId = `ORD_FULL_${base.replace(/^ORD/, "")}`;
-    orderIds.unshift(fullOrderId);
-  }
-}
-const vehicleOk = await ensureVehicleSelected(orderIds);
-    if (!vehicleOk) {
-      return res
-        .status(400)
-        .json({ ok: false, message: "❌ Vehicle not selected" });
-    }
-    /* --------------------------------------------------------
-       2️⃣ Find FULL order (MERGE + DIRECT FULL SAFE)
-    -------------------------------------------------------- */
-    // merge case: child -> mergedIntoOrderId
-    if (!fullOrderId) {
-      for (const raw of orderIds) {
-        const oid = normalizeOrderId(raw);
-        const g = await ddb.send(
-          new GetCommand({
-            TableName: ORDERS_TABLE,
-            Key: { pk: `ORDER#${oid}`, sk: "META" },
-          })
-        );
-        if (g.Item?.mergedIntoOrderId) {
-          fullOrderId = normalizeOrderId(g.Item.mergedIntoOrderId);
-          break;
-        }
-      }
+    if (!orderIds.length) {
+      return res.status(404).json({ ok: false, message: "No orders found" });
     }
 
-    // 🔥 DIRECT FULL AUTO-DETECT (even if FE sends ORD123)
-    if (!fullOrderId && orderIds.length === 1) {
-      const oid = normalizeOrderId(orderIds[0]);
-      const tryFullId = oid.startsWith("ORD_FULL_")
-        ? oid
-        : `ORD_FULL_${oid.replace(/^ORD/, "")}`;
-
-      const fg = await ddb.send(
-        new GetCommand({
-          TableName: ORDERS_TABLE,
-          Key: { pk: `ORDER#${tryFullId}`, sk: "META" },
-        })
-      );
-
-      if (fg.Item) fullOrderId = tryFullId;
-    }
+    // 🔍 find FULL order
+    const fullOrderId =
+      orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
 
     if (!fullOrderId) {
       return res.status(400).json({
         ok: false,
-        message: "ORD_FULL order required to assign driver",
+        message: "Merged flow must have ORD_FULL order",
       });
     }
 
-    const allIds = [...new Set(orderIds.map(normalizeOrderId).filter(Boolean))];
-    const childOrderIds = allIds.filter((id) => id !== fullOrderId);
+    const childOrderIds = orderIds.filter((id) => id !== fullOrderId);
 
-    /* --------------------------------------------------------
-       3️⃣ Collect distributors from CHILD orders
-    -------------------------------------------------------- */
-    let mergedDistributors = [];
+    /* --------------------------------------------------
+       🔥 BUILD distributors[] FOR FULL ORDER
+    -------------------------------------------------- */
+    let distributors = [];
 
     for (const cid of childOrderIds) {
       const g = await ddb.send(
@@ -656,32 +596,24 @@ const vehicleOk = await ensureVehicleSelected(orderIds);
           Key: { pk: `ORDER#${cid}`, sk: "META" },
         })
       );
+      const o = g.Item;
+      if (!o) continue;
 
-      const item = g.Item;
-      if (!item) continue;
+      // CASE 1: already has distributors[]
+      if (Array.isArray(o.distributors) && o.distributors.length) {
+        distributors.push(...o.distributors);
+        continue;
+      }
 
-      if (Array.isArray(item.distributors) && item.distributors.length > 0) {
-        for (const d of item.distributors) {
-          mergedDistributors.push({
-            distributorCode: d.distributorCode || null,
-            distributorName: d.distributorName || null,
-            lat: d.lat != null ? Number(d.lat) : null,
-            lng: d.lng != null ? Number(d.lng) : null,
-            mapUrl: d.mapUrl || null,
-            items: d.items || [],
-            reachedAt: null,
-            unloadStartAt: null,
-            unloadEndAt: null,
-          });
-        }
-      } else if (item.distributorName && item.lat != null && item.lng != null) {
-        mergedDistributors.push({
-          distributorCode: item.distributorId || null,
-          distributorName: item.distributorName,
-          lat: Number(item.lat),
-          lng: Number(item.lng),
-          mapUrl: item.mapUrl || null,
-          items: item.items || [],
+      // CASE 2: single order shape
+      if (o.distributorName && (o.lat || o.lng)) {
+        distributors.push({
+          distributorCode: o.distributorId || null,
+          distributorName: o.distributorName,
+          lat: Number(o.lat),
+          lng: Number(o.lng),
+          mapUrl: o.mapUrl || null,
+          items: o.items || [],
           reachedAt: null,
           unloadStartAt: null,
           unloadEndAt: null,
@@ -689,49 +621,25 @@ const vehicleOk = await ensureVehicleSelected(orderIds);
       }
     }
 
-    /* --------------------------------------------------------
-       4️⃣ Dedupe distributors
-    -------------------------------------------------------- */
+    // ❗ dedupe distributors
     const seen = new Set();
-    mergedDistributors = mergedDistributors.filter((d) => {
-      const k = (d.distributorCode || d.distributorName || "")
-        .toString()
-        .trim()
-        .toUpperCase();
+    distributors = distributors.filter((d) => {
+      const k = (d.distributorCode || d.distributorName || "").toUpperCase();
       if (!k || seen.has(k)) return false;
       seen.add(k);
       return true;
     });
 
-    /* --------------------------------------------------------
-       5️⃣ Fallback: take distributors from FULL order
-    -------------------------------------------------------- */
-    if (mergedDistributors.length === 0) {
-      const fg = await ddb.send(
-        new GetCommand({
-          TableName: ORDERS_TABLE,
-          Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
-        })
-      );
-
-      if (Array.isArray(fg.Item?.distributors)) {
-        mergedDistributors = fg.Item.distributors.map((d) => ({
-          distributorCode: d.distributorCode || null,
-          distributorName: d.distributorName || null,
-          lat: d.lat != null ? Number(d.lat) : null,
-          lng: d.lng != null ? Number(d.lng) : null,
-          mapUrl: d.mapUrl || null,
-          items: d.items || [],
-          reachedAt: null,
-          unloadStartAt: null,
-          unloadEndAt: null,
-        }));
-      }
+    if (!distributors.length) {
+      return res.status(400).json({
+        ok: false,
+        message: "No valid distributor locations found for merged order",
+      });
     }
 
-    /* --------------------------------------------------------
-       6️⃣ Driver lookup
-    -------------------------------------------------------- */
+    /* --------------------------------------------------
+       🔍 Driver lookup
+    -------------------------------------------------- */
     const driverPk = normalizeUserPk(driverId);
     const dg = await ddb.send(
       new GetCommand({
@@ -739,81 +647,70 @@ const vehicleOk = await ensureVehicleSelected(orderIds);
         Key: { pk: driverPk, sk: "PROFILE" },
       })
     );
-
-    if (!dg.Item)
+    if (!dg.Item) {
       return res.status(404).json({ ok: false, message: "Driver not found" });
+    }
 
-    const driverName = dg.Item.name || dg.Item.userName || "Driver";
-    const driverMobile = dg.Item.mobile || null;
-
-    /* --------------------------------------------------------
-       7️⃣ UPDATE FULL ORDER
-    -------------------------------------------------------- */
-    await updateOrders([fullOrderId], {
-      UpdateExpression: `
-        SET #s = :st,
-            driverId = :d,
-            driverName = :dn,
-            driverMobile = :dm,
-            vehicleNo = :vn,
-            distributors = :dist,
-            currentDistributorIndex = :i
-      `,
-      ExpressionAttributeNames: { "#s": "status" },
-      ExpressionAttributeValues: {
-        ":st": "DRIVER_ASSIGNED",
-        ":d": driverPk,
-        ":dn": driverName,
-        ":dm": driverMobile,
-        ":vn": vehicleNo || null,
-        ":dist": mergedDistributors,
-        ":i": 0,
-      },
-    });
-
-    /* --------------------------------------------------------
-       8️⃣ CHILD ORDERS → MERGED
-    -------------------------------------------------------- */
-    if (childOrderIds.length > 0) {
-      await updateOrders(childOrderIds, {
+    /* --------------------------------------------------
+       ✅ UPDATE FULL ORDER (🔥 KEY FIX)
+    -------------------------------------------------- */
+    await ddb.send(
+      new UpdateCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
         UpdateExpression: `
           SET #s = :st,
-              mergedIntoOrderId = :mid
-          REMOVE driverId, driverName, driverMobile
+              driverId = :d,
+              driverName = :dn,
+              driverMobile = :dm,
+              vehicleNo = :vn,
+              distributors = :dist,
+              currentDistributorIndex = :i
         `,
         ExpressionAttributeNames: { "#s": "status" },
         ExpressionAttributeValues: {
-          ":st": "MERGED",
-          ":mid": fullOrderId,
+          ":st": "DRIVER_ASSIGNED",
+          ":d": driverPk,
+          ":dn": dg.Item.name || "Driver",
+          ":dm": dg.Item.mobile || null,
+          ":vn": vehicleNo || null,
+          ":dist": distributors,
+          ":i": 0,
         },
-      });
-    }
+      })
+    );
 
-    /* --------------------------------------------------------
-       9️⃣ Timeline
-    -------------------------------------------------------- */
-    const user = req.user || {};
-    await addTimelineEvent({
-      orderId: fullOrderId,
-      event: "DRIVER_ASSIGNED",
-      by: user?.mobile || "system",
-      byUserName: user?.name || user?.userName || null,
-      role: user?.role || "MANAGER",
-      data: { flowKey: key, driverId: driverPk },
-    });
+    /* --------------------------------------------------
+       CHILD ORDERS → MERGED
+    -------------------------------------------------- */
+    for (const cid of childOrderIds) {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${cid}`, sk: "META" },
+          UpdateExpression:
+            "SET #s = :st, mergedIntoOrderId = :mid REMOVE driverId, driverName, driverMobile",
+          ExpressionAttributeNames: { "#s": "status" },
+          ExpressionAttributeValues: {
+            ":st": "MERGED",
+            ":mid": fullOrderId,
+          },
+        })
+      );
+    }
 
     return res.json({
       ok: true,
-      message: "✅ Driver assigned successfully",
-      flowKey: key,
+      message: "✅ Driver assigned (MERGED READY)",
       fullOrderId,
-      distributors: mergedDistributors.length,
+      distributorCount: distributors.length,
     });
   } catch (err) {
-    console.error("assignDriver error", err);
+    console.error(err);
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
+
 /* ============================================================
    ✅ NEW: List drivers for dropdown (Manager/Master)
 ============================================================ */
