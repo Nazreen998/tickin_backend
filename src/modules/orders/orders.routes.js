@@ -157,6 +157,7 @@ router.post(
   confirmDraftOrder
 );
 
+// ✅ Sales Officer / Salesman / Distributor view confirmed orders
 router.get(
   "/my",
   verifyToken,
@@ -171,57 +172,47 @@ router.get(
   async (req, res) => {
     try {
       const user = req.user;
+
       let distributorCodes = [];
 
-      // ✅ Role-based distributor resolution
       if (user.role === "DISTRIBUTOR") {
         const code = String(
           user.distributorCode || user.distributorId || ""
         ).trim();
         if (code) distributorCodes = [code];
       } else {
-        distributorCodes = Array.isArray(user.allowedDistributors)
+        const allowed = Array.isArray(user.allowedDistributors)
           ? user.allowedDistributors
           : [];
+
+        const one = String(
+          user.distributorCode || user.distributorId || ""
+        ).trim();
+
+        distributorCodes =
+          allowed.length > 0 ? allowed : (one ? [one] : []);
       }
 
       if (distributorCodes.length === 0) {
-        return res.json({ ok: true, count: 0, orders: [] });
+        return res.json({
+          ok: true,
+          count: 0,
+          distributorCodes: [],
+          orders: [],
+        });
       }
 
-      // ✅ Date handling
-      const dateStr = req.query.date; // yyyy-MM-dd
-      let start, end;
-
-      if (dateStr) {
-        start = new Date(`${dateStr}T00:00:00.000Z`);
-        end = new Date(`${dateStr}T23:59:59.999Z`);
-      } else {
-        // fallback = today
-        start = new Date();
-        start.setHours(0, 0, 0, 0);
-        end = new Date();
-        end.setHours(23, 59, 59, 999);
-      }
-
-      // ✅ FINAL QUERY (status-independent)
-      const orders = await Order.find({
-        $or: [
-          { distributorId: { $in: distributorCodes } },
-          { distributorCode: { $in: distributorCodes } },
-          { agencyCode: { $in: distributorCodes } },
-        ],
-        createdAt: {
-          $gte: start,
-          $lte: end,
-        },
-      }).sort({ createdAt: -1 });
+      // ✅ ONLY THIS LINE CHANGED
+      const data = await getOrdersForSalesman({
+        distributorCodes,
+        // status: "CONFIRMED",
+        date: req.query.date,   // 👈 added
+      });
 
       return res.json({
         ok: true,
-        count: orders.length,
         distributorCodes,
-        orders,
+        ...data,
       });
     } catch (err) {
       return res.status(500).json({
@@ -231,6 +222,7 @@ router.get(
     }
   }
 );
+
 
 router.post(
   "/force-reset/:orderId",
