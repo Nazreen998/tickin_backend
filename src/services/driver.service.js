@@ -386,23 +386,28 @@ export async function updateDriverStatus({
   const after = updated.Attributes || {};
 
   // ✅ timeline event (THIS is what your tracking screen reads)
-  await addTimelineEvent({
-    orderId,
-    event: desired,
-    by: String(after.driverId || "DRIVER"),
-    role: "DRIVER",
-    data: {
-      stage:
-        desired === "WAREHOUSE_REACHED"
-          ? "WAREHOUSE"
-          : desired === "DELIVERY_COMPLETED"
-          ? "DONE"
-          : stopLabel(idx),
-      stopIndex: idx,
-      currentLat,
-      currentLng,
-    },
-  });
+  // decide correct index for timeline
+const timelineIdx =
+  desired === "UNLOADING_END_D1" ? newIdx : idx;
+
+await addTimelineEvent({
+  orderId,
+  event: desired,
+  by: String(after.driverId || "DRIVER"),
+  role: "DRIVER",
+  data: {
+    stage:
+      desired === "WAREHOUSE_REACHED"
+        ? "WAREHOUSE"
+        : desired === "DELIVERY_COMPLETED"
+        ? "DONE"
+        : stopLabel(timelineIdx),   // ✅ FIX
+    stopIndex: timelineIdx,         // ✅ FIX
+    currentLat,
+    currentLng,
+  },
+});
+
   return {
     ok: true,
     reached:
