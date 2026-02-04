@@ -1138,12 +1138,20 @@ export const cancelOrderSlot = async (req, res) => {
  * ✅ Sales officer: fetch all orders of distributors mapped to his location
  * Returns DRAFT + PENDING + CONFIRMED
  */
-export const getOrdersForSalesman = async ({ distributorCodes, status }) => {
+export const getOrdersForSalesman = async ({
+  distributorCodes,
+  status, // optional
+  date,   // optional yyyy-MM-dd
+}) => {
   if (!Array.isArray(distributorCodes) || distributorCodes.length === 0) {
     return { count: 0, distributorCodes: [], orders: [] };
   }
 
+  // 🔹 Expression values
   const expVals = {};
+  const expNames = {};
+
+  // 🔹 distributorId IN (...)
   const inKeys = distributorCodes.map((_, i) => `:d${i}`);
   distributorCodes.forEach((code, i) => {
     expVals[`:d${i}`] = String(code).trim();
@@ -1151,17 +1159,35 @@ export const getOrdersForSalesman = async ({ distributorCodes, status }) => {
 
   let filter = `distributorId IN (${inKeys.join(",")})`;
 
-  // ✅ only confirmed orders
+  // 🔹 OPTIONAL status filter
   if (status) {
     filter += " AND #s = :st";
+    expNames["#s"] = "status";
     expVals[":st"] = String(status).toUpperCase();
   }
+
+  // 🔹 OPTIONAL date filter (day-wise)
+  if (date) {
+    const start = `${date}T00:00:00.000Z`;
+    const end = `${date}T23:59:59.999Z`;
+
+    filter += " AND #ca BETWEEN :start AND :end";
+    expNames["#ca"] = "createdAt";
+    expVals[":start"] = start;
+    expVals[":end"] = end;
+  }
+
+  // 🔍 Debug (temporary – remove later)
+  console.log("📦 Scan Filter =", filter);
+  console.log("📦 Names =", expNames);
+  console.log("📦 Values =", expVals);
 
   const res = await ddb.send(
     new ScanCommand({
       TableName: ORDERS_TABLE,
       FilterExpression: filter,
-      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeNames:
+        Object.keys(expNames).length > 0 ? expNames : undefined,
       ExpressionAttributeValues: expVals,
     })
   );
@@ -1172,6 +1198,7 @@ export const getOrdersForSalesman = async ({ distributorCodes, status }) => {
     orders: res.Items || [],
   };
 };
+
 /**
  * ✅ Manager/Master: fetch all orders (optional status filter)
  */
