@@ -633,130 +633,158 @@ async function getDistributorFromMaster(distributorId) {
 /* ============================================================
    ✅ ASSIGN DRIVER (FINAL)
 ============================================================ */
+// ✅ ASSIGN DRIVER — SINGLE FULL + MANUAL MERGE + AUTO MERGE (FINAL SAFE)
 export const assignDriver = async (req, res) => {
   try {
     const key = req.body.flowKey || req.body.mergeKey || req.body.orderId;
     const { driverId, vehicleNo } = req.body;
 
     if (!key || !driverId) {
-      return res.status(400).json({ ok: false, message: "flowKey & driverId required" });
+      return res
+        .status(400)
+        .json({ ok: false, message: "flowKey & driverId required" });
     }
 
-    const orderIds = await resolveOrderIdsFromFlowKey(key);
+    // 1) Resolve ids from flowKey / mergeKey / orderId
+    let orderIds = await resolveOrderIdsFromFlowKey(key);
     if (!orderIds.length) {
       return res.status(404).json({ ok: false, message: "No orders found" });
     }
 
-    // 🔍 find FULL order
-    const fullOrderId =
-      orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
+    // 2) Ensure FULL id exists in list (even if frontend sends ORDxxxx)
+    let fullOrderId = orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
+
+    if (!fullOrderId) {
+      const base = normalizeOrderId(orderIds[0]);
+      fullOrderId = base ? `ORD_FULL_${String(base).replace(/^ORD/, "")}` : null;
+      if (fullOrderId) orderIds = [fullOrderId, ...orderIds];
+    }
 
     if (!fullOrderId) {
       return res.status(400).json({
         ok: false,
-        message: "Merged flow must have ORD_FULL order",
+        message: "ORD_FULL order required for driver assignment",
       });
     }
 
-    let childOrderIds = orderIds.filter((id) => id !== fullOrderId);
-    /* --------------------------------------------------
-       🔥 BUILD distributors[] FOR FULL ORDER
-    -------------------------------------------------- */
+    // 3) Read FULL META (single full / merged full both will have this)
+    const fg = await ddb.send(
+      new GetCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
+      })
+    );
+
+    const fullMeta = fg.Item;
+
+    if (!fullMeta) {
+      return res.status(404).json({
+        ok: false,
+        message: "FULL order meta not found",
+        fullOrderId,
+      });
+    }
+
+    // 4) Build distributors[] — PRIORITY:
+    //    A) FULL META distributors[] (BEST / ALWAYS USE)
+    //    B) If missing, build from child orders (merge flows)
+    //    C) If still missing, build from FULL distributorId using master table (LAST fallback)
     let distributors = [];
 
-    for (const cid of childOrderIds) {
-      const g = await ddb.send(
-        new GetCommand({
-          TableName: ORDERS_TABLE,
-          Key: { pk: `ORDER#${cid}`, sk: "META" },
-        })
-      );
-      const o = g.Item;
-      console.log("📦 CHILD ORDER META", {
-    orderId: cid,
-    distributorId: o?.distributorId,
-    distributorName: o?.distributorName,
-  });
-      if (!o) continue;
-
-      // CASE 1: already has distributors[]
-      if (Array.isArray(o.distributors) && o.distributors.length) {
-  distributors.push(...o.distributors);
-  continue;
-}
-      // CASE 2: single order shape
-      // ✅ NEW CORRECT LOGIC
-if (!o.distributorId) continue;
-
-const master = await getDistributorFromMaster(o.distributorId);
-
-// ❌ if master location missing, skip
-if (!master || !master.lat || !master.lng) continue;
-
-distributors.push({
-  distributorCode: master.distributorCode,
-  distributorName: master.distributorName || o.distributorName,
-  lat: master.lat,
-  lng: master.lng,
-  mapUrl: master.mapUrl || null,
-  items: o.items || [],
-  reachedAt: null,
-  unloadStartAt: null,
-  unloadEndAt: null,
-});
+    // ✅ A) FULL META distributors[] (primary)
+    if (Array.isArray(fullMeta.distributors) && fullMeta.distributors.length) {
+      distributors = [...fullMeta.distributors];
     }
-// 🔥 SINGLE FULL ORDER FALLBACK
-if (!distributors.length) {
-  const fg = await ddb.send(
-    new GetCommand({
-      TableName: ORDERS_TABLE,
-      Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
-    })
-  );
 
-  const o = fg.Item;
+    // Get child ids (if any)
+    let childOrderIds = orderIds.filter((id) => id !== fullOrderId);
 
-  if (o?.distributorId) {
-    const master = await getDistributorFromMaster(o.distributorId);
+    // ✅ B) If FULL has no distributors, try from child orders
+    if (!distributors.length && childOrderIds.length) {
+      for (const cid of childOrderIds) {
+        const g = await ddb.send(
+          new GetCommand({
+            TableName: ORDERS_TABLE,
+            Key: { pk: `ORDER#${cid}`, sk: "META" },
+          })
+        );
+        const o = g.Item;
 
-    if (master && master.lat && master.lng) {
-      distributors.push({
-        distributorCode: master.distributorCode,
-        distributorName: master.distributorName || o.distributorName,
-        lat: master.lat,
-        lng: master.lng,
-        mapUrl: master.mapUrl || null,
-        items: o.items || [],
-        reachedAt: null,
-        unloadStartAt: null,
-        unloadEndAt: null,
-      });
+        console.log("📦 CHILD ORDER META", {
+          orderId: cid,
+          distributorId: o?.distributorId,
+          distributorName: o?.distributorName,
+        });
+
+        if (!o) continue;
+
+        // If child has distributors[] already (some flows store stops)
+        if (Array.isArray(o.distributors) && o.distributors.length) {
+          distributors.push(...o.distributors);
+          continue;
+        }
+
+        // If child is single order → master lookup fallback
+        if (!o.distributorId) continue;
+
+        const master = await getDistributorFromMaster(o.distributorId);
+        if (!master || !master.lat || !master.lng) continue;
+
+        distributors.push({
+          distributorCode: master.distributorCode,
+          distributorName: master.distributorName || o.distributorName,
+          lat: master.lat,
+          lng: master.lng,
+          mapUrl: master.mapUrl || null,
+          items: o.items || [],
+          reachedAt: null,
+          unloadStartAt: null,
+          unloadEndAt: null,
+        });
+      }
     }
-  }
-}
 
-    // ❗ dedupe distributors
-   const seen = new Set();
-distributors = distributors.filter((d) => {
-  const k = (d.distributorCode || d.distributorName || "")
-    .toString()
-    .trim()
-    .toUpperCase();
-  if (!k || seen.has(k)) return false;
-  seen.add(k);
-  return true;
-});
+    // ✅ C) LAST fallback: FULL order distributorId → master lookup
+    // (only used if A & B failed; this avoids breaking your existing data)
+    if (!distributors.length && fullMeta?.distributorId) {
+      const master = await getDistributorFromMaster(fullMeta.distributorId);
+      if (master && master.lat && master.lng) {
+        distributors.push({
+          distributorCode: master.distributorCode,
+          distributorName: master.distributorName || fullMeta.distributorName,
+          lat: master.lat,
+          lng: master.lng,
+          mapUrl: master.mapUrl || null,
+          items: fullMeta.items || [],
+          reachedAt: null,
+          unloadStartAt: null,
+          unloadEndAt: null,
+        });
+      }
+    }
+
+    // 5) Dedupe distributors
+    const seen = new Set();
+    distributors = distributors.filter((d) => {
+      const k = (d.distributorCode || d.distributorName || "")
+        .toString()
+        .trim()
+        .toUpperCase();
+      if (!k || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
 
     if (!distributors.length) {
       return res.status(400).json({
         ok: false,
-        message: "No valid distributor locations found for merged order",
+        message: "No valid distributor locations found for driver route",
+        fullOrderId,
+        hint: "Check FULL order distributors[] OR distributor master lat/lng",
       });
     }
 
-    /* --------------------------------------------------
-       🔍 Driver lookup
-    -------------------------------------------------- */
+    // 6) Driver lookup
     const driverPk = normalizeUserPk(driverId);
     const dg = await ddb.send(
       new GetCommand({
@@ -768,9 +796,7 @@ distributors = distributors.filter((d) => {
       return res.status(404).json({ ok: false, message: "Driver not found" });
     }
 
-    /* --------------------------------------------------
-       ✅ UPDATE FULL ORDER (🔥 KEY FIX)
-    -------------------------------------------------- */
+    // 7) Update FULL order
     await ddb.send(
       new UpdateCommand({
         TableName: ORDERS_TABLE,
@@ -797,9 +823,7 @@ distributors = distributors.filter((d) => {
       })
     );
 
-    /* --------------------------------------------------
-       CHILD ORDERS → MERGED
-    -------------------------------------------------- */
+    // 8) Update CHILD orders (only if they exist)
     for (const cid of childOrderIds) {
       await ddb.send(
         new UpdateCommand({
@@ -818,16 +842,19 @@ distributors = distributors.filter((d) => {
 
     return res.json({
       ok: true,
-      message: "✅ Driver assigned (MERGED READY)",
+      message: "✅ Driver assigned",
       fullOrderId,
       distributorCount: distributors.length,
+      mode:
+        (Array.isArray(fullMeta.distributors) && fullMeta.distributors.length)
+          ? "FULL_META"
+          : (childOrderIds.length ? "CHILD_BUILD" : "MASTER_FALLBACK"),
     });
   } catch (err) {
-    console.error(err);
+    console.error("assignDriver error:", err);
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
-
 /* ============================================================
    ✅ NEW: List drivers for dropdown (Manager/Master)
 ============================================================ */
