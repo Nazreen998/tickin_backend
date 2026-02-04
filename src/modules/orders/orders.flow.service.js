@@ -407,7 +407,7 @@ export const vehicleSelected = async (req, res) => {
       });
     }
 
-    await updateOrders([fullOrderId], {
+    await updateOrders(fullOrderId, {
       UpdateExpression: `
         SET #s = :st,
             vehicleType = :vt,
@@ -467,7 +467,7 @@ const vehicleOk = await ensureVehicleSelected(orderIds);
       });
     }
 
-    await updateOrders([fullOrderId], {
+    await updateOrders(fullOrderId, {
       UpdateExpression:
         "SET #s = :st, loadingStarted = :ls, loadingStartedAt = :t",
       ExpressionAttributeNames: { "#s": "status" },
@@ -536,7 +536,7 @@ const vehicleOk = await ensureVehicleSelected(orderIds);
       });
     }
 
-    await updateOrders([fullOrderId], {
+    await updateOrders(fullOrderId, {
       UpdateExpression: "SET #s = :st, loadingEndAt = :t",
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
