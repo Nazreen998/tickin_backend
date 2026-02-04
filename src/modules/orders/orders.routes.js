@@ -157,7 +157,7 @@ router.post(
   confirmDraftOrder
 );
 
-// ✅ Sales Officer / Salesman / Distributor view confirmed orders
+// ✅ Sales Officer / Salesman / Distributor / Manager - My Orders
 router.get(
   "/my",
   verifyToken,
@@ -172,45 +172,33 @@ router.get(
   async (req, res) => {
     try {
       const user = req.user;
+      const status = req.query.status; // 👈 same as /all
+      const date = req.query.date;     // 👈 optional
 
       let distributorCodes = [];
 
-      // ✅ 1. DISTRIBUTOR → only own orders
+      // DISTRIBUTOR → own orders
       if (user.role === "DISTRIBUTOR") {
         const code = String(
           user.distributorCode || user.distributorId || ""
         ).trim();
-
         if (code) distributorCodes = [code];
-      } 
-      // ✅ 2. SALES / MANAGER → assigned distributors
+      }
+      // SALES / MANAGER → mapped distributors
       else {
-        const allowed = Array.isArray(user.allowedDistributors)
+        distributorCodes = Array.isArray(user.allowedDistributors)
           ? user.allowedDistributors
           : [];
-
-        const one = String(
-          user.distributorCode || user.distributorId || ""
-        ).trim();
-
-        distributorCodes =
-          allowed.length > 0 ? allowed : (one ? [one] : []);
       }
 
-      // ✅ 3. Safety exit
       if (distributorCodes.length === 0) {
-        return res.json({
-          ok: true,
-          count: 0,
-          distributorCodes: [],
-          orders: [],
-        });
+        return res.json({ ok: true, count: 0, orders: [] });
       }
 
-      // ✅ 4. Fetch CONFIRMED orders only
       const data = await getOrdersForSalesman({
         distributorCodes,
-        status: "CONFIRMED",
+        status, // 👈 OPTIONAL (CONFIRMED / DELIVERY_COMPLETED / etc.)
+        date,   // 👈 OPTIONAL (yyyy-MM-dd)
       });
 
       return res.json({
@@ -226,6 +214,7 @@ router.get(
     }
   }
 );
+
 
 router.post(
   "/force-reset/:orderId",
