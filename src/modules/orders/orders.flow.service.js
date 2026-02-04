@@ -824,7 +824,8 @@ distributors = distributors.filter((d) => {
 
       ":ta": Number(
         fullMeta.totalAmount ??
-        childOrderIds.reduce((s, id) => s + Number(orderAmountMap[id] || 0), 0)
+        fullMeta.grandTotal ??
+        computedTotal
       ),
 
       ":dd":
