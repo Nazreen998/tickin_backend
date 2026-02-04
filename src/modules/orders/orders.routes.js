@@ -243,9 +243,9 @@ router.get(
    ✅ ORDER FLOW (AFTER SLOT)
 ========================== */
 
-// ✅ Vehicle selected
+// ✅ NEW (flow based)
 router.post(
-  "/vehicle-selected/:orderId",
+  "/vehicle-selected/:flowKey",
   verifyToken,
   allowRoles("MANAGER", "MASTER"),
   vehicleSelected
