@@ -205,7 +205,7 @@ router.get(
       // ✅ ONLY THIS LINE CHANGED
       const data = await getOrdersForSalesman({
         distributorCodes,
-        // status: "CONFIRMED",
+        status: { $in: ["CONFIRMED", "DELIVERY_COMPLETED"] },
         date: req.query.date,   // 👈 added
       });
 
