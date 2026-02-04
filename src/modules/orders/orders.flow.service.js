@@ -44,13 +44,11 @@ if (key.startsWith("ORD_FULL_")) {
     ? fullMeta.Item.mergedOrderIds
     : [];
 
-  const baseOrd = `ORD${key.replace("ORD_FULL_", "")}`;
-
   // 🔥 MAIN FIX
   // 👉 If NO merged orders → SINGLE order
   // 👉 Use ONLY base order (ORDxxxx)
   if (merged.length === 0) {
-    return [baseOrd];
+    return [key];
   }
 
   // 👉 If merged → FULL + children
@@ -174,6 +172,24 @@ async function ensureVehicleSelected(orderIds) {
 ============================================================ */
 export const getOrderFlowByKey = async (req, res) => {
   console.log("🔥🔥 FLOW SERVICE HIT", req.params.flowKey);
+  let key = String(req.params.flowKey || "").trim();
+
+// 🔥 HARD GUARD
+if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
+  const fullKey = `ORD_FULL_${key.replace(/^ORD/, "")}`;
+
+  const fg = await ddb.send(
+    new GetCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${fullKey}`, sk: "META" },
+    })
+  );
+
+  if (fg.Item) {
+    key = fullKey;
+  }
+}
+
   try {
     const key = String(req.params.flowKey || "").trim();
     if (!key) {
