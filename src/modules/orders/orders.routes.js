@@ -175,12 +175,16 @@ router.get(
 
       let distributorCodes = [];
 
+      // ✅ 1. DISTRIBUTOR → only own orders
       if (user.role === "DISTRIBUTOR") {
         const code = String(
           user.distributorCode || user.distributorId || ""
         ).trim();
+
         if (code) distributorCodes = [code];
-      } else {
+      } 
+      // ✅ 2. SALES / MANAGER → assigned distributors
+      else {
         const allowed = Array.isArray(user.allowedDistributors)
           ? user.allowedDistributors
           : [];
@@ -193,6 +197,7 @@ router.get(
           allowed.length > 0 ? allowed : (one ? [one] : []);
       }
 
+      // ✅ 3. Safety exit
       if (distributorCodes.length === 0) {
         return res.json({
           ok: true,
@@ -202,11 +207,10 @@ router.get(
         });
       }
 
-      // ✅ ONLY THIS LINE CHANGED
+      // ✅ 4. Fetch CONFIRMED orders only
       const data = await getOrdersForSalesman({
         distributorCodes,
-        status: { $in: ["CONFIRMED", "DELIVERY_COMPLETED"] },
-        date: req.query.date,   // 👈 added
+        status: "CONFIRMED",
       });
 
       return res.json({
@@ -222,7 +226,6 @@ router.get(
     }
   }
 );
-
 
 router.post(
   "/force-reset/:orderId",
