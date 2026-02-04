@@ -728,7 +728,10 @@ if (booked?.type === "FULL") {
     const fullDistributors =
       Array.isArray(order.distributors) && order.distributors.length
         ? order.distributors
-        : await buildDistributorFromMaster(order);
+       : [{
+            distributorId: order.distributorId,
+            distributorName: order.distributorName,
+          }];
 
     await ddb.send(
       new PutCommand({
@@ -744,8 +747,8 @@ if (booked?.type === "FULL") {
           distributorName: order.distributorName,
 
           items: order.items || [],
-          totalAmount: order.totalAmount || 0,
-          totalQty: order.totalQty || 0,
+          totalAmount: Number(order.totalAmount || order.grandTotal || 0),
+          totalQty: Number(order.totalQty || 0),
 
           distributors: fullDistributors, // ✅ MAIN FIX
 

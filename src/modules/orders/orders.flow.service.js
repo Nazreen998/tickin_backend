@@ -803,7 +803,10 @@ distributors = distributors.filter((d) => {
               driverMobile = :dm,
               vehicleNo = :vn,
               distributors = :dist,
-              currentDistributorIndex = :i
+              currentDistributorIndex = :i,
+              totalQty = :tq,
+              totalAmount = :ta,
+              distributorDisplay = :dd
         `,
         ExpressionAttributeNames: { "#s": "status" },
         ExpressionAttributeValues: {
@@ -814,7 +817,24 @@ distributors = distributors.filter((d) => {
           ":vn": vehicleNo || null,
           ":dist": distributors,
           ":i": 0,
-        },
+        ":tq": Number(
+        fullMeta.totalQty ??
+        childOrderIds.reduce((s, id) => s + Number(orderQtyMap[id] || 0), 0)
+      ),
+
+      ":ta": Number(
+        fullMeta.totalAmount ??
+        fullMeta.grandTotal ??
+        computedTotal
+      ),
+
+      ":dd":
+        distributors.length === 1
+          ? distributors[0].distributorName
+          : distributors
+              .map((d, idx) => `D${idx + 1}: ${d.distributorName}`)
+              .join(" | "),
+    },
       })
     );
 
