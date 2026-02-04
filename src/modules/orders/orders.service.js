@@ -701,6 +701,49 @@ export const confirmOrder = async (req, res) => {
       });
 
       slotBooked = true;
+      // 🔥 FIX: SINGLE FULL ORDER → ensure ORD_FULL has data
+if (booked?.type === "FULL") {
+  const fullOrderId = `ORD_FULL_${orderId.replace(/^ORD/, "")}`;
+
+  // check if ORD_FULL exists
+  const fg = await ddb.send(
+    new GetCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
+    })
+  );
+
+  if (!fg.Item) {
+    // create FULL meta by COPYING base order
+    await ddb.send(
+      new PutCommand({
+        TableName: ORDERS_TABLE,
+        Item: {
+          pk: `ORDER#${fullOrderId}`,
+          sk: "META",
+          orderId: fullOrderId,
+          status: "CONFIRMED",
+          mergeKey: null,
+          distributorId: order.distributorId,
+          distributorName: order.distributorName,
+          items: order.items,
+          totalAmount: order.totalAmount,
+          totalQty: order.totalQty,
+          distributors: order.distributors || [],
+          currentDistributorIndex: 0,
+          slotBooked: true,
+          slotId: slotIdValue,
+          slotDate: slot.date,
+          slotTime: slot.time,
+          slotPos: slot.pos,
+          slotVehicleType: "FULL",
+          createdAt: new Date().toISOString(),
+        },
+      })
+    );
+  }
+}
+
       slotDetails = {
         companyCode,
         date: slot.date,

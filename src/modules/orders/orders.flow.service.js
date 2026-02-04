@@ -642,6 +642,19 @@ export const assignDriver = async (req, res) => {
        🔥 BUILD distributors[] FOR FULL ORDER
     -------------------------------------------------- */
     let distributors = [];
+ // 🔥 FIX: SINGLE FULL ORDER (no child orders)
+if (childOrderIds.length === 0) {
+  const g = await ddb.send(
+    new GetCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
+    })
+  );
+
+  if (g.Item?.distributors?.length) {
+    distributors = g.Item.distributors;
+  }
+}
 
     for (const cid of childOrderIds) {
       const g = await ddb.send(
