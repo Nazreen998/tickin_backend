@@ -31,8 +31,8 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
   const key = String(flowKey || "").trim();
   if (!key) return [];
 
-  // ✅ SPECIAL: If ORD_FULL_* flowKey => expand to child orders
-  if (key.startsWith("ORD_FULL_")) {
+  // ✅ SPECIAL: If ORD_FULL_* flowKey
+if (key.startsWith("ORD_FULL_")) {
   const fullMeta = await ddb.send(
     new GetCommand({
       TableName: ORDERS_TABLE,
@@ -44,14 +44,19 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
     ? fullMeta.Item.mergedOrderIds
     : [];
 
-  // ✅ ALWAYS include the base child order for single flows
   const baseOrd = `ORD${key.replace("ORD_FULL_", "")}`;
 
-  const all = [key, baseOrd, ...merged]
+  // 🔥 MAIN FIX
+  // 👉 If NO merged orders → SINGLE order
+  // 👉 Use ONLY base order (ORDxxxx)
+  if (merged.length === 0) {
+    return [baseOrd];
+  }
+
+  // 👉 If merged → FULL + children
+  return [key, ...merged]
     .map(normalizeOrderId)
     .filter(Boolean);
-
-  return [...new Set(all)];
 }
   // ✅ orderId direct (normal orders)
   if (key.startsWith("ORD")) return [key];
@@ -99,7 +104,6 @@ async function resolveOrderIdsFromFlowKey(flowKey) {
 
   return uniq;
 }
-
 /* ============================================================
    ✅ Helper: Update multiple orders safely
 ============================================================ */
