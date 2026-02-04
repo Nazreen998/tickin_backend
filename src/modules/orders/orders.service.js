@@ -1193,61 +1193,55 @@ export const getOrdersByMergeKey = async (req, res) => {
 export async function getAssignedOrdersByDriver(driverId) {
   if (!driverId) return [];
 
-  const params = {
-    TableName: ORDERS_TABLE,
-    IndexName: "GSI_DRIVER_ASSIGNED",
-    KeyConditionExpression: "driverId = :d",
-    ExpressionAttributeValues: {
-      ":d": driverId,
-    },
-    ScanIndexForward: false,
-  };
+  // 1️⃣ Get orderIds from GSI
+  const q = await ddb.send(
+    new QueryCommand({
+      TableName: ORDERS_TABLE,
+      IndexName: "GSI_DRIVER_ASSIGNED",
+      KeyConditionExpression: "driverId = :d",
+      ExpressionAttributeValues: {
+        ":d": driverId,
+      },
+      ProjectionExpression: "orderId", // 🔥 ONLY ID
+      ScanIndexForward: false,
+    })
+  );
 
-  const result = await ddb.send(new QueryCommand(params));
-  const orders = result.Items || [];
+  const ids = (q.Items || [])
+    .map(o => o.orderId)
+    .filter(Boolean);
 
-  // ✅ hide merged CHILD orders
-  const visible = orders.filter((o) => {
+  if (ids.length === 0) return [];
+
+  // 2️⃣ Fetch FULL META for each order
+  const results = [];
+
+  for (const oid of ids) {
+    const g = await ddb.send(
+      new GetCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${oid}`, sk: "META" },
+      })
+    );
+
+    if (!g.Item) continue;
+
+    const o = g.Item;
+
+    // ❌ hide merged child orders
     if (o.mergedIntoOrderId && !String(o.orderId).startsWith("ORD_FULL_")) {
-      return false;
-    }
-    return true;
-  });
-
-  // ✅ FINAL NORMALIZATION (THIS WAS WRONG BEFORE)
-  return visible.map((o) => {
-
-    /* ---------------- SINGLE ORDER ---------------- */
-    if (!String(o.orderId).startsWith("ORD_FULL_")) {
-      return {
-        ...o,
-        totalAmount: Number(o.totalAmount || 0),
-        totalQty: Number(o.totalQty || 0),
-        distributorDisplay: o.distributorName || "-",
-      };
+      continue;
     }
 
-    /* ---------------- ORD_FULL ORDER ---------------- */
-    let amount = 0;
-    let qty = 0;
-    let names = [];
-
-    if (Array.isArray(o.distributors)) {
-      o.distributors.forEach((d) => {
-        if (d.distributorName) names.push(d.distributorName);
-
-        (d.items || []).forEach((it) => {
-          amount += Number(it.total || 0);
-          qty += Number(it.qty || 0);
-        });
-      });
-    }
-
-    return {
+    results.push({
       ...o,
-      totalAmount: amount,          // 🔥 CALCULATED
-      totalQty: qty,                // 🔥 CALCULATED
-      distributorDisplay: names.join(" + ") || "-",
-    };
-  });
+      totalAmount: Number(o.totalAmount || 0),
+      totalQty: Number(o.totalQty || 0),
+      distributorDisplay: Array.isArray(o.distributors)
+        ? o.distributors.map(d => d.distributorName).join(" + ")
+        : o.distributorName || "-",
+    });
+  }
+
+  return results;
 }
