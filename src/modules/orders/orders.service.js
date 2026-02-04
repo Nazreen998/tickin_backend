@@ -1206,7 +1206,7 @@ export async function getAssignedOrdersByDriver(driverId) {
   const result = await ddb.send(new QueryCommand(params));
   const orders = result.Items || [];
 
-  // ✅ STEP 1: remove merged CHILD orders
+  // ✅ hide merged CHILD orders
   const visible = orders.filter((o) => {
     if (o.mergedIntoOrderId && !String(o.orderId).startsWith("ORD_FULL_")) {
       return false;
@@ -1214,26 +1214,40 @@ export async function getAssignedOrdersByDriver(driverId) {
     return true;
   });
 
-  // ✅ STEP 2: normalize data for UI (HALF + FULL)
+  // ✅ FINAL NORMALIZATION (THIS WAS WRONG BEFORE)
   return visible.map((o) => {
-    // FULL order (merged or single)
-    if (String(o.orderId).startsWith("ORD_FULL_")) {
+
+    /* ---------------- SINGLE ORDER ---------------- */
+    if (!String(o.orderId).startsWith("ORD_FULL_")) {
       return {
         ...o,
-        displayAmount: Number(o.totalAmount || 0),
-        displayQty: Number(o.totalQty || 0),
-        displayDistributors: Array.isArray(o.distributors)
-          ? o.distributors.map((d) => d.distributorName).join(" + ")
-          : "-",
+        totalAmount: Number(o.totalAmount || 0),
+        totalQty: Number(o.totalQty || 0),
+        distributorDisplay: o.distributorName || "-",
       };
     }
 
-    // HALF order (single, non-merged)
+    /* ---------------- ORD_FULL ORDER ---------------- */
+    let amount = 0;
+    let qty = 0;
+    let names = [];
+
+    if (Array.isArray(o.distributors)) {
+      o.distributors.forEach((d) => {
+        if (d.distributorName) names.push(d.distributorName);
+
+        (d.items || []).forEach((it) => {
+          amount += Number(it.total || 0);
+          qty += Number(it.qty || 0);
+        });
+      });
+    }
+
     return {
       ...o,
-      displayAmount: Number(o.totalAmount || 0),
-      displayQty: Number(o.totalQty || 0),
-      displayDistributors: o.distributorName || "-",
+      totalAmount: amount,          // 🔥 CALCULATED
+      totalQty: qty,                // 🔥 CALCULATED
+      distributorDisplay: names.join(" + ") || "-",
     };
   });
 }
