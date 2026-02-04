@@ -210,7 +210,7 @@ router.get(
       // ✅ 4. Fetch CONFIRMED orders only
       const data = await getOrdersForSalesman({
         distributorCodes,
-        status: { $in: ["CONFIRMED", "DELIVERY_COMPLETED"] },
+        status: "CONFIRMED",
       });
 
       return res.json({
