@@ -44,13 +44,11 @@ if (key.startsWith("ORD_FULL_")) {
     ? fullMeta.Item.mergedOrderIds
     : [];
 
-  const baseOrd = `ORD${key.replace("ORD_FULL_", "")}`;
-
   // 🔥 MAIN FIX
   // 👉 If NO merged orders → SINGLE order
   // 👉 Use ONLY base order (ORDxxxx)
   if (merged.length === 0) {
-    return [baseOrd];
+    return [key];
   }
 
   // 👉 If merged → FULL + children
@@ -174,6 +172,24 @@ async function ensureVehicleSelected(orderIds) {
 ============================================================ */
 export const getOrderFlowByKey = async (req, res) => {
   console.log("🔥🔥 FLOW SERVICE HIT", req.params.flowKey);
+  let key = String(req.params.flowKey || "").trim();
+
+// 🔥 HARD GUARD
+if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
+  const fullKey = `ORD_FULL_${key.replace(/^ORD/, "")}`;
+
+  const fg = await ddb.send(
+    new GetCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${fullKey}`, sk: "META" },
+    })
+  );
+
+  if (fg.Item) {
+    key = fullKey;
+  }
+}
+
   try {
     const key = String(req.params.flowKey || "").trim();
     if (!key) {
@@ -185,17 +201,23 @@ export const getOrderFlowByKey = async (req, res) => {
     -------------------------------------------------- */
     let orderIds = await resolveOrderIdsFromFlowKey(key);
 
-    // 🔥 FORCE include ORD_FULL for direct ORD
-    if (orderIds.length === 1) {
-      const oid = normalizeOrderId(orderIds[0]);
-      if (oid && !oid.startsWith("ORD_FULL_")) {
-        orderIds.unshift(`ORD_FULL_${oid.replace(/^ORD/, "")}`);
-      }
-    }
+// 🔥🔥 BACKEND HARD FIX FOR FRONTEND
+// If frontend sends ORDxxxx, ALWAYS upgrade to ORD_FULL_xxxx if exists
+if (!key.startsWith("ORD_FULL_")) {
+  const fullKey = `ORD_FULL_${key.replace(/^ORD/, "")}`;
 
-    if (orderIds.length === 0) {
-      return res.status(404).json({ ok: false, message: "No orders found" });
-    }
+  const fg = await ddb.send(
+    new GetCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${fullKey}`, sk: "META" },
+    })
+  );
+
+  if (fg.Item) {
+    // FULL exists → force FULL flow
+    orderIds = [fullKey, ...orderIds.filter(x => x !== fullKey)];
+  }
+}
 
     /* --------------------------------------------------
        2️⃣ Ensure ORD_FULL META exists
@@ -357,7 +379,7 @@ export const getOrderFlowByKey = async (req, res) => {
       orderIds: calcOrders.map((o) => o.orderId).filter(Boolean),
       totalQty,
       grandTotal,
-      status,
+      status: String(status || "").toUpperCase(), // 🔥 FIX
       vehicleType: fullOrder?.vehicleType || null,
       vehicleNo: fullOrder?.vehicleNo || null,
       loadingItems,
@@ -407,7 +429,7 @@ export const vehicleSelected = async (req, res) => {
       });
     }
 
-    await updateOrders([fullOrderId], {
+    await updateOrders(fullOrderId, {
       UpdateExpression: `
         SET #s = :st,
             vehicleType = :vt,
@@ -467,7 +489,7 @@ const vehicleOk = await ensureVehicleSelected(orderIds);
       });
     }
 
-    await updateOrders([fullOrderId], {
+    await updateOrders(fullOrderId, {
       UpdateExpression:
         "SET #s = :st, loadingStarted = :ls, loadingStartedAt = :t",
       ExpressionAttributeNames: { "#s": "status" },
@@ -536,7 +558,7 @@ const vehicleOk = await ensureVehicleSelected(orderIds);
       });
     }
 
-    await updateOrders([fullOrderId], {
+    await updateOrders(fullOrderId, {
       UpdateExpression: "SET #s = :st, loadingEndAt = :t",
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
@@ -642,6 +664,19 @@ export const assignDriver = async (req, res) => {
        🔥 BUILD distributors[] FOR FULL ORDER
     -------------------------------------------------- */
     let distributors = [];
+ // 🔥 FIX: SINGLE FULL ORDER (no child orders)
+if (childOrderIds.length === 0) {
+  const g = await ddb.send(
+    new GetCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
+    })
+  );
+
+  if (g.Item?.distributors?.length) {
+    distributors = g.Item.distributors;
+  }
+}
 
     for (const cid of childOrderIds) {
       const g = await ddb.send(
