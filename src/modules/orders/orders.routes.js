@@ -157,22 +157,47 @@ router.post(
   confirmDraftOrder
 );
 
-// ✅ Sales Officer / Salesman view all assigned distributor orders (CONFIRMED)
+// ✅ Sales Officer / Salesman / Distributor view confirmed orders
 router.get(
   "/my",
   verifyToken,
-  allowRoles("SALES OFFICER", "SALESMAN", "DISTRIBUTOR", "SALES OFFICER VNR","MANAGER","SALES_OFFICER_VNR" ),
+  allowRoles(
+    "SALES OFFICER",
+    "SALESMAN",
+    "DISTRIBUTOR",
+    "SALES OFFICER VNR",
+    "SALES_OFFICER_VNR",
+    "MANAGER"
+  ),
   async (req, res) => {
     try {
       const user = req.user;
 
-      const allowed = Array.isArray(user.allowedDistributors)
-        ? user.allowedDistributors
-        : [];
+      let distributorCodes = [];
 
-      const one = String(user.distributorCode || user.distributorId || "").trim();
-      const distributorCodes = allowed.length > 0 ? allowed : (one ? [one] : []);
+      // ✅ 1. DISTRIBUTOR → only own orders
+      if (user.role === "DISTRIBUTOR") {
+        const code = String(
+          user.distributorCode || user.distributorId || ""
+        ).trim();
 
+        if (code) distributorCodes = [code];
+      } 
+      // ✅ 2. SALES / MANAGER → assigned distributors
+      else {
+        const allowed = Array.isArray(user.allowedDistributors)
+          ? user.allowedDistributors
+          : [];
+
+        const one = String(
+          user.distributorCode || user.distributorId || ""
+        ).trim();
+
+        distributorCodes =
+          allowed.length > 0 ? allowed : (one ? [one] : []);
+      }
+
+      // ✅ 3. Safety exit
       if (distributorCodes.length === 0) {
         return res.json({
           ok: true,
@@ -182,6 +207,7 @@ router.get(
         });
       }
 
+      // ✅ 4. Fetch CONFIRMED orders only
       const data = await getOrdersForSalesman({
         distributorCodes,
         status: "CONFIRMED",
@@ -193,10 +219,14 @@ router.get(
         ...data,
       });
     } catch (err) {
-      return res.status(500).json({ ok: false, message: err.message });
+      return res.status(500).json({
+        ok: false,
+        message: err.message,
+      });
     }
   }
 );
+
 router.post(
   "/force-reset/:orderId",
   verifyToken,
