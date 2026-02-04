@@ -659,31 +659,10 @@ export const assignDriver = async (req, res) => {
     }
 
     let childOrderIds = orderIds.filter((id) => id !== fullOrderId);
-
-// 🔥 SINGLE FULL ORDER FALLBACK
-if (childOrderIds.length === 0) {
-  const baseOrd = `ORD${fullOrderId.replace("ORD_FULL_", "")}`;
-  childOrderIds = [baseOrd];
-}
-
-
     /* --------------------------------------------------
        🔥 BUILD distributors[] FOR FULL ORDER
     -------------------------------------------------- */
     let distributors = [];
- // 🔥 FIX: SINGLE FULL ORDER (no child orders)
-if (childOrderIds.length === 0) {
-  const g = await ddb.send(
-    new GetCommand({
-      TableName: ORDERS_TABLE,
-      Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
-    })
-  );
-
-  if (g.Item?.distributors?.length) {
-    distributors = g.Item.distributors;
-  }
-}
 
     for (const cid of childOrderIds) {
       const g = await ddb.send(
@@ -726,6 +705,35 @@ distributors.push({
   unloadEndAt: null,
 });
     }
+// 🔥 SINGLE FULL ORDER FALLBACK
+if (!distributors.length) {
+  const fg = await ddb.send(
+    new GetCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
+    })
+  );
+
+  const o = fg.Item;
+
+  if (o?.distributorId) {
+    const master = await getDistributorFromMaster(o.distributorId);
+
+    if (master && master.lat && master.lng) {
+      distributors.push({
+        distributorCode: master.distributorCode,
+        distributorName: master.distributorName || o.distributorName,
+        lat: master.lat,
+        lng: master.lng,
+        mapUrl: master.mapUrl || null,
+        items: o.items || [],
+        reachedAt: null,
+        unloadStartAt: null,
+        unloadEndAt: null,
+      });
+    }
+  }
+}
 
     // ❗ dedupe distributors
    const seen = new Set();
