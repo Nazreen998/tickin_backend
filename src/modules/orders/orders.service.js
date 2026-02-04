@@ -609,6 +609,26 @@ export const updatePendingReason = async (req, res) => {
     res.status(500).json({ message: "Error", error: err.message });
   }
 };
+async function buildDistributorFromMaster(order) {
+  if (!order?.distributorId) return [];
+
+  const master = await getDistributorFromMaster(order.distributorId);
+  if (!master || !master.lat || !master.lng) return [];
+
+  return [
+    {
+      distributorCode: master.distributorCode,
+      distributorName: master.distributorName || order.distributorName,
+      lat: master.lat,
+      lng: master.lng,
+      mapUrl: master.mapUrl || null,
+      items: order.items || [],
+      reachedAt: null,
+      unloadStartAt: null,
+      unloadEndAt: null,
+    },
+  ];
+}
 
 /* ==========================
    ✅ Confirm Order + Slot Booking
@@ -699,13 +719,15 @@ export const confirmOrder = async (req, res) => {
         amount,
         orderId,
       });
-
-      slotBooked = true;
+const slotIdValue =
+  booked?.bookingId ||
+  `${companyCode}#${slot.date}#${slot.time}#${booked?.type || "FULL"}#${slot.pos}`;
+    
       // 🔥 FIX: SINGLE FULL ORDER → ensure ORD_FULL has data
+// 🔥 FIX: SINGLE FULL ORDER → ensure ORD_FULL has proper distributors[]
 if (booked?.type === "FULL") {
   const fullOrderId = `ORD_FULL_${orderId.replace(/^ORD/, "")}`;
 
-  // check if ORD_FULL exists
   const fg = await ddb.send(
     new GetCommand({
       TableName: ORDERS_TABLE,
@@ -714,7 +736,12 @@ if (booked?.type === "FULL") {
   );
 
   if (!fg.Item) {
-    // create FULL meta by COPYING base order
+    // ✅ BUILD distributors[] PROPERLY
+    const fullDistributors =
+      Array.isArray(order.distributors) && order.distributors.length
+        ? order.distributors
+        : await buildDistributorFromMaster(order);
+
     await ddb.send(
       new PutCommand({
         TableName: ORDERS_TABLE,
@@ -724,12 +751,16 @@ if (booked?.type === "FULL") {
           orderId: fullOrderId,
           status: "CONFIRMED",
           mergeKey: null,
+
           distributorId: order.distributorId,
           distributorName: order.distributorName,
-          items: order.items,
-          totalAmount: order.totalAmount,
-          totalQty: order.totalQty,
-          distributors: order.distributors || [],
+
+          items: order.items || [],
+          totalAmount: order.totalAmount || 0,
+          totalQty: order.totalQty || 0,
+
+          distributors: fullDistributors, // ✅ MAIN FIX
+
           currentDistributorIndex: 0,
           slotBooked: true,
           slotId: slotIdValue,
@@ -743,7 +774,7 @@ if (booked?.type === "FULL") {
     );
   }
 }
-
+  slotBooked = true;
       slotDetails = {
         companyCode,
         date: slot.date,
@@ -756,11 +787,6 @@ if (booked?.type === "FULL") {
 
       // ✅ Store slot + slotBooked in order
       const now = new Date().toISOString();
-
-const slotIdValue =
-  slotDetails?.bookingId ||
-  booked?.bookingId ||
-  `${companyCode}#${slot.date}#${slot.time}#${slotDetails?.vehicleType || "FULL"}#${slot.pos}`;
 
 await ddb.send(
   new UpdateCommand({
