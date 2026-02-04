@@ -185,17 +185,23 @@ export const getOrderFlowByKey = async (req, res) => {
     -------------------------------------------------- */
     let orderIds = await resolveOrderIdsFromFlowKey(key);
 
-    // 🔥 FORCE include ORD_FULL for direct ORD
-    if (orderIds.length === 1) {
-      const oid = normalizeOrderId(orderIds[0]);
-      if (oid && !oid.startsWith("ORD_FULL_")) {
-        orderIds.unshift(`ORD_FULL_${oid.replace(/^ORD/, "")}`);
-      }
-    }
+// 🔥🔥 BACKEND HARD FIX FOR FRONTEND
+// If frontend sends ORDxxxx, ALWAYS upgrade to ORD_FULL_xxxx if exists
+if (!key.startsWith("ORD_FULL_")) {
+  const fullKey = `ORD_FULL_${key.replace(/^ORD/, "")}`;
 
-    if (orderIds.length === 0) {
-      return res.status(404).json({ ok: false, message: "No orders found" });
-    }
+  const fg = await ddb.send(
+    new GetCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${fullKey}`, sk: "META" },
+    })
+  );
+
+  if (fg.Item) {
+    // FULL exists → force FULL flow
+    orderIds = [fullKey, ...orderIds.filter(x => x !== fullKey)];
+  }
+}
 
     /* --------------------------------------------------
        2️⃣ Ensure ORD_FULL META exists
