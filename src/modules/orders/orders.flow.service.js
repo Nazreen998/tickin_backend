@@ -658,7 +658,14 @@ export const assignDriver = async (req, res) => {
       });
     }
 
-    const childOrderIds = orderIds.filter((id) => id !== fullOrderId);
+    let childOrderIds = orderIds.filter((id) => id !== fullOrderId);
+
+// 🔥 SINGLE FULL ORDER FALLBACK
+if (childOrderIds.length === 0) {
+  const baseOrd = `ORD${fullOrderId.replace("ORD_FULL_", "")}`;
+  childOrderIds = [baseOrd];
+}
+
 
     /* --------------------------------------------------
        🔥 BUILD distributors[] FOR FULL ORDER
