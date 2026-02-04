@@ -363,7 +363,7 @@ if (!key.startsWith("ORD_FULL_")) {
       orderIds: calcOrders.map((o) => o.orderId).filter(Boolean),
       totalQty,
       grandTotal,
-      status,
+      status: String(status || "").toUpperCase(), // 🔥 FIX
       vehicleType: fullOrder?.vehicleType || null,
       vehicleNo: fullOrder?.vehicleNo || null,
       loadingItems,
