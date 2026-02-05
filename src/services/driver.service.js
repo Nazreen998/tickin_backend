@@ -422,8 +422,7 @@ export async function updateDriverStatus({
 
   const after = updated.Attributes || {};
 
-  const timelineIdx = desired === "UNLOADING_END_D1" ? newIdx : idx;
-
+  // ✅ timeline event (THIS is what your tracking screen reads)
   await addTimelineEvent({
     orderId,
     event: desired,
@@ -435,13 +434,12 @@ export async function updateDriverStatus({
           ? "WAREHOUSE"
           : desired === "DELIVERY_COMPLETED"
           ? "DONE"
-          : stopLabel(timelineIdx),
-      stopIndex: timelineIdx,
+          : stopLabel(idx),
+      stopIndex: idx,
       currentLat,
       currentLng,
     },
   });
-
   return {
     ok: true,
     reached:
