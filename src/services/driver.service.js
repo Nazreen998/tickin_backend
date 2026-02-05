@@ -243,67 +243,44 @@ function hydrateDriverCard(order = {}) {
 export async function getDriverOrders(driverId) {
   if (!driverId) return [];
 
+  // 🔥 FIX: normalize driverId
+  const driverPk = driverId.startsWith("USER#")
+    ? driverId
+    : `USER#${driverId}`;
+
   const res = await ddb.send(
     new QueryCommand({
       TableName: ORDERS_TABLE,
       IndexName: DRIVER_GSI,
       KeyConditionExpression: "driverId = :d",
-      ExpressionAttributeValues: { ":d": String(driverId) },
+      ExpressionAttributeValues: {
+        ":d": driverPk,
+      },
       ScanIndexForward: false,
     })
   );
 
-  const raw = res.Items || [];
-  const orders = [];
+  const allowed = new Set([
+    "DRIVER_ASSIGNED",
+    "DRIVER_STARTED",
+    "DRIVE_STARTED",
+    "REACHED_D1",
+    "REACHED_D2",
+    "UNLOADING_START_D1",
+    "UNLOADING_START_D2",
+    "UNLOADING_END_D1",
+    "UNLOADING_END_D2",
+    "WAREHOUSE_REACHED",
+    "DELIVERY_COMPLETED",
+  ]);
 
-  for (const o of raw) {
-    // ✅ derive orderId safely
-    const orderId =
-      o.orderId ||
-      (typeof o.pk === "string" ? o.pk.replace("ORDER#", "") : null);
-
-    if (!orderId) continue;
-
-    // ✅ ONLY FULL orders
-    if (!orderId.startsWith("ORD_FULL_")) continue;
-    if (o.deletedByDriver === true) continue;
-
-    // 🔥 totals
-    let totalQty = Number(o.totalQty || 0);
-    let totalAmount = Number(o.totalAmount || o.grandTotal || 0);
-
-    if ((!totalQty || !totalAmount) && Array.isArray(o.distributors)) {
-      totalQty = 0;
-      totalAmount = 0;
-      for (const d of o.distributors) {
-        for (const it of d.items || []) {
-          totalQty += Number(it.qty || 0);
-          totalAmount += Number(it.total || 0);
-        }
-      }
-    }
-
-    // 🔥 distributor display
-    let distributorDisplay = "-";
-    if (Array.isArray(o.distributors) && o.distributors.length) {
-      distributorDisplay =
-        o.distributors.length === 1
-          ? o.distributors[0].distributorName
-          : o.distributors
-              .map((d, i) => `D${i + 1}: ${d.distributorName}`)
-              .join(" | ");
-    }
-
-    orders.push({
-      ...o,
-      orderId,
-      totalQty,
-      totalAmount,
-      distributorDisplay,
-    });
-  }
-
-  return orders;
+  return (res.Items || [])
+    .filter(
+      (o) =>
+        allowed.has(String(o.status || "").toUpperCase()) &&
+        o.deletedByDriver !== true
+    )
+    .map(hydrateDriverCard); // ✅ totals + distributorDisplay fix
 }
 /* -------- distance validation -------- */
 
