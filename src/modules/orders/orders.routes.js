@@ -19,8 +19,7 @@ import {
   deleteOrder,
   cancelOrderSlot,
   getOrdersByMergeKey,
-  getSlotConfirmedOrders,
-  getAssignedOrdersByDriver
+  getSlotConfirmedOrders
 } from "./orders.service.js";
 import {
   vehicleSelected,

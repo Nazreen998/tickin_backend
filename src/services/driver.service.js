@@ -239,13 +239,23 @@ function hydrateDriverCard(order = {}) {
   return out;
 }
 
+/**-------GET DRIVER ORDERS--------*/
 export async function getDriverOrders(driverId) {
+  if (!driverId) return [];
+
+  // 🔥 FIX: normalize driverId
+  const driverPk = driverId.startsWith("USER#")
+    ? driverId
+    : `USER#${driverId}`;
+
   const res = await ddb.send(
     new QueryCommand({
       TableName: ORDERS_TABLE,
       IndexName: DRIVER_GSI,
       KeyConditionExpression: "driverId = :d",
-      ExpressionAttributeValues: { ":d": String(driverId) },
+      ExpressionAttributeValues: {
+        ":d": driverPk,
+      },
       ScanIndexForward: false,
     })
   );
@@ -254,14 +264,11 @@ export async function getDriverOrders(driverId) {
     "DRIVER_ASSIGNED",
     "DRIVER_STARTED",
     "DRIVE_STARTED",
-    "DRIVER_REACHED_DISTRIBUTOR",
-    "UNLOAD_START",
-    "UNLOAD_END",
     "REACHED_D1",
-    "UNLOADING_START_D1",
-    "UNLOADING_END_D1",
     "REACHED_D2",
+    "UNLOADING_START_D1",
     "UNLOADING_START_D2",
+    "UNLOADING_END_D1",
     "UNLOADING_END_D2",
     "WAREHOUSE_REACHED",
     "DELIVERY_COMPLETED",
@@ -273,9 +280,8 @@ export async function getDriverOrders(driverId) {
         allowed.has(String(o.status || "").toUpperCase()) &&
         o.deletedByDriver !== true
     )
-    .map(hydrateDriverCard);
+    .map(hydrateDriverCard); // ✅ totals + distributorDisplay fix
 }
-
 /* -------- distance validation -------- */
 
 export async function validateDriverReach30m({ orderId, currentLat, currentLng }) {

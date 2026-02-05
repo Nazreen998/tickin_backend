@@ -85,7 +85,7 @@ function normalizeStop(d = {}) {
   let lat = d.lat ?? d.latitude ?? null;
   let lng = d.lng ?? d.longitude ?? null;
   const mapUrl = d.mapUrl ?? d.final_url ?? d.finalUrl ?? null;
-
+ 
   // if lat/lng missing, try parse from mapUrl
   if ((!lat || !lng) && mapUrl) {
     const p = parseLatLngFromUrl(mapUrl);
