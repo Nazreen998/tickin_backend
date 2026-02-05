@@ -33,11 +33,10 @@ import attendanceRoutes from "./src/modules/attendance/attendance.routes.js";
 import ManagerOrdersFlowRoutes from "./src/routes/managerOrdersFlow.routes.js";
 import attendanceDashboardRoutes from "./src/modules/attendance/dashboard.routes.js";
 import attendanceConfigRoutes from "./src/modules/attendance/config.routes.js";
+const app = express();
 app.use(cors());
 app.use(express.json());          // ✅ THIS IS MUST
 app.use(express.urlencoded({ extended: true }));
-
-const app = express();
 app.use("/qr", qrRoutes);
 /**
  * ✅ Important for Render/Railway/Proxy hosting
