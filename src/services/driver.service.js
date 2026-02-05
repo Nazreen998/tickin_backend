@@ -197,16 +197,41 @@ function buildDistributorDisplay(order = {}) {
 
 function hydrateDriverCard(order = {}) {
   const out = { ...order };
-  const computed = sumOrderTotalsFromDistributors(out);
 
-  out.totalQty = Number(out.totalQty ?? out.qty ?? computed.totalQty ?? 0);
+  // 1️⃣ recompute totals from distributors.items ALWAYS
+  let totalQty = 0;
+  let totalAmount = 0;
 
-  out.totalAmount = Number(
-    out.totalAmount ?? out.grandTotal ?? out.total ?? computed.totalAmount ?? 0
-  );
+  const dists = Array.isArray(out.distributors) ? out.distributors : [];
 
-  out.distributorDisplay = out.distributorDisplay ?? buildDistributorDisplay(out);
+  for (const d of dists) {
+    const items = Array.isArray(d.items) ? d.items : [];
+    for (const it of items) {
+      totalQty += Number(it.qty || 0);
+      totalAmount += Number(it.total || 0);
+    }
+  }
 
+  out.totalQty =
+    Number(out.totalQty ?? out.qty ?? totalQty ?? 0);
+
+  out.totalAmount =
+    Number(out.totalAmount ?? out.grandTotal ?? totalAmount ?? 0);
+
+  // 2️⃣ distributorDisplay guarantee
+  if (!out.distributorDisplay) {
+    if (dists.length === 1) {
+      out.distributorDisplay = dists[0]?.distributorName || "-";
+    } else if (dists.length > 1) {
+      out.distributorDisplay = dists
+        .map((d, i) => `D${i + 1}: ${d.distributorName || "-"}`)
+        .join(" | ");
+    } else {
+      out.distributorDisplay = out.distributorName || "-";
+    }
+  }
+
+  // 3️⃣ distributorName fallback
   if (!out.distributorName || out.distributorName === "-") {
     out.distributorName = out.distributorDisplay;
   }
