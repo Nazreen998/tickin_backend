@@ -1200,60 +1200,63 @@ export const getOrdersForSalesman = async ({
 };
 
 /**
- * ✅ Manager/Master: fetch all orders (optional status filter)
- */
-/**
  * ✅ Manager/Master: fetch all orders
  * Optional filters:
  *  - status
  *  - date (yyyy-MM-dd) → day-wise
  */
-export const getAllOrders = async ({ status, date }) => {
-  const expNames = {};
+export const getAllOrders = async ({
+  status, // optional
+  date,   // optional yyyy-MM-dd
+}) => {
   const expVals = {};
-  const filters = [];
+  const expNames = {};
+
+  // 🔹 BASE FILTER → META orders only
+  let filter = "#sk = :meta";
+  expNames["#sk"] = "sk";
+  expVals[":meta"] = "META";
 
   // 🔹 OPTIONAL status filter
   if (status) {
-    filters.push("#s = :st");
+    filter += " AND #s = :st";
     expNames["#s"] = "status";
     expVals[":st"] = String(status).toUpperCase();
   }
 
-  // 🔹 OPTIONAL day-wise date filter
+  // 🔹 OPTIONAL date filter (day-wise)
   if (date) {
     const start = `${date}T00:00:00.000Z`;
     const end = `${date}T23:59:59.999Z`;
 
-    filters.push("#ca BETWEEN :start AND :end");
+    filter += " AND #ca BETWEEN :start AND :end";
     expNames["#ca"] = "createdAt";
     expVals[":start"] = start;
     expVals[":end"] = end;
   }
 
-  const params = {
-    TableName: ORDERS_TABLE,
-    FilterExpression: filters.length ? filters.join(" AND ") : undefined,
-    ExpressionAttributeNames:
-      Object.keys(expNames).length ? expNames : undefined,
-    ExpressionAttributeValues:
-      Object.keys(expVals).length ? expVals : undefined,
-  };
+  // 🔍 Debug (temporary)
+  console.log("📦 Scan Filter =", filter);
+  console.log("📦 Names =", expNames);
+  console.log("📦 Values =", expVals);
 
-  // 🔍 Debug (optional)
-  console.log("📦 getAllOrders Filter =", params.FilterExpression);
-  console.log("📦 Names =", params.ExpressionAttributeNames);
-  console.log("📦 Values =", params.ExpressionAttributeValues);
-
-  const res = await ddb.send(new ScanCommand(params));
+  const res = await ddb.send(
+    new ScanCommand({
+      TableName: ORDERS_TABLE,
+      FilterExpression: filter,
+      ExpressionAttributeNames: expNames,
+      ExpressionAttributeValues: expVals,
+    })
+  );
 
   return {
     count: res.Items?.length || 0,
-    status: status ? String(status).toUpperCase() : "ALL",
-    date: date || "ALL",
+    status: status ?? "ALL",
+    date: date ?? "ALL",
     orders: res.Items || [],
   };
 };
+
 
 
 export const getOrderById = async (req, res) => {
