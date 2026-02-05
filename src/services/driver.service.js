@@ -254,15 +254,21 @@ export async function getDriverOrders(driverId) {
   );
 
   const raw = res.Items || [];
-
   const orders = [];
 
   for (const o of raw) {
+    // ✅ derive orderId safely
+    const orderId =
+      o.orderId ||
+      (typeof o.pk === "string" ? o.pk.replace("ORDER#", "") : null);
+
+    if (!orderId) continue;
+
     // ✅ ONLY FULL orders
-    if (!String(o.orderId || "").startsWith("ORD_FULL_")) continue;
+    if (!orderId.startsWith("ORD_FULL_")) continue;
     if (o.deletedByDriver === true) continue;
 
-    // 🔥 HYDRATE TOTALS
+    // 🔥 totals
     let totalQty = Number(o.totalQty || 0);
     let totalAmount = Number(o.totalAmount || o.grandTotal || 0);
 
@@ -290,6 +296,7 @@ export async function getDriverOrders(driverId) {
 
     orders.push({
       ...o,
+      orderId,
       totalQty,
       totalAmount,
       distributorDisplay,
@@ -298,7 +305,6 @@ export async function getDriverOrders(driverId) {
 
   return orders;
 }
-
 /* -------- distance validation -------- */
 
 export async function validateDriverReach30m({ orderId, currentLat, currentLng }) {
