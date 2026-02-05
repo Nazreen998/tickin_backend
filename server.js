@@ -11,6 +11,7 @@ import "./src/appInit.js";
 // ✅ Dynamo imports AFTER env
 import { ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import { ddb } from "./src/config/dynamo.js";
+import qrRoutes from "./src/routes/qr.routes.js";
 
 // ✅ modules imports
 import authRoutes from "./src/modules/auth/auth.routes.js";
@@ -32,9 +33,11 @@ import attendanceRoutes from "./src/modules/attendance/attendance.routes.js";
 import ManagerOrdersFlowRoutes from "./src/routes/managerOrdersFlow.routes.js";
 import attendanceDashboardRoutes from "./src/modules/attendance/dashboard.routes.js";
 import attendanceConfigRoutes from "./src/modules/attendance/config.routes.js";
-
 const app = express();
-
+app.use(cors());
+app.use(express.json());          // ✅ THIS IS MUST
+app.use(express.urlencoded({ extended: true }));
+app.use("/qr", qrRoutes);
 /**
  * ✅ Important for Render/Railway/Proxy hosting
  */
