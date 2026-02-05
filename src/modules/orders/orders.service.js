@@ -1276,78 +1276,57 @@ export const getOrdersByMergeKey = async (req, res) => {
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
-// export async function getAssignedOrdersByDriver(driverId) {
-//   if (!driverId) return [];
+export async function getAssignedOrdersByDriver(driverId) {
+  if (!driverId) return [];
 
-//   // 1️⃣ Get orderIds from GSI
-//   const q = await ddb.send(
-//     new QueryCommand({
-//       TableName: ORDERS_TABLE,
-//       IndexName: "GSI_DRIVER_ASSIGNED",
-//       KeyConditionExpression: "driverId = :d",
-//       ExpressionAttributeValues: {
-//         ":d": driverId,
-//       },
-//       ScanIndexForward: false,
-//     })
-//   );
+  // 1️⃣ Get orderIds from GSI
+  const q = await ddb.send(
+    new QueryCommand({
+      TableName: ORDERS_TABLE,
+      IndexName: "GSI_DRIVER_ASSIGNED",
+      KeyConditionExpression: "driverId = :d",
+      ExpressionAttributeValues: {
+        ":d": driverId,
+      },
+      ScanIndexForward: false,
+    })
+  );
 
-//   const ids = (q.Items || [])
-//     .map(o => o.orderId)
-//     .filter(Boolean);
+  const ids = (q.Items || [])
+    .map(o => o.orderId)
+    .filter(Boolean);
 
-//   if (ids.length === 0) return [];
+  if (ids.length === 0) return [];
 
-//   const results = [];
+  // 2️⃣ Fetch FULL META for each order
+  const results = [];
 
-//   for (const oid of ids) {
-//     const g = await ddb.send(
-//       new GetCommand({
-//         TableName: ORDERS_TABLE,
-//         Key: { pk: `ORDER#${oid}`, sk: "META" },
-//       })
-//     );
+  for (const oid of ids) {
+    const g = await ddb.send(
+      new GetCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${oid}`, sk: "META" },
+      })
+    );
 
-//     if (!g.Item) continue;
-//     const o = g.Item;
+    if (!g.Item) continue;
 
-//     // ❌ hide merged child orders
-//     if (o.mergedIntoOrderId && !String(o.orderId).startsWith("ORD_FULL_")) {
-//       continue;
-//     }
+    const o = g.Item;
 
-//     /* -------------------------------
-//        🔥 HYDRATE TOTALS FROM ITEMS
-//     -------------------------------- */
-//     let totalQty = 0;
-//     let totalAmount = 0;
+    // ❌ hide merged child orders
+    if (o.mergedIntoOrderId && !String(o.orderId).startsWith("ORD_FULL_")) {
+      continue;
+    }
 
-//     const dists = Array.isArray(o.distributors) ? o.distributors : [];
+    results.push({
+      ...o,
+      totalAmount: Number(o.totalAmount || 0),
+      totalQty: Number(o.totalQty || 0),
+      distributorDisplay: Array.isArray(o.distributors)
+        ? o.distributors.map(d => d.distributorName).join(" + ")
+        : o.distributorName || "-",
+    });
+  }
 
-//     for (const d of dists) {
-//       const items = Array.isArray(d.items) ? d.items : [];
-//       for (const it of items) {
-//         totalQty += Number(it.qty || 0);
-//         totalAmount += Number(it.total || 0);
-//       }
-//     }
-
-//     const distributorDisplay =
-//       dists.length === 0
-//         ? o.distributorName || "-"
-//         : dists.length === 1
-//         ? dists[0]?.distributorName || "-"
-//         : dists.map((d, i) => `D${i + 1}: ${d.distributorName}`).join(" | ");
-
-//     results.push({
-//       ...o,
-//       totalQty:
-//         Number(o.totalQty ?? totalQty ?? 0),
-//       totalAmount:
-//         Number(o.totalAmount ?? o.grandTotal ?? totalAmount ?? 0),
-//       distributorDisplay,
-//     });
-//   }
-
-//   return results;
-// }
+  return results;
+}
