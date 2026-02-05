@@ -1288,7 +1288,6 @@ export async function getAssignedOrdersByDriver(driverId) {
       ExpressionAttributeValues: {
         ":d": driverId,
       },
-      ProjectionExpression: "orderId", // 🔥 ONLY ID
       ScanIndexForward: false,
     })
   );

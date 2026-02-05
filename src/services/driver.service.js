@@ -6,8 +6,6 @@ import { addTimelineEvent } from "../modules/timeline/timeline.helper.js";
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const DRIVER_GSI = "GSI_DRIVER_ASSIGNED";
 
-// ✅100 meters
-//const REACH_RADIUS_METERS = 100;
 const REACH_RADIUS_METERS = 200;
 
 /* ------------------ helpers ------------------ */
@@ -88,7 +86,7 @@ function normalizeDistributors(order) {
   }
 
   return list.map((d0) => {
-    const d = d0?.M ? d0.M : d0; // extra safety
+    const d = d0?.M ? d0.M : d0;
 
     let lat = unwrap(d.lat ?? d.latitude);
     let lng = unwrap(d.lng ?? d.longitude);
@@ -121,33 +119,31 @@ function getCurrentStop(order) {
   // 🔥 ULTIMATE FALLBACK (MERGE SAFE)
   if (!Array.isArray(distributors) || distributors.length === 0) {
     if (order.distributorName) {
-      distributors = [{
-        distributorCode: order.distributorCode || order.distributorId || null,
-        distributorName: order.distributorName,
-        lat: Number(order.lat) || Number(order.distributorLat) || null,
-        lng: Number(order.lng) || Number(order.distributorLng) || null,
-        mapUrl: order.mapUrl || null,
-        reachedAt: null,
-        unloadStartAt: null,
-        unloadEndAt: null,
-        items: order.items || [],
-      }];
+      distributors = [
+        {
+          distributorCode: order.distributorCode || order.distributorId || null,
+          distributorName: order.distributorName,
+          lat: Number(order.lat) || Number(order.distributorLat) || null,
+          lng: Number(order.lng) || Number(order.distributorLng) || null,
+          mapUrl: order.mapUrl || null,
+          reachedAt: null,
+          unloadStartAt: null,
+          unloadEndAt: null,
+          items: order.items || [],
+        },
+      ];
     }
   }
 
-  // 🔥 STILL EMPTY? → HARD STOP LOG
   if (!distributors.length) {
     console.error("❌ NO DISTRIBUTORS EVEN AFTER FALLBACK", order.orderId);
   }
 
   const idx = Number(order.currentDistributorIndex || 0);
 
-  return {
-    distributors,
-    idx,
-    stop: distributors[idx] || null,
-  };
+  return { distributors, idx, stop: distributors[idx] || null };
 }
+
 /* ✅ D1 / D2 helpers */
 function stopLabel(idx) {
   return idx === 0 ? "D1" : "D2";
@@ -175,6 +171,74 @@ export async function getOrder(orderId) {
   return res.Item || null;
 }
 
+/* ------- hydrate driver list ------- */
+function sumOrderTotalsFromDistributors(order = {}) {
+  const dists = Array.isArray(order.distributors) ? order.distributors : [];
+  let totalQty = 0;
+  let totalAmount = 0;
+
+  for (const d of dists) {
+    const items = Array.isArray(d.items) ? d.items : [];
+    for (const it of items) {
+      totalQty += Number(it.qty || 0);
+      totalAmount += Number(it.total || 0);
+    }
+  }
+
+  return { totalQty, totalAmount };
+}
+
+function buildDistributorDisplay(order = {}) {
+  const dists = Array.isArray(order.distributors) ? order.distributors : [];
+  if (dists.length === 0) return order.distributorName || "-";
+  if (dists.length === 1) return dists[0]?.distributorName || "-";
+  return dists.map((d, i) => `D${i + 1}: ${d.distributorName || "-"}`).join(" | ");
+}
+
+function hydrateDriverCard(order = {}) {
+  const out = { ...order };
+
+  // 1️⃣ recompute totals from distributors.items ALWAYS
+  let totalQty = 0;
+  let totalAmount = 0;
+
+  const dists = Array.isArray(out.distributors) ? out.distributors : [];
+
+  for (const d of dists) {
+    const items = Array.isArray(d.items) ? d.items : [];
+    for (const it of items) {
+      totalQty += Number(it.qty || 0);
+      totalAmount += Number(it.total || 0);
+    }
+  }
+
+  out.totalQty =
+    Number(out.totalQty ?? out.qty ?? totalQty ?? 0);
+
+  out.totalAmount =
+    Number(out.totalAmount ?? out.grandTotal ?? totalAmount ?? 0);
+
+  // 2️⃣ distributorDisplay guarantee
+  if (!out.distributorDisplay) {
+    if (dists.length === 1) {
+      out.distributorDisplay = dists[0]?.distributorName || "-";
+    } else if (dists.length > 1) {
+      out.distributorDisplay = dists
+        .map((d, i) => `D${i + 1}: ${d.distributorName || "-"}`)
+        .join(" | ");
+    } else {
+      out.distributorDisplay = out.distributorName || "-";
+    }
+  }
+
+  // 3️⃣ distributorName fallback
+  if (!out.distributorName || out.distributorName === "-") {
+    out.distributorName = out.distributorDisplay;
+  }
+
+  return out;
+}
+
 export async function getDriverOrders(driverId) {
   const res = await ddb.send(
     new QueryCommand({
@@ -186,29 +250,30 @@ export async function getDriverOrders(driverId) {
     })
   );
 
-  // ✅ allow all statuses that driver can see
   const allowed = new Set([
     "DRIVER_ASSIGNED",
-    "DRIVER_STARTED", // ✅ add
-    "DRIVE_STARTED", // keep if old data exists
-    "DRIVER_REACHED_DISTRIBUTOR", // ✅ add (safety)
-    "UNLOAD_START", // ✅ add
-    "UNLOAD_END", // ✅ add
-
+    "DRIVER_STARTED",
+    "DRIVE_STARTED",
+    "DRIVER_REACHED_DISTRIBUTOR",
+    "UNLOAD_START",
+    "UNLOAD_END",
     "REACHED_D1",
     "UNLOADING_START_D1",
     "UNLOADING_END_D1",
     "REACHED_D2",
     "UNLOADING_START_D2",
     "UNLOADING_END_D2",
-
     "WAREHOUSE_REACHED",
     "DELIVERY_COMPLETED",
   ]);
-return (res.Items || []).filter((o) =>
-  allowed.has(String(o.status || "").toUpperCase()) &&
-  o.deletedByDriver !== true
-);
+
+  return (res.Items || [])
+    .filter(
+      (o) =>
+        allowed.has(String(o.status || "").toUpperCase()) &&
+        o.deletedByDriver !== true
+    )
+    .map(hydrateDriverCard);
 }
 
 /* -------- distance validation -------- */
@@ -246,15 +311,6 @@ export async function validateDriverReach30m({ orderId, currentLat, currentLng }
 }
 
 /* ------------------ UPDATE STATUS ------------------ */
-/**
- * nextStatus (frontend/driver app) can send:
- *  - DRIVE_STARTED
- *  - DRIVER_REACHED_DISTRIBUTOR   (we convert to REACHED_D1/REACHED_D2)
- *  - UNLOAD_START                 (we convert to UNLOADING_START_D1/D2)
- *  - UNLOAD_END                   (we convert to UNLOADING_END_D1/D2)
- *  - WAREHOUSE_REACHED
- *  - DELIVERY_COMPLETED (optional)
- */
 export async function updateDriverStatus({
   orderId,
   nextStatus,
@@ -272,16 +328,14 @@ export async function updateDriverStatus({
   const totalStops = distributors.length;
   const hasD2 = totalStops > 1;
 
-  // ✅ map generic → timeline keys
   let desired = incoming;
 
   if (incoming === "DRIVER_STARTED") desired = "DRIVER_STARTED";
-  if (incoming === "DRIVE_STARTED") desired = "DRIVER_STARTED"; // alias normalize
+  if (incoming === "DRIVE_STARTED") desired = "DRIVER_STARTED";
   if (incoming === "DRIVER_REACHED_DISTRIBUTOR") desired = reachedEventKey(idx);
   if (incoming === "UNLOAD_START") desired = unloadStartEventKey(idx);
   if (incoming === "UNLOAD_END") desired = unloadEndEventKey(idx);
 
-  // ✅ Single order => never allow D2 events
   if (
     !hasD2 &&
     ["REACHED_D2", "UNLOADING_START_D2", "UNLOADING_END_D2"].includes(desired)
@@ -289,18 +343,11 @@ export async function updateDriverStatus({
     throw new Error("D2 not applicable for single order");
   }
 
-  // ✅ validate transition using your existing rules
   validateTransition(currentStatus, desired);
 
   let newIdx = idx;
   let newDistributors = distributors;
 
-  /* ---------- DRIVE_STARTED ---------- */
-  if (desired === "DRIVE_STARTED") {
-    // nothing special, just status update + timeline event below
-  }
-
-  /* ---------- REACHED_D1 / REACHED_D2 ---------- */
   if (desired === "REACHED_D1" || desired === "REACHED_D2") {
     if (!stop) throw new Error("No distributor stop found");
 
@@ -333,27 +380,18 @@ export async function updateDriverStatus({
     newDistributors[idx] = { ...newDistributors[idx], reachedAt: toIsoNow() };
   }
 
-  /* ---------- UNLOADING_START_D1 / D2 ---------- */
   if (desired === "UNLOADING_START_D1" || desired === "UNLOADING_START_D2") {
     if (!stop) throw new Error("No distributor stop found");
     newDistributors = [...newDistributors];
-    newDistributors[idx] = {
-      ...newDistributors[idx],
-      unloadStartAt: toIsoNow(),
-    };
+    newDistributors[idx] = { ...newDistributors[idx], unloadStartAt: toIsoNow() };
   }
 
-  /* ---------- UNLOADING_END_D1 / D2 ---------- */
   if (desired === "UNLOADING_END_D1" || desired === "UNLOADING_END_D2") {
     if (!stop) throw new Error("No distributor stop found");
 
     newDistributors = [...newDistributors];
-    newDistributors[idx] = {
-      ...newDistributors[idx],
-      unloadEndAt: toIsoNow(),
-    };
+    newDistributors[idx] = { ...newDistributors[idx], unloadEndAt: toIsoNow() };
 
-    // ✅ after unload end, move to next stop if exists
     if (idx + 1 < newDistributors.length) {
       newIdx = idx + 1;
     }
@@ -362,7 +400,6 @@ export async function updateDriverStatus({
   const tripClosed =
     desired === "WAREHOUSE_REACHED" || desired === "DELIVERY_COMPLETED";
 
-  // ✅ DB update
   const updated = await ddb.send(
     new UpdateCommand({
       TableName: ORDERS_TABLE,
