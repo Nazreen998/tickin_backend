@@ -1298,7 +1298,6 @@ export async function getAssignedOrdersByDriver(driverId) {
 
   if (ids.length === 0) return [];
 
-  // 2️⃣ Fetch FULL META for each order
   const results = [];
 
   for (const oid of ids) {
@@ -1310,7 +1309,6 @@ export async function getAssignedOrdersByDriver(driverId) {
     );
 
     if (!g.Item) continue;
-
     const o = g.Item;
 
     // ❌ hide merged child orders
@@ -1318,13 +1316,36 @@ export async function getAssignedOrdersByDriver(driverId) {
       continue;
     }
 
+    /* -------------------------------
+       🔥 HYDRATE TOTALS FROM ITEMS
+    -------------------------------- */
+    let totalQty = 0;
+    let totalAmount = 0;
+
+    const dists = Array.isArray(o.distributors) ? o.distributors : [];
+
+    for (const d of dists) {
+      const items = Array.isArray(d.items) ? d.items : [];
+      for (const it of items) {
+        totalQty += Number(it.qty || 0);
+        totalAmount += Number(it.total || 0);
+      }
+    }
+
+    const distributorDisplay =
+      dists.length === 0
+        ? o.distributorName || "-"
+        : dists.length === 1
+        ? dists[0]?.distributorName || "-"
+        : dists.map((d, i) => `D${i + 1}: ${d.distributorName}`).join(" | ");
+
     results.push({
       ...o,
-      totalAmount: Number(o.totalAmount || 0),
-      totalQty: Number(o.totalQty || 0),
-      distributorDisplay: Array.isArray(o.distributors)
-        ? o.distributors.map(d => d.distributorName).join(" + ")
-        : o.distributorName || "-",
+      totalQty:
+        Number(o.totalQty ?? totalQty ?? 0),
+      totalAmount:
+        Number(o.totalAmount ?? o.grandTotal ?? totalAmount ?? 0),
+      distributorDisplay,
     });
   }
 
