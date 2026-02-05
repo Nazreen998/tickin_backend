@@ -239,7 +239,10 @@ function hydrateDriverCard(order = {}) {
   return out;
 }
 
+/**-------GET DRIVER ORDERS--------*/
 export async function getDriverOrders(driverId) {
+  if (!driverId) return [];
+
   const res = await ddb.send(
     new QueryCommand({
       TableName: ORDERS_TABLE,
@@ -250,30 +253,50 @@ export async function getDriverOrders(driverId) {
     })
   );
 
-  const allowed = new Set([
-    "DRIVER_ASSIGNED",
-    "DRIVER_STARTED",
-    "DRIVE_STARTED",
-    "DRIVER_REACHED_DISTRIBUTOR",
-    "UNLOAD_START",
-    "UNLOAD_END",
-    "REACHED_D1",
-    "UNLOADING_START_D1",
-    "UNLOADING_END_D1",
-    "REACHED_D2",
-    "UNLOADING_START_D2",
-    "UNLOADING_END_D2",
-    "WAREHOUSE_REACHED",
-    "DELIVERY_COMPLETED",
-  ]);
+  const raw = res.Items || [];
 
-  return (res.Items || [])
-    .filter(
-      (o) =>
-        allowed.has(String(o.status || "").toUpperCase()) &&
-        o.deletedByDriver !== true
-    )
-    .map(hydrateDriverCard);
+  const orders = [];
+
+  for (const o of raw) {
+    // ✅ ONLY FULL orders
+    if (!String(o.orderId || "").startsWith("ORD_FULL_")) continue;
+    if (o.deletedByDriver === true) continue;
+
+    // 🔥 HYDRATE TOTALS
+    let totalQty = Number(o.totalQty || 0);
+    let totalAmount = Number(o.totalAmount || o.grandTotal || 0);
+
+    if ((!totalQty || !totalAmount) && Array.isArray(o.distributors)) {
+      totalQty = 0;
+      totalAmount = 0;
+      for (const d of o.distributors) {
+        for (const it of d.items || []) {
+          totalQty += Number(it.qty || 0);
+          totalAmount += Number(it.total || 0);
+        }
+      }
+    }
+
+    // 🔥 distributor display
+    let distributorDisplay = "-";
+    if (Array.isArray(o.distributors) && o.distributors.length) {
+      distributorDisplay =
+        o.distributors.length === 1
+          ? o.distributors[0].distributorName
+          : o.distributors
+              .map((d, i) => `D${i + 1}: ${d.distributorName}`)
+              .join(" | ");
+    }
+
+    orders.push({
+      ...o,
+      totalQty,
+      totalAmount,
+      distributorDisplay,
+    });
+  }
+
+  return orders;
 }
 
 /* -------- distance validation -------- */
