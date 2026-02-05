@@ -1202,25 +1202,59 @@ export const getOrdersForSalesman = async ({
 /**
  * ✅ Manager/Master: fetch all orders (optional status filter)
  */
-export const getAllOrders = async ({ status }) => {
+/**
+ * ✅ Manager/Master: fetch all orders
+ * Optional filters:
+ *  - status
+ *  - date (yyyy-MM-dd) → day-wise
+ */
+export const getAllOrders = async ({ status, date }) => {
+  const expNames = {};
+  const expVals = {};
+  const filters = [];
+
+  // 🔹 OPTIONAL status filter
+  if (status) {
+    filters.push("#s = :st");
+    expNames["#s"] = "status";
+    expVals[":st"] = String(status).toUpperCase();
+  }
+
+  // 🔹 OPTIONAL day-wise date filter
+  if (date) {
+    const start = `${date}T00:00:00.000Z`;
+    const end = `${date}T23:59:59.999Z`;
+
+    filters.push("#ca BETWEEN :start AND :end");
+    expNames["#ca"] = "createdAt";
+    expVals[":start"] = start;
+    expVals[":end"] = end;
+  }
+
   const params = {
     TableName: ORDERS_TABLE,
+    FilterExpression: filters.length ? filters.join(" AND ") : undefined,
+    ExpressionAttributeNames:
+      Object.keys(expNames).length ? expNames : undefined,
+    ExpressionAttributeValues:
+      Object.keys(expVals).length ? expVals : undefined,
   };
 
-  if (status) {
-    params.FilterExpression = "#s = :st";
-    params.ExpressionAttributeNames = { "#s": "status" };
-    params.ExpressionAttributeValues = { ":st": String(status).toUpperCase() };
-  }
+  // 🔍 Debug (optional)
+  console.log("📦 getAllOrders Filter =", params.FilterExpression);
+  console.log("📦 Names =", params.ExpressionAttributeNames);
+  console.log("📦 Values =", params.ExpressionAttributeValues);
 
   const res = await ddb.send(new ScanCommand(params));
 
   return {
     count: res.Items?.length || 0,
     status: status ? String(status).toUpperCase() : "ALL",
+    date: date || "ALL",
     orders: res.Items || [],
   };
 };
+
 
 export const getOrderById = async (req, res) => {
   try {
