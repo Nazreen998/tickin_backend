@@ -36,15 +36,16 @@ export const getSlotConfirmedOrders = async (req, res) => {
     const bookingsRes = await ddb.send(
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
-        FilterExpression: "#pk = :pk AND #st <> :x",
+        FilterExpression: "#pk = :pk AND (#st = :c OR #st = :m)",
         ExpressionAttributeNames: {
           "#pk": "pk",
           "#st": "status",
         },
         ExpressionAttributeValues: {
           ":pk": pk,
-          ":x": "CANCELLED",
-        }
+          ":c": "CONFIRMED",
+          ":m": "MERGED",
+        },
       })
     );
 
@@ -100,11 +101,7 @@ export const getSlotConfirmedOrders = async (req, res) => {
 
       // pick confirmed booking if exists, else first
       const booking =
-      bookingList.find(
-        (b) =>
-          b.status !== "CANCELLED" &&
-          b.isActive !== false
-      ) || bookingList[0];
+        bookingList.find((b) => b.status === "CONFIRMED") || bookingList[0];
 
       // 🚫 HARD BLOCK: cancelled / inactive booking
       if (booking.status === "CANCELLED" || booking.isActive === false) {
@@ -123,16 +120,17 @@ export const getSlotConfirmedOrders = async (req, res) => {
       if (masterId) {
         const children = fullChildrenMap[masterId] || [];
         const hasActiveChild = children.some(
-          (b) => b.status !== "CANCELLED" && b.isActive !== false
-        );
-
+  (b) =>
+    (b.status === "CONFIRMED" || b.status === "MERGED") &&
+    b.isActive !== false
+);
         if (!hasActiveChild) {
           continue; // FULL slot cancelled
         }
       }
 
       let mk = booking.mergeKey || order.mergeKey || null;
-      // if (mk && String(mk).startsWith("LOC#")) mk = null;
+      if (mk && String(mk).startsWith("LOC#")) mk = null;
 
       const flowKey = masterId || mk || oid;
 
@@ -167,10 +165,10 @@ export const getSlotConfirmedOrders = async (req, res) => {
         });
       }
 
-      // if (!String(oid).startsWith("ORD_FULL_")) {
-      //   grouped[flowKey].totalQty += Number(order.totalQty || order.qty || 0);
-      // }
-      grouped[flowKey].totalQty += Number(order.totalQty || order.qty || 0);
+      if (!String(oid).startsWith("ORD_FULL_")) {
+        grouped[flowKey].totalQty += Number(order.totalQty || order.qty || 0);
+      }
+
       grouped[flowKey].grandAmount += Number(booking.amount || 0);
 
       const st = String(order.status || "CONFIRMED").toUpperCase();
@@ -182,7 +180,7 @@ export const getSlotConfirmedOrders = async (req, res) => {
       .filter((o) => {
         const qty = Number(o.totalQty || 0);
         if (qty <= 0) return false; // 🚫 even FULL qty 0 removed
-        // if (String(o.flowKey).startsWith("LOC#")) return false;
+        if (String(o.flowKey).startsWith("LOC#")) return false;
         return true;
       })
       .map((g) => {
@@ -1207,60 +1205,53 @@ export const getOrdersForSalesman = async ({
  * - status
  * - date (yyyy-MM-dd)
  */
-export const getAllOrders = async (req, res) => {
-  try {
-    const { status, date } = req.query;
+export const getAllOrders = async ({ status, date }) => {
+  const expVals = {};
+  const expNames = {};
+  let filter = "";
 
-    let filter = "sk = :meta AND attribute_exists(#ca)";
-
-    const expVals = {
-      ":meta": "META",
-    };
-
-    const expNames = {
-      "#ca": "createdAt",
-    };
-
-    // ✅ Date filter
-    if (date) {
-      filter += " AND begins_with(#ca, :day)";
-      expVals[":day"] = date;
-    }
-
-    // ✅ Status filter safe
-    if (typeof status === "string" && status.trim() !== "") {
-      filter += " AND #s = :st";
-      expNames["#s"] = "status";
-      expVals[":st"] = status.toUpperCase();
-    }
-
-    let items = [];
-    let lastKey = null;
-
-    do {
-      const result = await ddb.send(
-        new ScanCommand({
-          TableName: ORDERS_TABLE,
-          FilterExpression: filter,
-          ExpressionAttributeNames: expNames,
-          ExpressionAttributeValues: expVals,
-          ExclusiveStartKey: lastKey ?? undefined,
-        })
-      );
-
-      items.push(...(result.Items || []));
-      lastKey = result.LastEvaluatedKey;
-    } while (lastKey);
-
-    return res.json({
-      ok: true,
-      count: items.length,
-      orders: items,
-    });
-  } catch (err) {
-    console.error("getAllOrders error:", err);
-    return res.status(500).json({ ok: false, message: err.message });
+  // 🔹 OPTIONAL status filter
+  if (status) {
+    filter += "#s = :st";
+    expNames["#s"] = "status";
+    expVals[":st"] = String(status).toUpperCase();
   }
+
+  // 🔹 OPTIONAL day-wise date filter
+  if (date) {
+    const start = `${date}T00:00:00.000Z`;
+    const end = `${date}T23:59:59.999Z`;
+
+    if (filter) filter += " AND ";
+    filter += "#ca BETWEEN :start AND :end";
+
+    expNames["#ca"] = "createdAt";
+    expVals[":start"] = start;
+    expVals[":end"] = end;
+  }
+
+  const params = {
+    TableName: ORDERS_TABLE,
+    FilterExpression: filter || undefined,
+    ExpressionAttributeNames:
+      Object.keys(expNames).length ? expNames : undefined,
+    ExpressionAttributeValues:
+      Object.keys(expVals).length ? expVals : undefined,
+  };
+
+  // 🔍 Debug (optional)
+  console.log("📦 Scan Filter =", filter);
+  console.log("📦 Names =", expNames);
+  console.log("📦 Values =", expVals);
+
+  const res = await ddb.send(new ScanCommand(params));
+
+  return {
+    count: res.Items?.length || 0,
+    status: status ? String(status).toUpperCase() : "ALL",
+    date: date || "ALL",
+    orders: res.Items || [],
+  };
 };
 
 
