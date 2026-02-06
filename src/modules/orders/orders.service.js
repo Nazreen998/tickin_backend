@@ -1206,57 +1206,54 @@ export const getOrdersForSalesman = async ({
  * - date (yyyy-MM-dd)
  */
 export const getAllOrders = async ({ status, date }) => {
-  if (!date) {
-    return {
-      count: 0,
-      orders: [],
-      message: "date is required for manager query",
-    };
-  }
-
-  const expVals = {
-    ":d": date,
-  };
-
-  const expNames = {
-    "#od": "orderDate",
-  };
-
+  const expVals = {};
+  const expNames = {};
   let filter = "";
 
-  // Optional status filter
+  // ✅ Date filter
+  if (date) {
+    const start = `${date}T00:00:00.000Z`;
+    const end = `${date}T23:59:59.999Z`;
+
+    filter += "#ca BETWEEN :start AND :end";
+    expNames["#ca"] = "createdAt";
+    expVals[":start"] = start;
+    expVals[":end"] = end;
+  }
+
+  // ✅ Optional status filter
   if (status) {
-    filter = "#s = :st";
+    if (filter) filter += " AND ";
+    filter += "#s = :st";
+
     expNames["#s"] = "status";
     expVals[":st"] = status.toUpperCase();
   }
 
-  const res = await ddb.send(
-    new QueryCommand({
-      TableName: ORDERS_TABLE,
-      IndexName: "orderDate-createdAt-index",
+  let items = [];
+  let lastKey = null;
 
-      // Query only that date
-      KeyConditionExpression: "#od = :d",
+  do {
+    const res = await ddb.send(
+      new ScanCommand({
+        TableName: ORDERS_TABLE,
+        FilterExpression: filter,
+        ExpressionAttributeNames: expNames,
+        ExpressionAttributeValues: expVals,
+        ExclusiveStartKey: lastKey ?? undefined,
+      })
+    );
 
-      // Optional filter
-      FilterExpression: filter || undefined,
+    items.push(...(res.Items || []));
+    lastKey = res.LastEvaluatedKey;
 
-      ExpressionAttributeNames: expNames,
-      ExpressionAttributeValues: expVals,
-    })
-  );
+  } while (lastKey);
 
   return {
-    count: res.Items?.length || 0,
-    date,
-    status: status ?? "ALL",
-    orders: res.Items || [],
+    count: items.length,
+    orders: items,
   };
 };
-
-
-
 export const getOrderById = async (req, res) => {
   try {
     const { orderId } = req.params;
