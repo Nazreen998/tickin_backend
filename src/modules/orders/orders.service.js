@@ -36,16 +36,15 @@ export const getSlotConfirmedOrders = async (req, res) => {
     const bookingsRes = await ddb.send(
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
-        FilterExpression: "#pk = :pk AND (#st = :c OR #st = :m)",
+        FilterExpression: "#pk = :pk AND #st <> :x",
         ExpressionAttributeNames: {
           "#pk": "pk",
           "#st": "status",
         },
         ExpressionAttributeValues: {
           ":pk": pk,
-          ":c": "CONFIRMED",
-          ":m": "MERGED",
-        },
+          ":x": "CANCELLED",
+        }
       })
     );
 
@@ -120,17 +119,16 @@ export const getSlotConfirmedOrders = async (req, res) => {
       if (masterId) {
         const children = fullChildrenMap[masterId] || [];
         const hasActiveChild = children.some(
-  (b) =>
-    (b.status === "CONFIRMED" || b.status === "MERGED") &&
-    b.isActive !== false
-);
+          (b) => b.status !== "CANCELLED" && b.isActive !== false
+        );
+
         if (!hasActiveChild) {
           continue; // FULL slot cancelled
         }
       }
 
       let mk = booking.mergeKey || order.mergeKey || null;
-      if (mk && String(mk).startsWith("LOC#")) mk = null;
+      // if (mk && String(mk).startsWith("LOC#")) mk = null;
 
       const flowKey = masterId || mk || oid;
 
