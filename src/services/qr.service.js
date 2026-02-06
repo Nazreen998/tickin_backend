@@ -3,6 +3,7 @@ import {
   QueryCommand,
   PutCommand,
   UpdateCommand,
+  ScanCommand,
   TransactWriteCommand
 } from "@aws-sdk/lib-dynamodb";
 
@@ -23,7 +24,27 @@ export async function getActiveBatch(qrName) {
 
   return res.Items?.find((i) => i.status === "ACTIVE");
 }
+export async function getQrHistory() {
+  const res = await ddb.send(
+    new ScanCommand({
+      TableName: QR_ITEMS,
+      FilterExpression: "#s = :a",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: { ":a": "ACTIVE" }
+    })
+  );
 
+  const items = res.Items || [];
+
+  // sort A1..A200 properly
+  items.sort((a, b) => {
+    const na = parseInt((a.qrName || "").replace(/[^\d]/g, "")) || 0;
+    const nb = parseInt((b.qrName || "").replace(/[^\d]/g, "")) || 0;
+    return na - nb;
+  });
+
+  return items;
+}
 export async function takeStock(qrName, qty, user) {
   if (!qty || qty <= 0) throw new Error("Invalid quantity");
 
