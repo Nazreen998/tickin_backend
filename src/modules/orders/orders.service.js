@@ -707,6 +707,47 @@ export const confirmOrder = async (req, res) => {
         amount,
         orderId,
       });
+      // ✅ FIX: If FULL slot for SINGLE order,
+// create a BOOKINGS_TABLE entry for ORD_FULL_ also
+if (booked?.type === "FULL") {
+  const fullOrderId = `ORD_FULL_${orderId.replace(/^ORD/, "")}`;
+
+  const bookingPk = `COMPANY#${companyCode}#DATE#${slot.date}`;
+
+  // create a mirror booking for FULL orderId
+  await ddb.send(
+    new PutCommand({
+      TableName: BOOKINGS_TABLE,
+      Item: {
+        pk: bookingPk,
+        sk: `SLOT#${slot.time}#POS#${slot.pos}#ORDER#${fullOrderId}`,
+        companyCode,
+        date: slot.date,
+        slotDate: slot.date,
+        slotTime: slot.time,
+        slotPos: slot.pos,
+        slotVehicleType: "FULL",
+        vehicleType: "FULL",
+
+        orderId: fullOrderId,
+
+        distributorCode: order.distributorId || null,
+        distributorName: order.distributorName || null,
+
+        amount: Number(amount || 0),
+        status: "CONFIRMED",
+        isActive: true,
+
+        createdAt: new Date().toISOString(),
+        createdBy: user.mobile || null,
+        mergeKey: null,
+        mergedIntoOrderId: null,
+        type: "FULL",
+      },
+    })
+  );
+}
+
 const slotIdValue =
   booked?.bookingId ||
   `${companyCode}#${slot.date}#${slot.time}#${booked?.type || "FULL"}#${slot.pos}`;
