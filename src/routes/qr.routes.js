@@ -2,13 +2,22 @@ import express from "express";
 import {
   scanQr,
   takeStock,
-  addNewBatch
+  addNewBatch,
+  getQrHistoryController
 } from "../controllers/qr.controller.js";
 
 const router = express.Router();
 
-router.get("/:qrName", scanQr);      // GET /qr/A2
-router.post("/take", takeStock);     // POST /qr/take
-router.post("/add", addNewBatch);    // POST /qr/add
+// ✅ History list (must be BEFORE /:qrName)
+router.get("/history/list", getQrHistoryController);
+
+// TAKE stock
+router.post("/take", takeStock);
+
+// ADD new batch
+router.post("/add", addNewBatch);
+
+// ✅ Scan QR must be LAST
+router.get("/:qrName", scanQr);
 
 export default router;

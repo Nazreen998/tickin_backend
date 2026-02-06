@@ -1,4 +1,14 @@
 import * as qrService from "../services/qr.service.js";
+import { getQrHistory } from "../services/qr.service.js";
+
+export async function getQrHistoryController(req, res) {
+  try {
+    const items = await getQrHistory();
+    return res.json({ ok: true, items });
+  } catch (e) {
+    return res.status(400).json({ ok: false, message: e.message });
+  }
+}
 
 export const scanQr = async (req, res) => {
   try {
