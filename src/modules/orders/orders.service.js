@@ -1224,11 +1224,11 @@ export const getAllOrders = async (req, res) => {
       expVals[":day"] = date;
     }
 
-    // ✅ Optional status filter
-    if (status) {
+    // ✅ Status filter only if provided
+    if (status != null && String(status).trim() !== "") {
       filter += " AND #s = :st";
       expNames["#s"] = "status";
-      expVals[":st"] = status.toUpperCase();
+      expVals[":st"] = String(status).toUpperCase();
     }
 
     let items = [];
