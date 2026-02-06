@@ -1206,50 +1206,51 @@ export const getOrdersForSalesman = async ({
  * - date (yyyy-MM-dd)
  */
 export const getAllOrders = async ({ status, date }) => {
-  const expVals = { ":meta": "META" };
-  const expNames = { "#ca": "createdAt" };
+  const expVals = {};
+  const expNames = {};
+  let filter = "";
 
-  let filter = "sk = :meta";
+  // 🔹 OPTIONAL status filter
+  if (status) {
+    filter += "#s = :st";
+    expNames["#s"] = "status";
+    expVals[":st"] = String(status).toUpperCase();
+  }
 
-  // Date filter
+  // 🔹 OPTIONAL day-wise date filter
   if (date) {
     const start = `${date}T00:00:00.000Z`;
     const end = `${date}T23:59:59.999Z`;
 
-    filter += " AND attribute_exists(#ca) AND #ca BETWEEN :start AND :end";
+    if (filter) filter += " AND ";
+    filter += "#ca BETWEEN :start AND :end";
 
+    expNames["#ca"] = "createdAt";
     expVals[":start"] = start;
     expVals[":end"] = end;
   }
 
-  // Optional status
-  if (status) {
-    filter += " AND #s = :st";
-    expNames["#s"] = "status";
-    expVals[":st"] = status.toUpperCase();
-  }
+  const params = {
+    TableName: ORDERS_TABLE,
+    FilterExpression: filter || undefined,
+    ExpressionAttributeNames:
+      Object.keys(expNames).length ? expNames : undefined,
+    ExpressionAttributeValues:
+      Object.keys(expVals).length ? expVals : undefined,
+  };
 
-  let items = [];
-  let lastKey = null;
+  // 🔍 Debug (optional)
+  console.log("📦 Scan Filter =", filter);
+  console.log("📦 Names =", expNames);
+  console.log("📦 Values =", expVals);
 
-  do {
-    const res = await ddb.send(
-      new ScanCommand({
-        TableName: ORDERS_TABLE,
-        FilterExpression: filter,
-        ExpressionAttributeNames: expNames,
-        ExpressionAttributeValues: expVals,
-        ExclusiveStartKey: lastKey ?? undefined,
-      })
-    );
-
-    items.push(...(res.Items || []));
-    lastKey = res.LastEvaluatedKey;
-  } while (lastKey);
+  const res = await ddb.send(new ScanCommand(params));
 
   return {
-    count: items.length,
-    orders: items,
+    count: res.Items?.length || 0,
+    status: status ? String(status).toUpperCase() : "ALL",
+    date: date || "ALL",
+    orders: res.Items || [],
   };
 };
 
