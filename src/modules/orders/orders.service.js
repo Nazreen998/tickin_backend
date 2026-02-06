@@ -163,10 +163,10 @@ export const getSlotConfirmedOrders = async (req, res) => {
         });
       }
 
-      if (!String(oid).startsWith("ORD_FULL_")) {
-        grouped[flowKey].totalQty += Number(order.totalQty || order.qty || 0);
-      }
-
+      // if (!String(oid).startsWith("ORD_FULL_")) {
+      //   grouped[flowKey].totalQty += Number(order.totalQty || order.qty || 0);
+      // }
+      grouped[flowKey].totalQty += Number(order.totalQty || order.qty || 0);
       grouped[flowKey].grandAmount += Number(booking.amount || 0);
 
       const st = String(order.status || "CONFIRMED").toUpperCase();
@@ -178,7 +178,7 @@ export const getSlotConfirmedOrders = async (req, res) => {
       .filter((o) => {
         const qty = Number(o.totalQty || 0);
         if (qty <= 0) return false; // 🚫 even FULL qty 0 removed
-        if (String(o.flowKey).startsWith("LOC#")) return false;
+        // if (String(o.flowKey).startsWith("LOC#")) return false;
         return true;
       })
       .map((g) => {
