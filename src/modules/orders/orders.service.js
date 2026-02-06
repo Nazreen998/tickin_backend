@@ -1205,54 +1205,31 @@ export const getOrdersForSalesman = async ({
  * - status
  * - date (yyyy-MM-dd)
  */
-export const getAllOrders = async ({ status, date }) => {
-  const expVals = {};
-  const expNames = {};
-  let filter = "";
-
-  // 🔹 OPTIONAL status filter
-  if (status) {
-    filter += "#s = :st";
-    expNames["#s"] = "status";
-    expVals[":st"] = String(status).toUpperCase();
+export const getAllOrders = async ({ date }) => {
+  if (!date) {
+    throw new Error("date is required for query");
   }
 
-  // 🔹 OPTIONAL day-wise date filter
-  if (date) {
-    const start = `${date}T00:00:00.000Z`;
-    const end = `${date}T23:59:59.999Z`;
-
-    if (filter) filter += " AND ";
-    filter += "#ca BETWEEN :start AND :end";
-
-    expNames["#ca"] = "createdAt";
-    expVals[":start"] = start;
-    expVals[":end"] = end;
-  }
-
-  const params = {
-    TableName: ORDERS_TABLE,
-    FilterExpression: filter || undefined,
-    ExpressionAttributeNames:
-      Object.keys(expNames).length ? expNames : undefined,
-    ExpressionAttributeValues:
-      Object.keys(expVals).length ? expVals : undefined,
-  };
-
-  // 🔍 Debug (optional)
-  console.log("📦 Scan Filter =", filter);
-  console.log("📦 Names =", expNames);
-  console.log("📦 Values =", expVals);
-
-  const res = await ddb.send(new ScanCommand(params));
+  const res = await ddb.send(
+    new QueryCommand({
+      TableName: ORDERS_TABLE,
+      IndexName: "orderDate-createdAt-index",
+      KeyConditionExpression: "#od = :d",
+      ExpressionAttributeNames: {
+        "#od": "orderDate",
+      },
+      ExpressionAttributeValues: {
+        ":d": date,
+      },
+    })
+  );
 
   return {
     count: res.Items?.length || 0,
-    status: status ? String(status).toUpperCase() : "ALL",
-    date: date || "ALL",
     orders: res.Items || [],
   };
 };
+
 
 
 export const getOrderById = async (req, res) => {
