@@ -1,7 +1,7 @@
 // orders.flow.service.js  ✅ FINAL FIXED
 import { ddb } from "../../config/dynamo.js";
-import { GetCommand, UpdateCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
-import { addTimelineEvent } from "../timeline/timeline.helper.js";
+import { GetCommand, UpdateCommand, PutCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { addTimelineEvent } from "../timeline/timeline.helper.js"; 
 
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const USERS_TABLE = process.env.USERS_TABLE || "tickin_users";
