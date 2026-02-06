@@ -100,7 +100,11 @@ export const getSlotConfirmedOrders = async (req, res) => {
 
       // pick confirmed booking if exists, else first
       const booking =
-        bookingList.find((b) => b.status === "CONFIRMED") || bookingList[0];
+      bookingList.find(
+        (b) =>
+          b.status !== "CANCELLED" &&
+          b.isActive !== false
+      ) || bookingList[0];
 
       // 🚫 HARD BLOCK: cancelled / inactive booking
       if (booking.status === "CANCELLED" || booking.isActive === false) {
