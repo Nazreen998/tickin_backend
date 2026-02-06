@@ -1211,28 +1211,27 @@ export const getAllOrders = async (req, res) => {
   try {
     const { status, date } = req.query;
 
-    console.log("🔥 DATE RECEIVED =", date);
-
-    let filter = "sk = :meta";
+    let filter = "sk = :meta AND attribute_exists(#ca)";
 
     const expVals = {
       ":meta": "META",
     };
 
-    const expNames = {};
+    const expNames = {
+      "#ca": "createdAt",
+    };
 
     // ✅ Date filter
     if (date) {
       filter += " AND begins_with(#ca, :day)";
-      expNames["#ca"] = "createdAt";
       expVals[":day"] = date;
     }
 
-    // ✅ Status filter only if provided
-    if (status != null && String(status).trim() !== "") {
+    // ✅ Status filter safe
+    if (typeof status === "string" && status.trim() !== "") {
       filter += " AND #s = :st";
       expNames["#s"] = "status";
-      expVals[":st"] = String(status).toUpperCase();
+      expVals[":st"] = status.toUpperCase();
     }
 
     let items = [];
@@ -1243,8 +1242,7 @@ export const getAllOrders = async (req, res) => {
         new ScanCommand({
           TableName: ORDERS_TABLE,
           FilterExpression: filter,
-          ExpressionAttributeNames:
-            Object.keys(expNames).length > 0 ? expNames : undefined,
+          ExpressionAttributeNames: expNames,
           ExpressionAttributeValues: expVals,
           ExclusiveStartKey: lastKey ?? undefined,
         })
@@ -1257,8 +1255,6 @@ export const getAllOrders = async (req, res) => {
     return res.json({
       ok: true,
       count: items.length,
-      date: date || "ALL",
-      status: status || "ALL",
       orders: items,
     });
   } catch (err) {
@@ -1266,6 +1262,7 @@ export const getAllOrders = async (req, res) => {
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
+
 
 export const getOrderById = async (req, res) => {
   try {
