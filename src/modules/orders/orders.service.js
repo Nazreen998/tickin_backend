@@ -1259,6 +1259,60 @@ export const getAllOrders = async ({ status, date }) => {
   };
 };
 
+export const getOrderById = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    if (!orderId) {
+      return res.status(400).json({ message: "orderId required" });
+    }
+
+    const cleanId = String(orderId).startsWith("ORDER#")
+      ? String(orderId).replace("ORDER#", "")
+      : String(orderId);
+
+    const result = await ddb.send(
+      new GetCommand({
+        TableName: "tickin_orders",
+        Key: { pk: `ORDER#${cleanId}`, sk: "META" },
+      })
+    );
+
+    if (!result.Item) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    return res.json({
+      ok: true,
+      order: result.Item,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Error", error: err.message });
+  }
+};
+export const getOrdersByMergeKey = async (req, res) => {
+  try {
+    const { mergeKey } = req.params;
+
+    const scanRes = await ddb.send(
+      new ScanCommand({
+        TableName: ORDERS_TABLE,
+        FilterExpression: "mergeKey = :mk",
+        ExpressionAttributeValues: { ":mk": mergeKey },
+      })
+    );
+
+    return res.json({
+      ok: true,
+      mergeKey,
+      count: scanRes.Items?.length || 0,
+      orders: scanRes.Items || [],
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, message: err.message });
+  }
+};
 export async function getAssignedOrdersByDriver(driverId) {
   if (!driverId) return [];
 
