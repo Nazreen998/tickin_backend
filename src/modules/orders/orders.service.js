@@ -1203,65 +1203,65 @@ export const getOrdersForSalesman = async ({
  * - status
  * - date (yyyy-MM-dd)
  */
-export const getAllOrders = async ({ status, date }) => {
-  let filter = "sk = :meta";
+export const getAllOrders = async (req, res) => {
+  try {
+    const { status, date } = req.query;
 
-  const expVals = {
-    ":meta": "META",
-  };
+    console.log("🔥 DATE RECEIVED =", date);
 
-  const expNames = {}; // start empty
+    let filter = "sk = :meta";
 
-  // ✅ Date filter only if date provided
-  if (date) {
-    const start = `${date}T00:00:00.000Z`;
-    const end = `${date}T23:59:59.999Z`;
+    const expVals = {
+      ":meta": "META",
+    };
 
-    filter += " AND #ca BETWEEN :start AND :end";
+    const expNames = {};
 
-    expNames["#ca"] = "createdAt";
-    expVals[":start"] = start;
-    expVals[":end"] = end;
+    // ✅ Date filter
+    if (date) {
+      filter += " AND begins_with(#ca, :day)";
+      expNames["#ca"] = "createdAt";
+      expVals[":day"] = date;
+    }
+
+    // ✅ Optional status filter
+    if (status) {
+      filter += " AND #s = :st";
+      expNames["#s"] = "status";
+      expVals[":st"] = status.toUpperCase();
+    }
+
+    let items = [];
+    let lastKey = null;
+
+    do {
+      const result = await ddb.send(
+        new ScanCommand({
+          TableName: ORDERS_TABLE,
+          FilterExpression: filter,
+          ExpressionAttributeNames:
+            Object.keys(expNames).length > 0 ? expNames : undefined,
+          ExpressionAttributeValues: expVals,
+          ExclusiveStartKey: lastKey ?? undefined,
+        })
+      );
+
+      items.push(...(result.Items || []));
+      lastKey = result.LastEvaluatedKey;
+    } while (lastKey);
+
+    return res.json({
+      ok: true,
+      count: items.length,
+      date: date || "ALL",
+      status: status || "ALL",
+      orders: items,
+    });
+  } catch (err) {
+    console.error("getAllOrders error:", err);
+    return res.status(500).json({ ok: false, message: err.message });
   }
-
-  // ✅ Optional status filter
-  if (status) {
-    filter += " AND #s = :st";
-
-    expNames["#s"] = "status";
-    expVals[":st"] = status.toUpperCase();
-  }
-
-  let items = [];
-  let lastKey = null;
-
-  do {
-    const res = await ddb.send(
-      new ScanCommand({
-        TableName: ORDERS_TABLE,
-        FilterExpression: filter,
-
-        // ✅ Send only if names exist
-        ExpressionAttributeNames:
-          Object.keys(expNames).length > 0 ? expNames : undefined,
-
-        ExpressionAttributeValues: expVals,
-
-        ExclusiveStartKey: lastKey ?? undefined,
-      })
-    );
-
-    items.push(...(res.Items || []));
-    lastKey = res.LastEvaluatedKey;
-  } while (lastKey);
-
-  return {
-    count: items.length,
-    orders: items,
-  };
 };
-
-
 
 export const getOrderById = async (req, res) => {
   try {
