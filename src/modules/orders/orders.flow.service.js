@@ -848,9 +848,7 @@ export const assignDriver = async (req, res) => {
           Key: { pk: `ORDER#${cid}`, sk: "META" },
           UpdateExpression:
             "SET #s = :st, mergedIntoOrderId = :mid REMOVE driverId, driverName, driverMobile",
-          ExpressionAttributeNames: { "#s": "status" },
           ExpressionAttributeValues: {
-            ":st": "MERGED",
             ":mid": fullOrderId,
           },
         })
