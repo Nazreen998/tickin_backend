@@ -1205,27 +1205,52 @@ export const getOrdersForSalesman = async ({
  * - status
  * - date (yyyy-MM-dd)
  */
-export const getAllOrders = async ({ date }) => {
+export const getAllOrders = async ({ status, date }) => {
   if (!date) {
-    throw new Error("date is required for query");
+    return {
+      count: 0,
+      orders: [],
+      message: "date is required for manager query",
+    };
+  }
+
+  const expVals = {
+    ":d": date,
+  };
+
+  const expNames = {
+    "#od": "orderDate",
+  };
+
+  let filter = "";
+
+  // Optional status filter
+  if (status) {
+    filter = "#s = :st";
+    expNames["#s"] = "status";
+    expVals[":st"] = status.toUpperCase();
   }
 
   const res = await ddb.send(
     new QueryCommand({
       TableName: ORDERS_TABLE,
       IndexName: "orderDate-createdAt-index",
+
+      // Query only that date
       KeyConditionExpression: "#od = :d",
-      ExpressionAttributeNames: {
-        "#od": "orderDate",
-      },
-      ExpressionAttributeValues: {
-        ":d": date,
-      },
+
+      // Optional filter
+      FilterExpression: filter || undefined,
+
+      ExpressionAttributeNames: expNames,
+      ExpressionAttributeValues: expVals,
     })
   );
 
   return {
     count: res.Items?.length || 0,
+    date,
+    status: status ?? "ALL",
     orders: res.Items || [],
   };
 };
