@@ -1206,25 +1206,30 @@ export const getOrdersForSalesman = async ({
  * - date (yyyy-MM-dd)
  */
 export const getAllOrders = async ({ status, date }) => {
-  const expVals = { ":meta": "META" };
-  const expNames = { "#ca": "createdAt" };
-
   let filter = "sk = :meta";
 
-  // Date filter
+  const expVals = {
+    ":meta": "META",
+  };
+
+  const expNames = {}; // start empty
+
+  // ✅ Date filter only if date provided
   if (date) {
     const start = `${date}T00:00:00.000Z`;
     const end = `${date}T23:59:59.999Z`;
 
-    filter += " AND attribute_exists(#ca) AND #ca BETWEEN :start AND :end";
+    filter += " AND #ca BETWEEN :start AND :end";
 
+    expNames["#ca"] = "createdAt";
     expVals[":start"] = start;
     expVals[":end"] = end;
   }
 
-  // Optional status
+  // ✅ Optional status filter
   if (status) {
     filter += " AND #s = :st";
+
     expNames["#s"] = "status";
     expVals[":st"] = status.toUpperCase();
   }
@@ -1237,8 +1242,13 @@ export const getAllOrders = async ({ status, date }) => {
       new ScanCommand({
         TableName: ORDERS_TABLE,
         FilterExpression: filter,
-        ExpressionAttributeNames: expNames,
+
+        // ✅ Send only if names exist
+        ExpressionAttributeNames:
+          Object.keys(expNames).length > 0 ? expNames : undefined,
+
         ExpressionAttributeValues: expVals,
+
         ExclusiveStartKey: lastKey ?? undefined,
       })
     );
@@ -1252,6 +1262,7 @@ export const getAllOrders = async ({ status, date }) => {
     orders: items,
   };
 };
+
 
 
 export const getOrderById = async (req, res) => {
