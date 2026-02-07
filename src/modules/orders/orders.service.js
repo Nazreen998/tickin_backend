@@ -1245,57 +1245,53 @@ export const getOrdersForSalesman = async ({
 };
 
 /**
- * ✅ Manager/Master: fetch all orders
- * Optional filters:
- * - status
+ * ✅ Manager/Master: Fetch all orders (FAST)
+ * Filters:
  * - date (yyyy-MM-dd)
+ * - status (optional)
+ *
+ * Uses GSI_ORDER_META_CREATEDAT
  */
-export const getAllOrders = async ({ status, date }) => {
-  const expVals = {};
-  const expNames = {};
-  let filter = "";
+export const getAllOrders = async ({ date, status }) => {
+  if (!date) {
+    throw new Error("date is required for querying orders");
+  }
 
-  // 🔹 OPTIONAL status filter
+  const start = `${date}T00:00:00.000Z`;
+  const end = `${date}T23:59:59.999Z`;
+
+  // ✅ Query DynamoDB using GSI
+  const res = await ddb.send(
+    new QueryCommand({
+      TableName: ORDERS_TABLE,
+      IndexName: "GSI_ORDER_META_CREATEDAT",
+
+      KeyConditionExpression:
+        "gsi1pk = :pk AND gsi1sk BETWEEN :start AND :end",
+
+      ExpressionAttributeValues: {
+        ":pk": "ORDER_META",
+        ":start": start,
+        ":end": end,
+      },
+
+      ScanIndexForward: false, // latest orders first
+    })
+  );
+
+  let orders = res.Items || [];
+
+  // ✅ Optional Status Filter (in-memory)
   if (status) {
-    filter += "#s = :st";
-    expNames["#s"] = "status";
-    expVals[":st"] = String(status).toUpperCase();
+    const st = String(status).toUpperCase();
+    orders = orders.filter((o) => o.status === st);
   }
-
-  // 🔹 OPTIONAL day-wise date filter
-  if (date) {
-    const start = `${date}T00:00:00.000Z`;
-    const end = `${date}T23:59:59.999Z`;
-
-    if (filter) filter += " AND ";
-
-    filter += "#ca BETWEEN :start AND :end";
-    expNames["#ca"] = "createdAt";
-
-    expVals[":start"] = start;
-    expVals[":end"] = end;
-  }
-
-  const params = {
-    TableName: ORDERS_TABLE,
-    FilterExpression: filter || undefined,
-    ExpressionAttributeNames:
-      Object.keys(expNames).length > 0 ? expNames : undefined,
-    ExpressionAttributeValues:
-      Object.keys(expVals).length > 0 ? expVals : undefined,
-  };
-
-  console.log("📦 Scan Filter =", filter);
-  console.log("📦 Names =", expNames);
-  console.log("📦 Values =", expVals);
-
-  const res = await ddb.send(new ScanCommand(params));
 
   return {
-    count: res.Items?.length || 0,
+    count: orders.length,
+    date,
     status: status ? status.toUpperCase() : "ALL",
-    date: date || "ALL",
-    orders: res.Items || [],
+    orders,
   };
 };
 
