@@ -692,6 +692,8 @@ export const assignDriver = async (req, res) => {
       return res.status(404).json({ ok: false, message: "No orders found" });
     }
 
+    orderIds = orderIds.map(normalizeOrderId).filter(Boolean);
+
     /* --------------------------------------------------
        2️⃣ Find / ensure FULL order
     -------------------------------------------------- */
@@ -699,10 +701,11 @@ export const assignDriver = async (req, res) => {
       orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
 
     if (!fullOrderId) {
-      const base = normalizeOrderId(orderIds[0]);
+      const base = orderIds[0];
       fullOrderId = base
         ? `ORD_FULL_${String(base).replace(/^ORD/, "")}`
         : null;
+
       if (fullOrderId) orderIds = [fullOrderId, ...orderIds];
     }
 
@@ -715,7 +718,7 @@ export const assignDriver = async (req, res) => {
 
     let childOrderIds = orderIds.filter((id) => id !== fullOrderId);
 
-    // 🔥 single full order fallback
+    // 🔥 single FULL fallback
     if (childOrderIds.length === 0) {
       const baseOrd = `ORD${fullOrderId.replace("ORD_FULL_", "")}`;
       childOrderIds = [baseOrd];
@@ -754,13 +757,11 @@ export const assignDriver = async (req, res) => {
       totalQty += Number(o.totalQty || o.qty || 0);
       totalAmount += Number(o.totalAmount || o.grandTotal || 0);
 
-      // CASE 1: already has distributors[]
       if (Array.isArray(o.distributors) && o.distributors.length) {
         distributors.push(...o.distributors);
         continue;
       }
 
-      // CASE 2: build from master
       if (!o.distributorId) continue;
 
       const master = await getDistributorFromMaster(o.distributorId);
@@ -787,8 +788,7 @@ export const assignDriver = async (req, res) => {
       if (master && master.lat && master.lng) {
         distributors.push({
           distributorCode: master.distributorCode,
-          distributorName:
-            master.distributorName || fullMeta.distributorName,
+          distributorName: master.distributorName || fullMeta.distributorName,
           lat: master.lat,
           lng: master.lng,
           mapUrl: master.mapUrl || null,
@@ -800,7 +800,7 @@ export const assignDriver = async (req, res) => {
       }
     }
 
-    // ❗ dedupe distributors
+    // dedupe distributors
     const seen = new Set();
     distributors = distributors.filter((d) => {
       const k = (d.distributorCode || d.distributorName || "")
@@ -823,6 +823,7 @@ export const assignDriver = async (req, res) => {
        6️⃣ Driver lookup
     -------------------------------------------------- */
     const driverPk = normalizeUserPk(driverId);
+
     const dg = await ddb.send(
       new GetCommand({
         TableName: USERS_TABLE,
@@ -834,6 +835,12 @@ export const assignDriver = async (req, res) => {
       return res.status(404).json({ ok: false, message: "Driver not found" });
     }
 
+    const driverName =
+      dg.Item.name || dg.Item.userName || dg.Item.fullName || "Driver";
+
+    const driverMobile =
+      dg.Item.mobile || dg.Item.phone || dg.Item.userMobile || null;
+
     const distributorDisplay =
       distributors.length === 1
         ? distributors[0].distributorName
@@ -842,7 +849,8 @@ export const assignDriver = async (req, res) => {
             .join(" | ");
 
     /* --------------------------------------------------
-       7️⃣ UPDATE FULL ORDER (🔥 MAIN FIX)
+       7️⃣ UPDATE FULL ORDER (🔥 MAIN)
+       🔥 IMPORTANT: store driverId as raw id, not pk
     -------------------------------------------------- */
     await ddb.send(
       new UpdateCommand({
@@ -851,6 +859,7 @@ export const assignDriver = async (req, res) => {
         UpdateExpression: `
           SET #s = :st,
               driverId = :d,
+              driverPk = :dpk,
               driverName = :dn,
               driverMobile = :dm,
               vehicleNo = :vn,
@@ -859,44 +868,86 @@ export const assignDriver = async (req, res) => {
               totalQty = :tq,
               totalAmount = :ta,
               grandTotal = :ta,
-              distributorDisplay = :dd
+              distributorDisplay = :dd,
+              updatedAt = :u
         `,
         ExpressionAttributeNames: { "#s": "status" },
         ExpressionAttributeValues: {
           ":st": "DRIVER_ASSIGNED",
-          ":d": driverPk,
-          ":dn": dg.Item.name || "Driver",
-          ":dm": dg.Item.mobile || null,
+          ":d": String(driverId).trim(), // ✅ RAW
+          ":dpk": driverPk,              // optional
+          ":dn": driverName,
+          ":dm": driverMobile,
           ":vn": vehicleNo || null,
           ":dist": distributors,
           ":i": 0,
           ":tq": totalQty,
           ":ta": totalAmount,
           ":dd": distributorDisplay,
+          ":u": new Date().toISOString(),
         },
       })
     );
 
- /* --------------------------------------------------
-   8️⃣ CHILD ORDERS → MERGED
--------------------------------------------------- */
-for (const cid of childOrderIds) {
-  await ddb.send(
-    new UpdateCommand({
-      TableName: ORDERS_TABLE,
-      Key: { pk: `ORDER#${cid}`, sk: "META" },
-      UpdateExpression:
-        "SET #s = :st, mergedIntoOrderId = :mid REMOVE driverId, driverName, driverMobile",
-      ExpressionAttributeNames: {
-        "#s": "status",
-      },
-      ExpressionAttributeValues: {
-        ":st": "DRIVER_ASSIGNED",
-        ":mid": fullOrderId,
-      },
-    })
-  );
-}
+    /* --------------------------------------------------
+       8️⃣ CHILD ORDERS UPDATE
+       🔥 DO NOT REMOVE driverName/mobile
+       (because timeline screen reads from child sometimes)
+    -------------------------------------------------- */
+    for (const cid of childOrderIds) {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${cid}`, sk: "META" },
+          UpdateExpression: `
+            SET #s = :st,
+                mergedIntoOrderId = :mid,
+                driverId = :d,
+                driverName = :dn,
+                driverMobile = :dm,
+                vehicleNo = :vn,
+                updatedAt = :u
+          `,
+          ExpressionAttributeNames: { "#s": "status" },
+          ExpressionAttributeValues: {
+            ":st": "DRIVER_ASSIGNED",
+            ":mid": fullOrderId,
+            ":d": String(driverId).trim(),
+            ":dn": driverName,
+            ":dm": driverMobile,
+            ":vn": vehicleNo || null,
+            ":u": new Date().toISOString(),
+          },
+        })
+      );
+    }
+
+    /* --------------------------------------------------
+       9️⃣ BOOKINGS TABLE STATUS UPDATE
+       🔥 MAIN FIX for manager slot list disappearing
+    -------------------------------------------------- */
+    const bookingPk = `COMPANY#${fullMeta.companyCode || "VAGR_IT"}#DATE#${fullMeta.slotDate || fullMeta.slot?.date || ""}`;
+
+    // if slotDate missing, skip
+    if (bookingPk.includes("#DATE#") && !bookingPk.endsWith("#DATE#")) {
+      // update FULL booking
+      await ddb.send(
+        new UpdateCommand({
+          TableName: BOOKINGS_TABLE,
+          Key: {
+            pk: bookingPk,
+            sk: `SLOT#${fullMeta.slotTime}#POS#${fullMeta.slotPos}#ORDER#${fullOrderId}`,
+          },
+          UpdateExpression: "SET #s = :st, updatedAt = :u",
+          ExpressionAttributeNames: { "#s": "status" },
+          ExpressionAttributeValues: {
+            ":st": "DRIVER_ASSIGNED",
+            ":u": new Date().toISOString(),
+          },
+        })
+      );
+    }
+
     return res.json({
       ok: true,
       message: "✅ Driver assigned successfully",
@@ -904,12 +955,16 @@ for (const cid of childOrderIds) {
       totalQty,
       totalAmount,
       distributorDisplay,
+      driverName,
+      driverMobile,
+      vehicleNo,
     });
   } catch (err) {
     console.error("assignDriver error:", err);
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
+
 /* ============================================================
    ✅ NEW: List drivers for dropdown (Manager/Master)
 ============================================================ */
