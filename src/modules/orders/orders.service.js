@@ -413,6 +413,10 @@ const stops = await buildOrderStopsFromDistributorId({
       createdRole: user.role,
       createdAt: new Date().toISOString(),
 
+       // ✅ GSI FIELDS ADD HERE 🔥
+      gsi1pk: "ORDER_META",
+      gsi1sk: createdAt,
+
       confirmedAt: finalStatus === "CONFIRMED" ? new Date().toISOString() : null,
       confirmedBy: finalStatus === "CONFIRMED" ? user.mobile : null,
 
