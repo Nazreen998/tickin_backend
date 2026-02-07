@@ -822,19 +822,22 @@ export const assignDriver = async (req, res) => {
     /* --------------------------------------------------
        8️⃣ CHILD ORDERS → MERGED
     -------------------------------------------------- */
-    for (const cid of childOrderIds) {
-      await ddb.send(
-        new UpdateCommand({
-          TableName: ORDERS_TABLE,
-          Key: { pk: `ORDER#${cid}`, sk: "META" },
-          UpdateExpression:
-            "SET #s = :st, mergedIntoOrderId = :mid REMOVE driverId, driverName, driverMobile",
-          ExpressionAttributeValues: {
-            ":mid": fullOrderId,
-          },
-        })
-      );
-    }
+    await ddb.send(
+  new UpdateCommand({
+    TableName: ORDERS_TABLE,
+    Key: { pk: `ORDER#${cid}`, sk: "META" },
+    UpdateExpression:
+      "SET #s = :st, mergedIntoOrderId = :mid REMOVE driverId, driverName, driverMobile",
+    ExpressionAttributeNames: {
+      "#s": "status",
+    },
+    ExpressionAttributeValues: {
+      ":st": "DRIVER_ASSIGNED",
+      ":mid": fullOrderId,
+    },
+  })
+);
+
 
     return res.json({
       ok: true,
