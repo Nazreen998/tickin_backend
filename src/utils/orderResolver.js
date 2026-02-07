@@ -1,5 +1,4 @@
 import { GetCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
-import { ddb } from "../../config/dynamo.js";
 
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 
