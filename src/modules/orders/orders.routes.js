@@ -236,8 +236,10 @@ router.get(
   allowRoles("MASTER", "MANAGER"),
   async (req, res) => {
     try {
-      const status = req.query.status;
-      const data = await getAllOrders({ status });
+      const { status, date } = req.query; // ✅ take both
+
+      const data = await getAllOrders({ status, date }); // ✅ pass both
+
       return res.json({ ok: true, ...data });
     } catch (err) {
       return res.status(500).json({ ok: false, message: err.message });
