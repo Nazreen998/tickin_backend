@@ -1289,7 +1289,7 @@ export const getAllOrders = async ({ date, status }) => {
   // ✅ Optional Status Filter (in-memory)
   if (status) {
     const st = String(status).toUpperCase();
-    orders = orders.filter((o) => o.status === st);
+    orders = orders.filter(o => o.status !== "CANCELLED");
   }
 
   return {
