@@ -28,9 +28,6 @@ export async function getQrHistory() {
   const res = await ddb.send(
     new ScanCommand({
       TableName: QR_ITEMS,
-      FilterExpression: "#s = :a",
-      ExpressionAttributeNames: { "#s": "status" },
-      ExpressionAttributeValues: { ":a": "ACTIVE" }
     })
   );
 

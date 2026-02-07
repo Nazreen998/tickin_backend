@@ -1,7 +1,7 @@
 // orders.flow.service.js  ✅ FINAL FIXED
 import { ddb } from "../../config/dynamo.js";
-import { GetCommand, UpdateCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
-import { addTimelineEvent } from "../timeline/timeline.helper.js";
+import { GetCommand, UpdateCommand, PutCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { addTimelineEvent } from "../timeline/timeline.helper.js"; 
 
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const USERS_TABLE = process.env.USERS_TABLE || "tickin_users";
@@ -203,22 +203,42 @@ if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
 
 // 🔥🔥 BACKEND HARD FIX FOR FRONTEND
 // If frontend sends ORDxxxx, ALWAYS upgrade to ORD_FULL_xxxx if exists
-if (!key.startsWith("ORD_FULL_")) {
-  const fullKey = `ORD_FULL_${key.replace(/^ORD/, "")}`;
+// ✅ ALWAYS create mirror booking for ORD_FULL (for single order visibility)
+const fullOrderId = `ORD_FULL_${orderId.replace(/^ORD/, "")}`;
+const bookingPk = `COMPANY#${companyCode}#DATE#${slot.date}`;
 
-  const fg = await ddb.send(
-    new GetCommand({
-      TableName: ORDERS_TABLE,
-      Key: { pk: `ORDER#${fullKey}`, sk: "META" },
-    })
-  );
+await ddb.send(
+  new PutCommand({
+    TableName: BOOKINGS_TABLE,
+    Item: {
+      pk: bookingPk,
+      sk: `ORDER#${fullOrderId}`, // simple sk is enough
 
-  if (fg.Item) {
-    // FULL exists → force FULL flow
-    orderIds = [fullKey, ...orderIds.filter(x => x !== fullKey)];
-  }
-}
+      companyCode,
+      date: slot.date,
 
+      orderId: fullOrderId,
+
+      slotTime: slot.time,
+      slotPos: slot.pos,
+      vehicleType: "FULL",
+
+      distributorCode: order.distributorId || null,
+      distributorName: order.distributorName || null,
+
+      amount: Number(amount || 0),
+
+      status: "CONFIRMED",
+      isActive: true,
+
+      mergeKey: null,
+      mergedIntoOrderId: null,
+
+      createdAt: new Date().toISOString(),
+      createdBy: user.mobile || null,
+    },
+  })
+);
     /* --------------------------------------------------
        2️⃣ Ensure ORD_FULL META exists
     -------------------------------------------------- */
@@ -848,9 +868,7 @@ export const assignDriver = async (req, res) => {
           Key: { pk: `ORDER#${cid}`, sk: "META" },
           UpdateExpression:
             "SET #s = :st, mergedIntoOrderId = :mid REMOVE driverId, driverName, driverMobile",
-          ExpressionAttributeNames: { "#s": "status" },
           ExpressionAttributeValues: {
-            ":st": "MERGED",
             ":mid": fullOrderId,
           },
         })
