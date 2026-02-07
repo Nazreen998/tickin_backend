@@ -1310,10 +1310,21 @@ export const getOrdersForSalesman = async ({
     })
   );
 
-  return {
-    count: res.Items?.length || 0,
+  let orders = res.Items || [];
+
+  // ❌ Hide only merged FULL orders
+  orders = orders.filter((o) => {
+    if (o.isMerged === true) return false;
+
+    if (Array.isArray(o.mergedOrderIds) && o.mergedOrderIds.length > 0)
+      return false;
+
+    return true;
+  });
+   return {
+    count: orders.length,
     distributorCodes,
-    orders: res.Items || [],
+    orders,
   };
 };
 
@@ -1354,10 +1365,24 @@ export const getAllOrders = async ({ date, status }) => {
 
   let orders = res.Items || [];
 
-  // ✅ Always remove cancelled
-  orders = orders.filter(
-    (o) => String(o.status || "").trim().toUpperCase() !== "CANCELLED"
-  );
+  orders = orders.filter((o) => {
+  const st = String(o.status || "").trim().toUpperCase();
+
+  // ❌ Remove cancelled always
+  if (st === "CANCELLED") return false;
+
+  // ❌ Remove only merged FULL orders
+  if (o.isMerged === true) return false;
+
+  if (Array.isArray(o.mergedOrderIds) && o.mergedOrderIds.length > 0)
+    return false;
+
+  if (Array.isArray(o.childOrderIds) && o.childOrderIds.length > 0)
+    return false;
+
+  return true;
+});
+
 
   // ✅ Optional status filter
   if (status) {
