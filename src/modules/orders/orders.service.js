@@ -38,16 +38,20 @@ export const getSlotConfirmedOrders = async (req, res) => {
     const bookingsRes = await ddb.send(
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
-        FilterExpression: "#pk = :pk AND (#st = :c OR #st = :m)",
+        FilterExpression:
+  "#pk = :pk AND (#st = :c OR #st = :m OR #st = :da OR #st = :lc OR #st = :ls)",
         ExpressionAttributeNames: {
           "#pk": "pk",
           "#st": "status",
         },
         ExpressionAttributeValues: {
-          ":pk": pk,
-          ":c": "CONFIRMED",
-          ":m": "MERGED",
-        },
+  ":pk": pk,
+  ":c": "CONFIRMED",
+  ":m": "MERGED",
+  ":da": "DRIVER_ASSIGNED",
+  ":lc": "LOADING_COMPLETED",
+  ":ls": "LOADING_STARTED",
+},
       })
     );
 
@@ -117,9 +121,8 @@ export const getSlotConfirmedOrders = async (req, res) => {
         bookingList.find((b) => b.status === "CONFIRMED") || bookingList[0];
 
       // 🚫 cancelled / inactive booking
-      if (booking.status === "CANCELLED" || booking.isActive === false) {
-        continue;
-      }
+      if (booking.isActive === false) continue;
+if (booking.status === "CANCELLED") continue;
 
       // detect FULL master
       const masterId =
@@ -263,6 +266,7 @@ export const getSlotConfirmedOrders = async (req, res) => {
           distributorName: names || "-",
           totalQty: g.totalQty,
           grandAmount: g.grandAmount,
+          orderId: g.flowKey,
         };
       });
 
