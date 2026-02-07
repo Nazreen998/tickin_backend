@@ -171,37 +171,40 @@ async function ensureVehicleSelected(orderIds) {
    ✅ FIX: GEO/FULL flows totals + distributors should match BOOKING (no mismatch)
 ============================================================ */
 export const getOrderFlowByKey = async (req, res) => {
-  console.log("🔥🔥 FLOW SERVICE HIT", req.params.flowKey);
-  const key = String(req.params.flowKey || "").trim();
-
-// 🔥 HARD GUARD
-if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
-  const fullKey = `ORD_FULL_${key.replace(/^ORD/, "")}`;
-
-  const fg = await ddb.send(
-    new GetCommand({
-      TableName: ORDERS_TABLE,
-      Key: { pk: `ORDER#${fullKey}`, sk: "META" },
-    })
-  );
-
-  if (fg.Item) {
-    key = fullKey;
-  }
-}
-
   try {
-    const key = String(req.params.flowKey || "").trim();
+    console.log("🔥 FLOW SERVICE HIT", req.params.flowKey);
+
+    let key = String(req.params.flowKey || "").trim();
     if (!key) {
       return res.status(400).json({ ok: false, message: "flowKey required" });
+    }
+
+    /* --------------------------------------------------
+       0️⃣ HARD GUARD: if ORDxxxx passed, prefer ORD_FULL_xxxx if exists
+    -------------------------------------------------- */
+    if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
+      const fullKey = `ORD_FULL_${key.replace(/^ORD/, "")}`;
+
+      const fg = await ddb.send(
+        new GetCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${fullKey}`, sk: "META" },
+        })
+      );
+
+      if (fg.Item) {
+        key = fullKey;
+      }
     }
 
     /* --------------------------------------------------
        1️⃣ Resolve orderIds from ANY key
     -------------------------------------------------- */
     let orderIds = await resolveOrderIdsFromFlowKey(key);
+
     /* --------------------------------------------------
        2️⃣ Ensure ORD_FULL META exists
+       (only if ORD_FULL is inside orderIds)
     -------------------------------------------------- */
     for (const raw of orderIds) {
       const oid = normalizeOrderId(raw);
@@ -216,6 +219,7 @@ if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
 
       if (!fg.Item) {
         const baseOrd = `ORD${oid.replace("ORD_FULL_", "")}`;
+
         const child = await ddb.send(
           new GetCommand({
             TableName: ORDERS_TABLE,
@@ -224,22 +228,35 @@ if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
         );
 
         if (child.Item) {
+          // 🔥 FIX: create ORD_FULL meta properly
           await ddb.send(
-            new UpdateCommand({
+            new PutCommand({
               TableName: ORDERS_TABLE,
-              Key: { pk: `ORDER#${oid}`, sk: "META" },
-              UpdateExpression: `
-                SET orderId = :o,
-                    #st = :s,
-                    mergeKey = :m
-              `,
-              ExpressionAttributeNames: {
-                "#st": "status",
-              },
-              ExpressionAttributeValues: {
-                ":o": oid,
-                ":s": child.Item.status || "CONFIRMED",
-                ":m": child.Item.mergeKey || null,
+              Item: {
+                pk: `ORDER#${oid}`,
+                sk: "META",
+                orderId: oid,
+                status: child.Item.status || "CONFIRMED",
+                mergeKey: child.Item.mergeKey || null,
+
+                distributorId: child.Item.distributorId || null,
+                distributorName: child.Item.distributorName || null,
+                items: child.Item.items || [],
+
+                totalAmount: Number(child.Item.totalAmount || 0),
+                totalQty: Number(child.Item.totalQty || 0),
+
+                distributors: child.Item.distributors || [],
+                currentDistributorIndex: 0,
+
+                slotBooked: child.Item.slotBooked || false,
+                slotId: child.Item.slotId || null,
+                slotDate: child.Item.slotDate || null,
+                slotTime: child.Item.slotTime || null,
+                slotPos: child.Item.slotPos || null,
+                slotVehicleType: child.Item.slotVehicleType || "FULL",
+
+                createdAt: new Date().toISOString(),
               },
             })
           );
@@ -261,15 +278,18 @@ if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
           Key: { pk: `ORDER#${oid}`, sk: "META" },
         })
       );
+
       if (g.Item) orders.push(g.Item);
     }
 
     if (orders.length === 0) {
-      return res.status(404).json({ ok: false, message: "Orders meta not found" });
+      return res
+        .status(404)
+        .json({ ok: false, message: "Orders meta not found" });
     }
 
     /* --------------------------------------------------
-       4️⃣ FULL ORDER (🔥 MOST IMPORTANT)
+       4️⃣ FULL ORDER (MASTER)
     -------------------------------------------------- */
     const fullOrder = orders.find((o) =>
       String(o.orderId || "").startsWith("ORD_FULL_")
@@ -281,6 +301,7 @@ if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
     const childOrders = orders.filter(
       (o) => !String(o.orderId || "").startsWith("ORD_FULL_")
     );
+
     const calcOrders = childOrders.length > 0 ? childOrders : orders;
 
     /* --------------------------------------------------
@@ -299,14 +320,15 @@ if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
     });
 
     /* --------------------------------------------------
-       7️⃣ ✅ STATUS — ALWAYS FROM ORD_FULL IF EXISTS
+       7️⃣ STATUS — ALWAYS FROM ORD_FULL IF EXISTS
     -------------------------------------------------- */
-    let status = "UNKNOWN";
+    let status = "CONFIRMED";
 
     if (fullOrder?.status) {
       status = String(fullOrder.status).toUpperCase();
     } else {
       const priority = [
+        "DELIVERY_COMPLETED",
         "DELIVERED",
         "OUT_FOR_DELIVERY",
         "DRIVER_ASSIGNED",
@@ -317,9 +339,7 @@ if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
         "CONFIRMED",
       ];
 
-      const stList = orders.map((o) =>
-        String(o.status || "").toUpperCase()
-      );
+      const stList = orders.map((o) => String(o.status || "").toUpperCase());
 
       for (const p of priority) {
         if (stList.includes(p)) {
@@ -349,23 +369,60 @@ if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
             .join(" | ");
 
     /* --------------------------------------------------
-       9️⃣ RESPONSE
+       9️⃣ DRIVER DETAILS (🔥 MAIN FIX)
+       Always from FULL order (master)
+    -------------------------------------------------- */
+    const driverId = fullOrder?.driverId || null;
+    const driverName = fullOrder?.driverName || null;
+    const driverMobile = fullOrder?.driverMobile || null;
+
+    /* --------------------------------------------------
+       🔟 SLOT DETAILS (for manager flow summary)
+    -------------------------------------------------- */
+    const slotDate = fullOrder?.slotDate || null;
+    const slotTime = fullOrder?.slotTime || null;
+    const slotPos = fullOrder?.slotPos || null;
+
+    /* --------------------------------------------------
+       11️⃣ RESPONSE
     -------------------------------------------------- */
     return res.json({
       ok: true,
+
       mergeKey: fullOrder?.mergeKey || orders[0]?.mergeKey || null,
+
       flowKey: fullOrder?.orderId || orders[0]?.orderId,
       masterOrderId: fullOrder?.orderId || orders[0]?.orderId,
       trackingOrderId: fullOrder?.orderId || orders[0]?.orderId,
+
+      // 🔥 important for flutter
+      fullOrderId: fullOrder?.orderId || null,
+
       orderIds: calcOrders.map((o) => o.orderId).filter(Boolean),
+
       totalQty,
       grandTotal,
-      status: String(status || "").toUpperCase(), // 🔥 FIX
+
+      status: String(status || "").toUpperCase(),
+
       vehicleType: fullOrder?.vehicleType || null,
       vehicleNo: fullOrder?.vehicleNo || null,
+
+      // ✅ slot
+      slotDate,
+      slotTime,
+      slotPos,
+
+      // ✅ driver
+      driverId,
+      driverName,
+      driverMobile,
+
       loadingItems,
       distributors,
       distributorDisplay,
+
+      // child orders only
       orders: calcOrders,
     });
   } catch (err) {
@@ -373,6 +430,7 @@ if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
+
 /* ============================================================
    ✅ VEHICLE SELECTED (Manager selects vehicle)
    ✅ FIX: removed stray '+'
