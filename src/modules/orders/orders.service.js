@@ -32,7 +32,9 @@ export const getSlotConfirmedOrders = async (req, res) => {
 
     const pk = `COMPANY#VAGR_IT#DATE#${date}`;
 
-    // 1️⃣ Fetch bookings (CONFIRMED + MERGED only)
+    /* --------------------------------------------------
+       1️⃣ Fetch bookings (CONFIRMED + MERGED only)
+    -------------------------------------------------- */
     const bookingsRes = await ddb.send(
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
@@ -51,7 +53,9 @@ export const getSlotConfirmedOrders = async (req, res) => {
 
     const bookings = bookingsRes.Items || [];
 
-    // 2️⃣ Group bookings by orderId (keep ALL, not one)
+    /* --------------------------------------------------
+       2️⃣ Group bookings by orderId
+    -------------------------------------------------- */
     const bookingsByOrderId = {};
     for (const b of bookings) {
       const oid = String(b.orderId || "").trim();
@@ -62,7 +66,9 @@ export const getSlotConfirmedOrders = async (req, res) => {
 
     const orderIds = Object.keys(bookingsByOrderId);
 
-    // 3️⃣ Fetch order metas
+    /* --------------------------------------------------
+       3️⃣ Fetch order metas
+    -------------------------------------------------- */
     const ordersMeta = [];
     for (const orderId of orderIds) {
       const orderRes = await ddb.send(
@@ -74,11 +80,16 @@ export const getSlotConfirmedOrders = async (req, res) => {
       if (orderRes.Item) ordersMeta.push(orderRes.Item);
     }
 
-    // 4️⃣ Build FULL master → children map
+    /* --------------------------------------------------
+       4️⃣ Build FULL master → children map (for cancel check)
+    -------------------------------------------------- */
     const fullChildrenMap = {};
     for (const list of Object.values(bookingsByOrderId)) {
       for (const b of list) {
-        if (b.mergedIntoOrderId && String(b.mergedIntoOrderId).startsWith("ORD_FULL_")) {
+        if (
+          b.mergedIntoOrderId &&
+          String(b.mergedIntoOrderId).startsWith("ORD_FULL_")
+        ) {
           if (!fullChildrenMap[b.mergedIntoOrderId]) {
             fullChildrenMap[b.mergedIntoOrderId] = [];
           }
@@ -89,7 +100,9 @@ export const getSlotConfirmedOrders = async (req, res) => {
 
     const grouped = {};
 
-    // 5️⃣ Main grouping loop
+    /* --------------------------------------------------
+       5️⃣ Main grouping loop
+    -------------------------------------------------- */
     for (const order of ordersMeta) {
       const oid =
         order.orderId ||
@@ -103,35 +116,41 @@ export const getSlotConfirmedOrders = async (req, res) => {
       const booking =
         bookingList.find((b) => b.status === "CONFIRMED") || bookingList[0];
 
-      // 🚫 HARD BLOCK: cancelled / inactive booking
+      // 🚫 cancelled / inactive booking
       if (booking.status === "CANCELLED" || booking.isActive === false) {
         continue;
       }
 
       // detect FULL master
       const masterId =
-        (order.mergedIntoOrderId && String(order.mergedIntoOrderId).startsWith("ORD_FULL_"))
+        order.mergedIntoOrderId &&
+        String(order.mergedIntoOrderId).startsWith("ORD_FULL_")
           ? order.mergedIntoOrderId
-          : (booking.mergedIntoOrderId && String(booking.mergedIntoOrderId).startsWith("ORD_FULL_"))
-            ? booking.mergedIntoOrderId
-            : null;
+          : booking.mergedIntoOrderId &&
+            String(booking.mergedIntoOrderId).startsWith("ORD_FULL_")
+          ? booking.mergedIntoOrderId
+          : null;
 
       // 🚫 FULL SLOT CANCEL CHECK (ALL children cancelled)
       if (masterId) {
         const children = fullChildrenMap[masterId] || [];
         const hasActiveChild = children.some(
-  (b) =>
-    (b.status === "CONFIRMED" || b.status === "MERGED") &&
-    b.isActive !== false
-);
+          (b) =>
+            (b.status === "CONFIRMED" || b.status === "MERGED") &&
+            b.isActive !== false
+        );
         if (!hasActiveChild) {
-          continue; // FULL slot cancelled
+          continue;
         }
       }
 
       let mk = booking.mergeKey || order.mergeKey || null;
       if (mk && String(mk).startsWith("LOC#")) mk = null;
 
+      // ✅ flowKey priority:
+      // 1) FULL masterId
+      // 2) mergeKey
+      // 3) orderId itself
       const flowKey = masterId || mk || oid;
 
       if (!grouped[flowKey]) {
@@ -142,18 +161,24 @@ export const getSlotConfirmedOrders = async (req, res) => {
           slotTime: booking.slotTime,
           pos: booking.slotPos || booking.pos || null,
           vehicleType: masterId ? "FULL" : booking.vehicleType,
+
           orderIds: [],
           distributors: [],
+
           totalQty: 0,
           grandAmount: 0,
-          status: "CONFIRMED",
+
+          // 🔥 IMPORTANT: store all statuses and decide final later
+          statusList: [],
         };
       }
 
+      // orderIds list
       if (!grouped[flowKey].orderIds.includes(oid)) {
         grouped[flowKey].orderIds.push(oid);
       }
 
+      // distributors list
       const already = grouped[flowKey].distributors.some(
         (d) => d.orderId === oid
       );
@@ -165,22 +190,65 @@ export const getSlotConfirmedOrders = async (req, res) => {
         });
       }
 
+      // qty: ignore ORD_FULL, take from children
       if (!String(oid).startsWith("ORD_FULL_")) {
         grouped[flowKey].totalQty += Number(order.totalQty || order.qty || 0);
       }
 
+      // amount from booking (always safe)
       grouped[flowKey].grandAmount += Number(booking.amount || 0);
 
-      const st = String(order.status || "CONFIRMED").toUpperCase();
-      if (st !== "CONFIRMED") grouped[flowKey].status = st;
+      // collect status
+      grouped[flowKey].statusList.push(
+        String(order.status || "CONFIRMED").toUpperCase()
+      );
     }
 
-    // 6️⃣ Final shaping
+    /* --------------------------------------------------
+       6️⃣ Pick FINAL status by priority (fix stuck statuses)
+    -------------------------------------------------- */
+    const PRIORITY = [
+      "DELIVERY_COMPLETED",
+      "DELIVERED",
+      "OUT_FOR_DELIVERY",
+      "DRIVER_ASSIGNED",
+      "LOADING_COMPLETED",
+      "LOADING_STARTED",
+      "VEHICLE_SELECTED",
+      "SLOT_BOOKING_COMPLETED",
+      "SLOT_BOOKED",
+      "CONFIRMED",
+    ];
+
+    for (const g of Object.values(grouped)) {
+      const stList = (g.statusList || []).map((x) => String(x).toUpperCase());
+      let picked = "CONFIRMED";
+
+      for (const p of PRIORITY) {
+        if (stList.includes(p)) {
+          picked = p;
+          break;
+        }
+      }
+
+      g.status = picked;
+      delete g.statusList;
+    }
+
+    /* --------------------------------------------------
+       7️⃣ Final shaping
+       🔥 FIX: do NOT remove FULL-only flows when qty = 0
+    -------------------------------------------------- */
     const finalOrders = Object.values(grouped)
       .filter((o) => {
-        const qty = Number(o.totalQty || 0);
-        if (qty <= 0) return false; // 🚫 even FULL qty 0 removed
         if (String(o.flowKey).startsWith("LOC#")) return false;
+
+        const qty = Number(o.totalQty || 0);
+        const hasOrders = (o.orderIds || []).length > 0;
+
+        // allow FULL-only flows
+        if (qty <= 0 && !hasOrders) return false;
+
         return true;
       })
       .map((g) => {
