@@ -682,13 +682,17 @@ export const confirmOrder = async (req, res) => {
     },
   })
 );
-    await addTimelineEvent({
-      orderId,
-      event: "ORDER_CONFIRMED",
-      by: user.mobile,
-      extra: { role: user.role, note: "Order confirmed" },
-    });
-                
+ const fullOrderId = `ORD_FULL_${orderId.replace(/^ORD/, "")}`;
+
+await addTimelineEvent({
+  orderId: fullOrderId,
+  event: "ORDER_CONFIRMED",
+  by: user.mobile,
+  byUserName: user?.name || user?.userName || null,
+  role: user?.role || "MANAGER",
+  data: { note: "Order confirmed" },
+});
+      
     // ✅ 3) Slot booking (if slot data provided)
     let slotBooked = false;
     let slotDetails = null;
