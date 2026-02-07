@@ -334,9 +334,9 @@ export const confirmDraftOrder = async (req, res) => {
         },
       })
     );
-
+    const fullOrderId = `ORD_FULL_${orderId.replace(/^ORD/, "")}`;
     await addTimelineEvent({
-      orderId,
+      orderId: fullOrderId,
       event: "ORDER_CONFIRMED",
       by: user.mobile,
       extra: { role: user.role, note: "Draft order confirmed directly" },
@@ -496,9 +496,11 @@ const createdAt = new Date().toISOString();
         Item: orderItem,
       })
     );
+    const fullOrderId = `ORD_FULL_${orderId.replace(/^ORD/, "")}`;
+
 
     await addTimelineEvent({
-      orderId,
+      orderId: fullOrderId,
       event: "ORDER_CREATED",
       by: user.mobile,
       extra: {
@@ -512,7 +514,7 @@ const createdAt = new Date().toISOString();
     });
 
     await addTimelineEvent({
-      orderId,
+      orderId: fullOrderId,
       event: finalStatus === "CONFIRMED" ? "ORDER_CONFIRMED" : "ORDER_PLACED_PENDING",
       by: user.mobile,
       extra: {
@@ -531,7 +533,7 @@ const createdAt = new Date().toISOString();
           ? "✅ Order created & confirmed"
           : "✅ Order placed (PENDING)",
 
-      orderId,
+      orderId: fullOrderId,
       status: finalStatus,
       distributorName,
       totalAmount,
