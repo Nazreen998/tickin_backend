@@ -1264,9 +1264,10 @@ export const getAllOrders = async ({ status, date }) => {
     const end = `${date}T23:59:59.999Z`;
 
     if (filter) filter += " AND ";
-    filter += "#ca BETWEEN :start AND :end";
 
+    filter += "#ca BETWEEN :start AND :end";
     expNames["#ca"] = "createdAt";
+
     expVals[":start"] = start;
     expVals[":end"] = end;
   }
@@ -1275,12 +1276,11 @@ export const getAllOrders = async ({ status, date }) => {
     TableName: ORDERS_TABLE,
     FilterExpression: filter || undefined,
     ExpressionAttributeNames:
-      Object.keys(expNames).length ? expNames : undefined,
+      Object.keys(expNames).length > 0 ? expNames : undefined,
     ExpressionAttributeValues:
-      Object.keys(expVals).length ? expVals : undefined,
+      Object.keys(expVals).length > 0 ? expVals : undefined,
   };
 
-  // 🔍 Debug (optional)
   console.log("📦 Scan Filter =", filter);
   console.log("📦 Names =", expNames);
   console.log("📦 Values =", expVals);
@@ -1289,12 +1289,11 @@ export const getAllOrders = async ({ status, date }) => {
 
   return {
     count: res.Items?.length || 0,
-    status: status ? String(status).toUpperCase() : "ALL",
+    status: status ? status.toUpperCase() : "ALL",
     date: date || "ALL",
     orders: res.Items || [],
   };
 };
-
 
 export const getOrderById = async (req, res) => {
   try {
