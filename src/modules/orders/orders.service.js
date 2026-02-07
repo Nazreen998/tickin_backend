@@ -389,6 +389,7 @@ const stops = await buildOrderStopsFromDistributorId({
   distributorName: null, // நீங்க orderItem-ல distributorName store பண்ணல, so null ok
   items: finalItems,
 });
+const createdAt = new Date().toISOString();
 
     const orderItem = {
       pk: `ORDER#${orderId}`,
@@ -411,7 +412,7 @@ const stops = await buildOrderStopsFromDistributorId({
 
       createdBy: user.mobile,
       createdRole: user.role,
-      createdAt: new Date().toISOString(),
+      createdAt,
 
        // ✅ GSI FIELDS ADD HERE 🔥
       gsi1pk: "ORDER_META",
