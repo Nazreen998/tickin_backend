@@ -66,3 +66,5 @@ scripts/migrate_add_player_ids.js
 src/fix_order_latlng.js
 src/backfill_latlon.js
 src/nearest4_distributors.js
+
+src/utils/backfill_gsi.js
