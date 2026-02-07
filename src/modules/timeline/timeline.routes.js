@@ -38,7 +38,10 @@ async function resolveTrackingOrderId(orderId) {
 router.post(
   "/loading-start",
   verifyToken,
-  allowRoles("MASTER", "MANAGER"),
+  allowRoles("MASTER", "MANAGER","MASTER", "MANAGER","DISTRIBUTOR",
+    "SALES OFFICER",
+    "SALES_OFFICER_VNR",
+    "SALES OFFICER VNR","SALESMAN"),
   async (req, res) => {
     try {
       const user = req.user;
@@ -82,7 +85,10 @@ router.post(
 router.post(
   "/loading-item",
   verifyToken,
-  allowRoles("MASTER", "MANAGER"),
+  allowRoles("MASTER", "MANAGER","MASTER", "MANAGER","DISTRIBUTOR",
+    "SALES OFFICER",
+    "SALES_OFFICER_VNR",
+    "SALES OFFICER VNR","SALESMAN"),
   async (req, res) => {
     try {
       const user = req.user;
@@ -120,7 +126,10 @@ router.post(
 router.post(
   "/vehicle-selected",
   verifyToken,
-  allowRoles("MASTER", "MANAGER"),
+  allowRoles("MASTER", "MANAGER","MASTER", "MANAGER","DISTRIBUTOR",
+    "SALES OFFICER",
+    "SALES_OFFICER_VNR",
+    "SALES OFFICER VNR","SALESMAN"),
   async (req, res) => {
     try {
       const { orderId, vehicleNo, vehicleType } = req.body;
@@ -168,7 +177,10 @@ router.post(
 router.post(
   "/loading-end",
   verifyToken,
-  allowRoles("MASTER", "MANAGER"),
+  allowRoles("MASTER", "MANAGER","DISTRIBUTOR",
+    "SALES OFFICER",
+    "SALES_OFFICER_VNR",
+    "SALES OFFICER VNR","SALESMAN"),
   async (req, res) => {
     try {
       const user = req.user;
@@ -212,7 +224,10 @@ router.post(
 router.post(
   "/assign-driver",
   verifyToken,
-  allowRoles("MANAGER", "MASTER"),
+  allowRoles("MANAGER", "MASTER","MASTER", "MANAGER","DISTRIBUTOR",
+    "SALES OFFICER",
+    "SALES_OFFICER_VNR",
+    "SALES OFFICER VNR","SALESMAN"),
   async (req, res) => {
     try {
       const { orderId, driverId, vehicleNo } = req.body;
