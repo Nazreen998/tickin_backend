@@ -38,7 +38,7 @@ async function resolveTrackingOrderId(orderId) {
 router.post(
   "/loading-start",
   verifyToken,
-  allowRoles("MASTER", "MANAGER","MASTER", "MANAGER","DISTRIBUTOR",
+  allowRoles("MASTER", "MANAGER","DISTRIBUTOR",
     "SALES OFFICER",
     "SALES_OFFICER_VNR",
     "SALES OFFICER VNR","SALESMAN"),
@@ -85,7 +85,7 @@ router.post(
 router.post(
   "/loading-item",
   verifyToken,
-  allowRoles("MASTER", "MANAGER","MASTER", "MANAGER","DISTRIBUTOR",
+  allowRoles("MASTER", "MANAGER","DISTRIBUTOR",
     "SALES OFFICER",
     "SALES_OFFICER_VNR",
     "SALES OFFICER VNR","SALESMAN"),
@@ -126,7 +126,7 @@ router.post(
 router.post(
   "/vehicle-selected",
   verifyToken,
-  allowRoles("MASTER", "MANAGER","MASTER", "MANAGER","DISTRIBUTOR",
+  allowRoles("MASTER", "MANAGER","DISTRIBUTOR",
     "SALES OFFICER",
     "SALES_OFFICER_VNR",
     "SALES OFFICER VNR","SALESMAN"),
@@ -224,7 +224,7 @@ router.post(
 router.post(
   "/assign-driver",
   verifyToken,
-  allowRoles("MANAGER", "MASTER","MASTER", "MANAGER","DISTRIBUTOR",
+  allowRoles("MANAGER", "MASTER","DISTRIBUTOR",
     "SALES OFFICER",
     "SALES_OFFICER_VNR",
     "SALES OFFICER VNR","SALESMAN"),
