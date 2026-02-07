@@ -1262,18 +1262,16 @@ export const cancelOrderSlot = async (req, res) => {
  */
 export const getOrdersForSalesman = async ({
   distributorCodes,
-  status, // optional
-  date,   // optional yyyy-MM-dd
+  status,
+  date,
 }) => {
   if (!Array.isArray(distributorCodes) || distributorCodes.length === 0) {
     return { count: 0, distributorCodes: [], orders: [] };
   }
 
-  // 🔹 Expression values
   const expVals = {};
   const expNames = {};
 
-  // 🔹 distributorId IN (...)
   const inKeys = distributorCodes.map((_, i) => `:d${i}`);
   distributorCodes.forEach((code, i) => {
     expVals[`:d${i}`] = String(code).trim();
@@ -1281,14 +1279,12 @@ export const getOrdersForSalesman = async ({
 
   let filter = `distributorId IN (${inKeys.join(",")})`;
 
-  // 🔹 OPTIONAL status filter
   if (status) {
     filter += " AND #s = :st";
     expNames["#s"] = "status";
     expVals[":st"] = String(status).toUpperCase();
   }
 
-  // 🔹 OPTIONAL date filter (day-wise)
   if (date) {
     const start = `${date}T00:00:00.000Z`;
     const end = `${date}T23:59:59.999Z`;
@@ -1298,11 +1294,6 @@ export const getOrdersForSalesman = async ({
     expVals[":start"] = start;
     expVals[":end"] = end;
   }
-
-  // 🔍 Debug (temporary – remove later)
-  console.log("📦 Scan Filter =", filter);
-  console.log("📦 Names =", expNames);
-  console.log("📦 Values =", expVals);
 
   const res = await ddb.send(
     new ScanCommand({
@@ -1314,10 +1305,25 @@ export const getOrdersForSalesman = async ({
     })
   );
 
+  let orders = res.Items || [];
+
+  // ❌ Remove cancelled always
+  orders = orders.filter(
+    (o) => String(o.status || "").toUpperCase() !== "CANCELLED"
+  );
+
+  // ❌ Hide merged FULL orders only
+  orders = orders.filter((o) => {
+    if (o.isMerged === true) return false;
+    if (Array.isArray(o.mergedOrderIds) && o.mergedOrderIds.length > 0)
+      return false;
+    return true;
+  });
+
   return {
-    count: res.Items?.length || 0,
+    count: orders.length,
     distributorCodes,
-    orders: res.Items || [],
+    orders,
   };
 };
 
@@ -1358,10 +1364,29 @@ export const getAllOrders = async ({ date, status }) => {
 
   let orders = res.Items || [];
 
-  // ✅ Optional Status Filter (in-memory)
+  orders = orders.filter((o) => {
+  const st = String(o.status || "").trim().toUpperCase();
+
+  // ❌ Remove cancelled always
+  if (st === "CANCELLED") return false;
+
+  // ❌ Remove only merged FULL orders
+  if (o.isMerged === true) return false;
+
+  if (Array.isArray(o.mergedOrderIds) && o.mergedOrderIds.length > 0)
+    return false;
+
+  if (Array.isArray(o.childOrderIds) && o.childOrderIds.length > 0)
+    return false;
+
+  return true;
+});
+
+
+  // ✅ Optional status filter
   if (status) {
-    const st = String(status).toUpperCase();
-    orders = orders.filter((o) => o.status === st);
+    const st = String(status).trim().toUpperCase();
+    orders = orders.filter((o) => String(o.status).toUpperCase() === st);
   }
 
   return {
