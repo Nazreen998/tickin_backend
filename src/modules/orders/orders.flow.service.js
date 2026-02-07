@@ -48,9 +48,9 @@ if (key.startsWith("ORD_FULL_")) {
   // 👉 If NO merged orders → SINGLE order
   // 👉 Use ONLY base order (ORDxxxx)
   if (merged.length === 0) {
-    return [key];
-  }
-
+  const baseOrd = `ORD${key.replace("ORD_FULL_", "")}`;
+  return [key, baseOrd].map(normalizeOrderId).filter(Boolean);
+}
   // 👉 If merged → FULL + children
   return [key, ...merged]
     .map(normalizeOrderId)
@@ -172,7 +172,7 @@ async function ensureVehicleSelected(orderIds) {
 ============================================================ */
 export const getOrderFlowByKey = async (req, res) => {
   console.log("🔥🔥 FLOW SERVICE HIT", req.params.flowKey);
-  let key = String(req.params.flowKey || "").trim();
+  const key = String(req.params.flowKey || "").trim();
 
 // 🔥 HARD GUARD
 if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
@@ -200,45 +200,6 @@ if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
        1️⃣ Resolve orderIds from ANY key
     -------------------------------------------------- */
     let orderIds = await resolveOrderIdsFromFlowKey(key);
-
-// 🔥🔥 BACKEND HARD FIX FOR FRONTEND
-// If frontend sends ORDxxxx, ALWAYS upgrade to ORD_FULL_xxxx if exists
-// ✅ ALWAYS create mirror booking for ORD_FULL (for single order visibility)
-const fullOrderId = `ORD_FULL_${orderId.replace(/^ORD/, "")}`;
-const bookingPk = `COMPANY#${companyCode}#DATE#${slot.date}`;
-
-await ddb.send(
-  new PutCommand({
-    TableName: BOOKINGS_TABLE,
-    Item: {
-      pk: bookingPk,
-      sk: `ORDER#${fullOrderId}`, // simple sk is enough
-
-      companyCode,
-      date: slot.date,
-
-      orderId: fullOrderId,
-
-      slotTime: slot.time,
-      slotPos: slot.pos,
-      vehicleType: "FULL",
-
-      distributorCode: order.distributorId || null,
-      distributorName: order.distributorName || null,
-
-      amount: Number(amount || 0),
-
-      status: "CONFIRMED",
-      isActive: true,
-
-      mergeKey: null,
-      mergedIntoOrderId: null,
-
-      createdAt: new Date().toISOString(),
-      createdBy: user.mobile || null,
-    },
-  })
-);
     /* --------------------------------------------------
        2️⃣ Ensure ORD_FULL META exists
     -------------------------------------------------- */
