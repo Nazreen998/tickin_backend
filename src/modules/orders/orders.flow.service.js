@@ -921,33 +921,97 @@ export const assignDriver = async (req, res) => {
         })
       );
     }
+/* --------------------------------------------------
+   9️⃣ BOOKINGS TABLE UPDATE (REAL FIX)
+   - find bookings by pk + orderId
+   - update using actual pk+sk
+-------------------------------------------------- */
+try {
+  // slotDate mandatory
+  const slotDate =
+    fullMeta.slotDate ||
+    fullMeta.slot?.date ||
+    null;
 
-    /* --------------------------------------------------
-       9️⃣ BOOKINGS TABLE STATUS UPDATE
-       🔥 MAIN FIX for manager slot list disappearing
-    -------------------------------------------------- */
-    const bookingPk = `COMPANY#${fullMeta.companyCode || "VAGR_IT"}#DATE#${fullMeta.slotDate || fullMeta.slot?.date || ""}`;
+  const slotTime =
+    fullMeta.slotTime ||
+    fullMeta.slot?.time ||
+    null;
 
-    // if slotDate missing, skip
-    if (bookingPk.includes("#DATE#") && !bookingPk.endsWith("#DATE#")) {
-      // update FULL booking
+  const companyCode = fullMeta.companyCode || "VAGR_IT";
+
+  if (slotDate) {
+    const bookingPk = `COMPANY#${companyCode}#DATE#${slotDate}`;
+
+    // 🔥 Update FULL booking
+    const fullBookingScan = await ddb.send(
+      new ScanCommand({
+        TableName: BOOKINGS_TABLE,
+        FilterExpression: "#pk = :pk AND orderId = :oid",
+        ExpressionAttributeNames: { "#pk": "pk" },
+        ExpressionAttributeValues: {
+          ":pk": bookingPk,
+          ":oid": fullOrderId,
+        },
+      })
+    );
+
+    const fullBooking = (fullBookingScan.Items || [])[0];
+
+    if (fullBooking) {
       await ddb.send(
         new UpdateCommand({
           TableName: BOOKINGS_TABLE,
-          Key: {
-            pk: bookingPk,
-            sk: `SLOT#${fullMeta.slotTime}#POS#${fullMeta.slotPos}#ORDER#${fullOrderId}`,
-          },
-          UpdateExpression: "SET #s = :st, updatedAt = :u",
+          Key: { pk: fullBooking.pk, sk: fullBooking.sk },
+          UpdateExpression:
+            "SET #s = :st, updatedAt = :u, isActive = :t",
           ExpressionAttributeNames: { "#s": "status" },
           ExpressionAttributeValues: {
             ":st": "DRIVER_ASSIGNED",
             ":u": new Date().toISOString(),
+            ":t": true,
           },
         })
       );
     }
 
+    // 🔥 Update CHILD bookings (MERGED + mergedIntoOrderId)
+    for (const cid of childOrderIds) {
+      const childScan = await ddb.send(
+        new ScanCommand({
+          TableName: BOOKINGS_TABLE,
+          FilterExpression: "#pk = :pk AND orderId = :oid",
+          ExpressionAttributeNames: { "#pk": "pk" },
+          ExpressionAttributeValues: {
+            ":pk": bookingPk,
+            ":oid": cid,
+          },
+        })
+      );
+
+      const childBooking = (childScan.Items || [])[0];
+      if (!childBooking) continue;
+
+      await ddb.send(
+        new UpdateCommand({
+          TableName: BOOKINGS_TABLE,
+          Key: { pk: childBooking.pk, sk: childBooking.sk },
+          UpdateExpression:
+            "SET #s = :st, mergedIntoOrderId = :mid, updatedAt = :u, isActive = :t",
+          ExpressionAttributeNames: { "#s": "status" },
+          ExpressionAttributeValues: {
+            ":st": "MERGED",
+            ":mid": fullOrderId,
+            ":u": new Date().toISOString(),
+            ":t": true,
+          },
+        })
+      );
+    }
+  }
+} catch (e) {
+  console.log("⚠️ BOOKINGS update failed:", e.message);
+}
     return res.json({
       ok: true,
       message: "✅ Driver assigned successfully",
