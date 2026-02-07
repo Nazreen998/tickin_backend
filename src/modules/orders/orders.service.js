@@ -40,13 +40,15 @@ export const getSlotConfirmedOrders = async (req, res) => {
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
         FilterExpression:
-          "#pk = :pk AND (attribute_not_exists(isActive) OR isActive = :t)",
+          "#pk = :pk AND (attribute_not_exists(isActive) OR isActive = :t) AND (#st <> :cancel)",
         ExpressionAttributeNames: {
           "#pk": "pk",
+          "#st": "status",
         },
         ExpressionAttributeValues: {
           ":pk": pk,
           ":t": true,
+          ":cancel": "CANCELLED",
         },
       })
     );
@@ -134,10 +136,8 @@ export const getSlotConfirmedOrders = async (req, res) => {
       if (masterId) {
         const children = fullChildrenMap[masterId] || [];
         const hasActiveChild = children.some(
-          (b) =>
-            String(b.status || "").toUpperCase() !== "CANCELLED" &&
-            b.isActive !== false
-        );
+  (b) => b.status !== "CANCELLED" && b.isActive !== false
+);
         if (!hasActiveChild) {
           continue;
         }
