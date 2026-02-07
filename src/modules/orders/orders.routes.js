@@ -284,7 +284,7 @@ router.post(
   allowRoles("MANAGER", "MASTER"),
   loadingEnd
 );
-router.post("/orders/force-reset/:orderId", async (req, res) => {
+router.post("/force-reset/:orderId", async (req, res) => {
   try {
     const { orderId } = req.params;
     const out = await forceResetOrderSlotMeta(orderId);
