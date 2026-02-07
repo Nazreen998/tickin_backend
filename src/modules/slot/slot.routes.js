@@ -34,17 +34,6 @@ import { requireAuth as auth } from "../../middleware/auth.middleware.js";
 import { addTimelineEvent, addSlotTimelineEvent } from "../timeline/timeline.helper.js";
 const router = express.Router();
 
-/* ✅ Always write timeline into FULL tracking order */
-function toTrackingOrderId(orderId) {
-  if (!orderId) return null;
-
-  // already full
-  if (String(orderId).startsWith("ORD_FULL_")) return String(orderId);
-
-  // convert ORDxxxx → ORD_FULL_xxxx
-  return `ORD_FULL_${String(orderId).replace(/^ORD/, "")}`;
-}
-
 /* ✅ helper: extract slotId safely from any response */
 function extractSlotId(out) {
   if (!out) return null;
@@ -248,9 +237,8 @@ router.post(
 
       // ✅ 2) ORDER TIMELINE TABLE (tickin_timeline)  ==> IMPORTANT for neatTimeline DONE
       if (orderId) {
-         const trackingOrderId = toTrackingOrderId(orderId);
         await addTimelineEvent({
-          orderId: trackingOrderId,
+          orderId,
           event: "SLOT_BOOKING",
           by: user.mobile || user.userId || "SYSTEM",
           byUserName: user.name || user.userName || null,
@@ -455,9 +443,9 @@ router.post(
       if (Array.isArray(orderIds)) {
         for (const oid of orderIds) {
           if (!oid) continue;
-          const trackingOrderId = toTrackingOrderId(oid);
+
           await addTimelineEvent({
-            orderId: trackingOrderId,
+            orderId: String(oid),
             event: "SLOT_BOOKING_COMPLETED",
             by: user.mobile || user.userId || "SYSTEM",
             byUserName: user.name || user.userName || null,
@@ -468,9 +456,10 @@ router.post(
             },
           });
           
+
           // ✅ optional: ORDER_CONFIRMED also at merge time
           await addTimelineEvent({
-            orderId: trackingOrderId,
+            orderId: String(oid),
             event: "ORDER_CONFIRMED",
             by: user.mobile || user.userId || "SYSTEM",
             byUserName: user.name || user.userName || null,
@@ -524,9 +513,8 @@ router.post(
       const mergedOrderIds = out?.mergedOrderIds || [];
       for (const oid of mergedOrderIds) {
         if (!oid) continue;
-        const trackingOrderId = toTrackingOrderId(oid);
         await addTimelineEvent({
-          orderId: trackingOrderId,
+          orderId: String(oid),
           event: "SLOT_BOOKING_COMPLETED",
           by: user.mobile || user.userId || "SYSTEM",
           byUserName: user.name || user.userName || null,

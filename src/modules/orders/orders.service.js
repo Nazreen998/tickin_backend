@@ -40,15 +40,13 @@ export const getSlotConfirmedOrders = async (req, res) => {
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
         FilterExpression:
-          "#pk = :pk AND (attribute_not_exists(isActive) OR isActive = :t) AND (#st <> :cancel)",
+          "#pk = :pk AND (attribute_not_exists(isActive) OR isActive = :t)",
         ExpressionAttributeNames: {
           "#pk": "pk",
-          "#st": "status",
         },
         ExpressionAttributeValues: {
           ":pk": pk,
           ":t": true,
-          ":cancel": "CANCELLED",
         },
       })
     );
@@ -136,8 +134,10 @@ export const getSlotConfirmedOrders = async (req, res) => {
       if (masterId) {
         const children = fullChildrenMap[masterId] || [];
         const hasActiveChild = children.some(
-  (b) => b.status !== "CANCELLED" && b.isActive !== false
-);
+          (b) =>
+            String(b.status || "").toUpperCase() !== "CANCELLED" &&
+            b.isActive !== false
+        );
         if (!hasActiveChild) {
           continue;
         }
@@ -334,9 +334,9 @@ export const confirmDraftOrder = async (req, res) => {
         },
       })
     );
-    const fullOrderId = `ORD_FULL_${orderId.replace(/^ORD/, "")}`;
+
     await addTimelineEvent({
-      orderId: fullOrderId,
+      orderId,
       event: "ORDER_CONFIRMED",
       by: user.mobile,
       extra: { role: user.role, note: "Draft order confirmed directly" },
@@ -496,11 +496,9 @@ const createdAt = new Date().toISOString();
         Item: orderItem,
       })
     );
-    const fullOrderId = `ORD_FULL_${orderId.replace(/^ORD/, "")}`;
-
 
     await addTimelineEvent({
-      orderId: fullOrderId,
+      orderId,
       event: "ORDER_CREATED",
       by: user.mobile,
       extra: {
@@ -514,7 +512,7 @@ const createdAt = new Date().toISOString();
     });
 
     await addTimelineEvent({
-      orderId: fullOrderId,
+      orderId,
       event: finalStatus === "CONFIRMED" ? "ORDER_CONFIRMED" : "ORDER_PLACED_PENDING",
       by: user.mobile,
       extra: {
@@ -533,7 +531,7 @@ const createdAt = new Date().toISOString();
           ? "✅ Order created & confirmed"
           : "✅ Order placed (PENDING)",
 
-      orderId: fullOrderId,
+      orderId,
       status: finalStatus,
       distributorName,
       totalAmount,
