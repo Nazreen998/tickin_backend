@@ -33,25 +33,21 @@ export const getSlotConfirmedOrders = async (req, res) => {
     const pk = `COMPANY#VAGR_IT#DATE#${date}`;
 
     /* --------------------------------------------------
-       1️⃣ Fetch bookings (CONFIRMED + MERGED only)
+       1️⃣ Fetch bookings (ALL ACTIVE for that date)
+       🔥 FIX: don't filter by status (else flow disappears)
     -------------------------------------------------- */
     const bookingsRes = await ddb.send(
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
         FilterExpression:
-  "#pk = :pk AND (#st = :c OR #st = :m OR #st = :da OR #st = :lc OR #st = :ls)",
+          "#pk = :pk AND (attribute_not_exists(isActive) OR isActive = :t)",
         ExpressionAttributeNames: {
           "#pk": "pk",
-          "#st": "status",
         },
         ExpressionAttributeValues: {
-  ":pk": pk,
-  ":c": "CONFIRMED",
-  ":m": "MERGED",
-  ":da": "DRIVER_ASSIGNED",
-  ":lc": "LOADING_COMPLETED",
-  ":ls": "LOADING_STARTED",
-},
+          ":pk": pk,
+          ":t": true,
+        },
       })
     );
 
@@ -85,7 +81,7 @@ export const getSlotConfirmedOrders = async (req, res) => {
     }
 
     /* --------------------------------------------------
-       4️⃣ Build FULL master → children map (for cancel check)
+       4️⃣ Build FULL master → children map
     -------------------------------------------------- */
     const fullChildrenMap = {};
     for (const list of Object.values(bookingsByOrderId)) {
@@ -122,7 +118,7 @@ export const getSlotConfirmedOrders = async (req, res) => {
 
       // 🚫 cancelled / inactive booking
       if (booking.isActive === false) continue;
-if (booking.status === "CANCELLED") continue;
+      if (String(booking.status || "").toUpperCase() === "CANCELLED") continue;
 
       // detect FULL master
       const masterId =
@@ -139,7 +135,7 @@ if (booking.status === "CANCELLED") continue;
         const children = fullChildrenMap[masterId] || [];
         const hasActiveChild = children.some(
           (b) =>
-            (b.status === "CONFIRMED" || b.status === "MERGED") &&
+            String(b.status || "").toUpperCase() !== "CANCELLED" &&
             b.isActive !== false
         );
         if (!hasActiveChild) {
@@ -150,10 +146,6 @@ if (booking.status === "CANCELLED") continue;
       let mk = booking.mergeKey || order.mergeKey || null;
       if (mk && String(mk).startsWith("LOC#")) mk = null;
 
-      // ✅ flowKey priority:
-      // 1) FULL masterId
-      // 2) mergeKey
-      // 3) orderId itself
       const flowKey = masterId || mk || oid;
 
       if (!grouped[flowKey]) {
@@ -171,7 +163,6 @@ if (booking.status === "CANCELLED") continue;
           totalQty: 0,
           grandAmount: 0,
 
-          // 🔥 IMPORTANT: store all statuses and decide final later
           statusList: [],
         };
       }
@@ -198,7 +189,7 @@ if (booking.status === "CANCELLED") continue;
         grouped[flowKey].totalQty += Number(order.totalQty || order.qty || 0);
       }
 
-      // amount from booking (always safe)
+      // amount from booking
       grouped[flowKey].grandAmount += Number(booking.amount || 0);
 
       // collect status
@@ -208,7 +199,7 @@ if (booking.status === "CANCELLED") continue;
     }
 
     /* --------------------------------------------------
-       6️⃣ Pick FINAL status by priority (fix stuck statuses)
+       6️⃣ Pick FINAL status by priority
     -------------------------------------------------- */
     const PRIORITY = [
       "DELIVERY_COMPLETED",
@@ -266,7 +257,7 @@ if (booking.status === "CANCELLED") continue;
           distributorName: names || "-",
           totalQty: g.totalQty,
           grandAmount: g.grandAmount,
-          orderId: g.flowKey,
+          orderId: g.flowKey, // important
         };
       });
 
