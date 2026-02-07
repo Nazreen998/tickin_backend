@@ -1354,10 +1354,15 @@ export const getAllOrders = async ({ date, status }) => {
 
   let orders = res.Items || [];
 
-  // ✅ Optional Status Filter (in-memory)
+  // ✅ Always remove cancelled
+  orders = orders.filter(
+    (o) => String(o.status || "").trim().toUpperCase() !== "CANCELLED"
+  );
+
+  // ✅ Optional status filter
   if (status) {
-    const st = String(status).toUpperCase();
-    orders = orders.filter(o => o.status !== "CANCELLED");
+    const st = String(status).trim().toUpperCase();
+    orders = orders.filter((o) => String(o.status).toUpperCase() === st);
   }
 
   return {
