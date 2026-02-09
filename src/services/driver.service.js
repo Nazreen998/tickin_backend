@@ -5,6 +5,8 @@ import { addTimelineEvent } from "../modules/timeline/timeline.helper.js";
 
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const DRIVER_GSI = "GSI_DRIVER_ASSIGNED";
+const WAREHOUSE_LAT = Number(process.env.WAREHOUSE_LAT);
+const WAREHOUSE_LNG = Number(process.env.WAREHOUSE_LNG);
 
 const REACH_RADIUS_METERS = 200;
 
@@ -350,6 +352,35 @@ export async function updateDriverStatus({
   }
 
   validateTransition(currentStatus, desired);
+// ✅ WAREHOUSE REACHED → location validation
+if (desired === "WAREHOUSE_REACHED") {
+  if (!isFiniteLatLng(WAREHOUSE_LAT, WAREHOUSE_LNG)) {
+    throw new Error("Warehouse location missing or invalid");
+  }
+
+  if (!force) {
+    if (!isFiniteLatLng(currentLat, currentLng)) {
+      throw new Error("currentLat/currentLng required");
+    }
+
+    const dist = haversineMeters(
+      Number(currentLat),
+      Number(currentLng),
+      WAREHOUSE_LAT,
+      WAREHOUSE_LNG
+    );
+
+    if (dist > REACH_RADIUS_METERS) {
+      return {
+        ok: false,
+        reached: false,
+        message: "Try again",
+        distanceMeters: Math.round(dist),
+        radiusMeters: REACH_RADIUS_METERS,
+      };
+    }
+  }
+}
 
   let newIdx = idx;
   let newDistributors = distributors;
