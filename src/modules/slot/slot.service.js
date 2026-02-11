@@ -3114,7 +3114,23 @@ const timeHalf = all.filter(b =>
   return { timeCount, timeTotal, dayCount, dayTotal };
 }
 
-    await ddb.send(new TransactWriteCommand({ TransactItems: deduped }));
+// ✅ DEDUPE before transaction (FULL cancel only)
+const seenKeys = new Set();
+const uniqueItems = [];
+
+for (const item of transactItems) {
+  const keyObj = item.Update?.Key || item.Delete?.Key;
+  const table = item.Update?.TableName || item.Delete?.TableName;
+  if (!keyObj) continue;
+
+  const ukey = `${table}__${keyObj.pk}__${keyObj.sk}`;
+  if (seenKeys.has(ukey)) continue;
+
+  seenKeys.add(ukey);
+  uniqueItems.push(item);
+}
+
+await ddb.send(new TransactWriteCommand({ TransactItems: uniqueItems }));
 await recomputeAndFixMerge({ pk, companyCode, time, mergeKey });
 
     return {
