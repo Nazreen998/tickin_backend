@@ -413,10 +413,7 @@ if (desired === "WAREHOUSE_REACHED") {
       reachedAt: toIsoNow(),
     };
 
-    // ✅ Move to next stop ONLY after reaching
-    if (idx + 1 < newDistributors.length) {
-      newIdx = idx + 1;
-    }
+    
   }
 
 
@@ -440,7 +437,10 @@ if (desired === "WAREHOUSE_REACHED") {
       unloadEndAt: toIsoNow(),
     };
 
-    // ❌ IMPORTANT: Do NOT increment index here
+    // ✅ Move to next stop ONLY after reaching
+    if (idx + 1 < newDistributors.length) {
+      newIdx = idx + 1;
+    }
   }
 
 
