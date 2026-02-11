@@ -3114,14 +3114,14 @@ const timeHalf = all.filter(b =>
   return { timeCount, timeTotal, dayCount, dayTotal };
 }
 
-    await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
+    await ddb.send(new TransactWriteCommand({ TransactItems: deduped }));
 await recomputeAndFixMerge({ pk, companyCode, time, mergeKey });
 
     return {
       ok: true,
       slotType: "FULL",
       orderId: resolvedOrderId,
-      date,
+      date, 
       time,
       pos,
       resetOrders: mergedOrderIds,
