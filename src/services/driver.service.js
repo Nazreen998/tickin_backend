@@ -382,54 +382,43 @@ if (desired === "WAREHOUSE_REACHED") {
   let newIdx = idx;
   let newDistributors = distributors;
 
-  if (desired === "REACHED_D1" || desired === "REACHED_D2") {
-    if (!stop) throw new Error("No distributor stop found");
+  if (String(desired).startsWith("REACHED_STOP_")) {
+  if (!stop) throw new Error("No distributor stop found");
 
-    if (!force) {
-      if (!isFiniteLatLng(stop.lat, stop.lng)) {
-        throw new Error("Distributor location missing or invalid");
-      }
-      if (!isFiniteLatLng(currentLat, currentLng)) {
-        throw new Error("currentLat/currentLng required");
-      }
-
-      const check = await validateDriverReach30m({
-        orderId,
-        currentLat,
-        currentLng,
-      });
-      if (!check.within) {
-        return {
-          ok: false,
-          reached: false,
-          message: "Try again",
-          distanceMeters: check.distanceMeters,
-          radiusMeters: check.radiusMeters,
-          currentStopIndex: check.currentStopIndex,
-        };
-      }
-    }
-
-    newDistributors = [...newDistributors];
-    newDistributors[idx] = { ...newDistributors[idx], reachedAt: toIsoNow() };
-  }
-
-  if (desired === "UNLOADING_START_D1" || desired === "UNLOADING_START_D2") {
-    if (!stop) throw new Error("No distributor stop found");
-    newDistributors = [...newDistributors];
-    newDistributors[idx] = { ...newDistributors[idx], unloadStartAt: toIsoNow() };
-  }
-
-  if (desired === "UNLOADING_END_D1" || desired === "UNLOADING_END_D2") {
-    if (!stop) throw new Error("No distributor stop found");
-
-    newDistributors = [...newDistributors];
-    newDistributors[idx] = { ...newDistributors[idx], unloadEndAt: toIsoNow() };
-
-    if (idx + 1 < newDistributors.length) {
-      newIdx = idx + 1;
+  if (!force) {
+    const check = await validateDriverReach30m({ orderId, currentLat, currentLng });
+    if (!check.within) {
+      return {
+        ok: false,
+        reached: false,
+        message: "Try again",
+        distanceMeters: check.distanceMeters,
+        radiusMeters: check.radiusMeters,
+        currentStopIndex: check.currentStopIndex,
+      };
     }
   }
+
+  newDistributors = [...newDistributors];
+  newDistributors[idx] = { ...newDistributors[idx], reachedAt: toIsoNow() };
+}
+
+if (String(desired).startsWith("UNLOADING_START_STOP_")) {
+  if (!stop) throw new Error("No distributor stop found");
+  newDistributors = [...newDistributors];
+  newDistributors[idx] = { ...newDistributors[idx], unloadStartAt: toIsoNow() };
+}
+
+if (String(desired).startsWith("UNLOADING_END_STOP_")) {
+  if (!stop) throw new Error("No distributor stop found");
+  newDistributors = [...newDistributors];
+  newDistributors[idx] = { ...newDistributors[idx], unloadEndAt: toIsoNow() };
+
+  if (idx + 1 < newDistributors.length) {
+    newIdx = idx + 1;
+  }
+}
+
 
   const tripClosed =
     desired === "WAREHOUSE_REACHED" || desired === "DELIVERY_COMPLETED";
@@ -438,7 +427,7 @@ if (desired === "WAREHOUSE_REACHED") {
     new UpdateCommand({
       TableName: ORDERS_TABLE,
       Key: orderKey(orderId),
-      ConditionExpression: "#s = :current",
+      
       UpdateExpression:
         "SET #s = :next, distributors = :d, currentDistributorIndex = :i, tripClosed = :c, updatedAt = :u",
       ExpressionAttributeNames: { "#s": "status" },
@@ -476,8 +465,7 @@ if (desired === "WAREHOUSE_REACHED") {
   });
   return {
     ok: true,
-    reached:
-      desired === "REACHED_D1" || desired === "REACHED_D2" ? true : undefined,
+    reached: String(desired).startsWith("REACHED_STOP_") ? true : undefined,
     order: after,
   };
 }
