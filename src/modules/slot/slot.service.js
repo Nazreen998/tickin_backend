@@ -555,15 +555,26 @@ export async function getSlotGrid({ companyCode, date }) {
       `${String(merged.time)}__${String(merged.pos)}`
     );
 
-    if (match) {
-      merged.status = "BOOKED";
-      merged.distributorName = match.distributorName || null;
-      merged.distributorCode = match.distributorCode || null;
-      merged.orderId = match.orderId || null;
-      merged.amount = Number(match.amount || 0);
-      merged.bookedBy = match.userId || null;
-      merged.userId = merged.userId || match.userId || match.orderId || "BOOKED";
-    }
+   // ✅ BOOKED only if capacity is NOT AVAILABLE
+if (match && merged.status !== "AVAILABLE") {
+  merged.status = "BOOKED";
+  merged.distributorName = match.distributorName || null;
+  merged.distributorCode = match.distributorCode || null;
+  merged.orderId = match.orderId || null;
+  merged.amount = Number(match.amount || 0);
+  merged.bookedBy = match.userId || null;
+  merged.userId = merged.userId || match.userId || match.orderId || "BOOKED";
+}
+
+// 🧹 HARD RESET when AVAILABLE
+if (merged.status === "AVAILABLE") {
+  delete merged.orderId;
+  delete merged.distributorName;
+  delete merged.distributorCode;
+  delete merged.amount;
+  delete merged.bookedBy;
+  delete merged.userId;
+}
 
     return merged;
   });
