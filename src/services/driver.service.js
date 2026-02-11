@@ -427,7 +427,7 @@ if (String(desired).startsWith("UNLOADING_END_STOP_")) {
     new UpdateCommand({
       TableName: ORDERS_TABLE,
       Key: orderKey(orderId),
-      
+      ConditionExpression: "attribute_exists(#s) AND #s = :current",
       UpdateExpression:
         "SET #s = :next, distributors = :d, currentDistributorIndex = :i, tripClosed = :c, updatedAt = :u",
       ExpressionAttributeNames: { "#s": "status" },
