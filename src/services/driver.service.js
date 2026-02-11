@@ -382,42 +382,66 @@ if (desired === "WAREHOUSE_REACHED") {
   let newIdx = idx;
   let newDistributors = distributors;
 
+  // ✅ REACHED STOP (Move index AFTER reaching)
   if (String(desired).startsWith("REACHED_STOP_")) {
-  if (!stop) throw new Error("No distributor stop found");
+    if (!stop) throw new Error("No distributor stop found");
 
-  if (!force) {
-    const check = await validateDriverReach30m({ orderId, currentLat, currentLng });
-    if (!check.within) {
-      return {
-        ok: false,
-        reached: false,
-        message: "Try again",
-        distanceMeters: check.distanceMeters,
-        radiusMeters: check.radiusMeters,
-        currentStopIndex: check.currentStopIndex,
-      };
+    // Location validation
+    if (!force) {
+      const check = await validateDriverReach30m({
+        orderId,
+        currentLat,
+        currentLng,
+      });
+
+      if (!check.within) {
+        return {
+          ok: false,
+          reached: false,
+          message: "Try again",
+          distanceMeters: check.distanceMeters,
+          radiusMeters: check.radiusMeters,
+          currentStopIndex: check.currentStopIndex,
+        };
+      }
+    }
+
+    // Save reachedAt
+    newDistributors = [...newDistributors];
+    newDistributors[idx] = {
+      ...newDistributors[idx],
+      reachedAt: toIsoNow(),
+    };
+
+    // ✅ Move to next stop ONLY after reaching
+    if (idx + 1 < newDistributors.length) {
+      newIdx = idx + 1;
     }
   }
 
-  newDistributors = [...newDistributors];
-  newDistributors[idx] = { ...newDistributors[idx], reachedAt: toIsoNow() };
-}
 
-if (String(desired).startsWith("UNLOADING_START_STOP_")) {
-  if (!stop) throw new Error("No distributor stop found");
-  newDistributors = [...newDistributors];
-  newDistributors[idx] = { ...newDistributors[idx], unloadStartAt: toIsoNow() };
-}
+  // ✅ UNLOADING START (Do NOT move index)
+  if (String(desired).startsWith("UNLOADING_START_STOP_")) {
+    if (!stop) throw new Error("No distributor stop found");
 
-if (String(desired).startsWith("UNLOADING_END_STOP_")) {
-  if (!stop) throw new Error("No distributor stop found");
-  newDistributors = [...newDistributors];
-  newDistributors[idx] = { ...newDistributors[idx], unloadEndAt: toIsoNow() };
-
-  if (idx + 1 < newDistributors.length) {
-    newIdx = idx + 1;
+    newDistributors = [...newDistributors];
+    newDistributors[idx] = {
+      ...newDistributors[idx],
+      unloadStartAt: toIsoNow(),
+    };
   }
-}
+  // ✅ UNLOADING END (Do NOT move index)
+  if (String(desired).startsWith("UNLOADING_END_STOP_")) {
+    if (!stop) throw new Error("No distributor stop found");
+
+    newDistributors = [...newDistributors];
+    newDistributors[idx] = {
+      ...newDistributors[idx],
+      unloadEndAt: toIsoNow(),
+    };
+
+    // ❌ IMPORTANT: Do NOT increment index here
+  }
 
 
   const tripClosed =
