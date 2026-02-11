@@ -144,20 +144,23 @@ function getCurrentStop(order) {
   return { distributors, idx, stop: distributors[idx] || null };
 }
 
-/* ✅ D1 / D2 helpers */
+/* ✅ Distributor  helpers(more than 2) */
 function stopLabel(idx) {
-  return idx === 0 ? "D1" : "D2";
+  return `STOP_${idx + 1}`;
 }
 
 function reachedEventKey(idx) {
-  return idx === 0 ? "REACHED_D1" : "REACHED_D2";
+  return `REACHED_STOP_${idx + 1}`;
 }
+
 function unloadStartEventKey(idx) {
-  return idx === 0 ? "UNLOADING_START_D1" : "UNLOADING_START_D2";
+  return `UNLOADING_START_STOP_${idx + 1}`;
 }
+
 function unloadEndEventKey(idx) {
-  return idx === 0 ? "UNLOADING_END_D1" : "UNLOADING_END_D2";
+  return `UNLOADING_END_STOP_${idx + 1}`;
 }
+
 
 /* ------------------ core ------------------ */
 
@@ -342,12 +345,6 @@ export async function updateDriverStatus({
   if (incoming === "UNLOAD_START") desired = unloadStartEventKey(idx);
   if (incoming === "UNLOAD_END") desired = unloadEndEventKey(idx);
 
-  if (
-    !hasD2 &&
-    ["REACHED_D2", "UNLOADING_START_D2", "UNLOADING_END_D2"].includes(desired)
-  ) {
-    throw new Error("D2 not applicable for single order");
-  }
 
   validateTransition(currentStatus, desired);
 
