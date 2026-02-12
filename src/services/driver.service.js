@@ -360,9 +360,10 @@ if (desired === "WAREHOUSE_REACHED") {
 
   if (!force) {
     if (!isFiniteLatLng(currentLat, currentLng)) {
-      throw new Error("currentLat/currentLng required");
-    }
-
+  console.log("⚠️ No GPS from app. Using warehouse location.");
+  currentLat = WAREHOUSE_LAT;
+  currentLng = WAREHOUSE_LNG;
+}
     const dist = haversineMeters(
       Number(currentLat),
       Number(currentLng),
