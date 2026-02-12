@@ -799,19 +799,7 @@ export const assignDriver = async (req, res) => {
         });
       }
     }
-
-    // dedupe distributors
-    const seen = new Set();
-    distributors = distributors.filter((d) => {
-      const k = (d.distributorCode || d.distributorName || "")
-        .toString()
-        .trim()
-        .toUpperCase();
-      if (!k || seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-
+    
     if (!distributors.length) {
       return res.status(400).json({
         ok: false,
