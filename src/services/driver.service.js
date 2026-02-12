@@ -244,7 +244,7 @@ function hydrateDriverCard(order = {}) {
   return out;
 }
 
-/**-------GET DRIVER ORDERS--------*/
+/** ------- GET DRIVER ORDERS (FINAL SAFE VERSION) ------- */
 export async function getDriverOrders(driverId) {
   if (!driverId) return [];
 
@@ -265,28 +265,40 @@ export async function getDriverOrders(driverId) {
     })
   );
 
-  const allowed = new Set([
+  // ✅ Allow BOTH old D1/D2 + new STOP_ format
+  const allowedPrefixes = [
+    // Trip start
     "DRIVER_ASSIGNED",
     "DRIVER_STARTED",
     "DRIVE_STARTED",
-    "REACHED_D1",
-    "REACHED_D2",
-    "UNLOADING_START_D1",
-    "UNLOADING_START_D2",
-    "UNLOADING_END_D1",
-    "UNLOADING_END_D2",
+
+    // ✅ Old format support
+    "REACHED_D",
+    "UNLOADING_START_D",
+    "UNLOADING_END_D",
+
+    // ✅ New multi-stop format support
+    "REACHED_STOP_",
+    "UNLOADING_START_STOP_",
+    "UNLOADING_END_STOP_",
+
+    // Trip end
     "WAREHOUSE_REACHED",
     "DELIVERY_COMPLETED",
-  ]);
+  ];
 
   return (res.Items || [])
-    .filter(
-      (o) =>
-        allowed.has(String(o.status || "").toUpperCase()) &&
-        o.deletedByDriver !== true
-    )
+    .filter((o) => {
+      const st = String(o.status || "").toUpperCase();
+
+      // ✅ match any prefix
+      const ok = allowedPrefixes.some((p) => st.startsWith(p));
+
+      return ok && o.deletedByDriver !== true;
+    })
     .map(hydrateDriverCard); // ✅ totals + distributorDisplay fix
 }
+
 /* -------- distance validation -------- */
 
 export async function validateDriverReach30m({ orderId, currentLat, currentLng }) {
