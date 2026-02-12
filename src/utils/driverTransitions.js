@@ -6,13 +6,22 @@ function norm(s) {
 function groupStatus(s) {
   const x = norm(s);
 
-  if (x === "DRIVE_STARTED") return "DRIVER_STARTED"; // alias
+  // alias
+  if (x === "DRIVE_STARTED") return "DRIVER_STARTED";
+
+  // ✅ OLD SUPPORT
   if (x.startsWith("REACHED_D")) return "REACHED";
   if (x.startsWith("UNLOADING_START_D")) return "UNLOADING_START";
   if (x.startsWith("UNLOADING_END_D")) return "UNLOADING_END";
 
+  // ✅ NEW SUPPORT (STOP based)
+  if (x.startsWith("REACHED_STOP_")) return "REACHED";
+  if (x.startsWith("UNLOADING_START_STOP_")) return "UNLOADING_START";
+  if (x.startsWith("UNLOADING_END_STOP_")) return "UNLOADING_END";
+
   return x;
 }
+
 
 export const transitions = {
   DRIVER_ASSIGNED: ["DRIVER_STARTED"],
