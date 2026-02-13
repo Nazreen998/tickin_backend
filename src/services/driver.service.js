@@ -146,23 +146,20 @@ function getCurrentStop(order) {
   return { distributors, idx, stop: distributors[idx] || null };
 }
 
-/* ✅ Distributor  helpers(more than 2) */
+/* ✅ D1 / D2 helpers */
 function stopLabel(idx) {
-  return `STOP_${idx + 1}`;
+  return idx === 0 ? "D1" : "D2";
 }
 
 function reachedEventKey(idx) {
-  return `REACHED_STOP_${idx + 1}`;
+  return idx === 0 ? "REACHED_D1" : "REACHED_D2";
 }
-
 function unloadStartEventKey(idx) {
-  return `UNLOADING_START_STOP_${idx + 1}`;
+  return idx === 0 ? "UNLOADING_START_D1" : "UNLOADING_START_D2";
 }
-
 function unloadEndEventKey(idx) {
-  return `UNLOADING_END_STOP_${idx + 1}`;
+  return idx === 0 ? "UNLOADING_END_D1" : "UNLOADING_END_D2";
 }
-
 
 /* ------------------ core ------------------ */
 
@@ -244,7 +241,7 @@ function hydrateDriverCard(order = {}) {
   return out;
 }
 
-/** ------- GET DRIVER ORDERS (FINAL SAFE VERSION) ------- */
+/**-------GET DRIVER ORDERS--------*/
 export async function getDriverOrders(driverId) {
   if (!driverId) return [];
 
@@ -265,40 +262,28 @@ export async function getDriverOrders(driverId) {
     })
   );
 
-  // ✅ Allow BOTH old D1/D2 + new STOP_ format
-  const allowedPrefixes = [
-    // Trip start
+  const allowed = new Set([
     "DRIVER_ASSIGNED",
     "DRIVER_STARTED",
     "DRIVE_STARTED",
-
-    // ✅ Old format support
-    "REACHED_D",
-    "UNLOADING_START_D",
-    "UNLOADING_END_D",
-
-    // ✅ New multi-stop format support
-    "REACHED_STOP_",
-    "UNLOADING_START_STOP_",
-    "UNLOADING_END_STOP_",
-
-    // Trip end
+    "REACHED_D1",
+    "REACHED_D2",
+    "UNLOADING_START_D1",
+    "UNLOADING_START_D2",
+    "UNLOADING_END_D1",
+    "UNLOADING_END_D2",
     "WAREHOUSE_REACHED",
     "DELIVERY_COMPLETED",
-  ];
+  ]);
 
   return (res.Items || [])
-    .filter((o) => {
-      const st = String(o.status || "").toUpperCase();
-
-      // ✅ match any prefix
-      const ok = allowedPrefixes.some((p) => st.startsWith(p));
-
-      return ok && o.deletedByDriver !== true;
-    })
+    .filter(
+      (o) =>
+        allowed.has(String(o.status || "").toUpperCase()) &&
+        o.deletedByDriver !== true
+    )
     .map(hydrateDriverCard); // ✅ totals + distributorDisplay fix
 }
-
 /* -------- distance validation -------- */
 
 export async function validateDriverReach30m({ orderId, currentLat, currentLng }) {
@@ -359,6 +344,12 @@ export async function updateDriverStatus({
   if (incoming === "UNLOAD_START") desired = unloadStartEventKey(idx);
   if (incoming === "UNLOAD_END") desired = unloadEndEventKey(idx);
 
+  if (
+    !hasD2 &&
+    ["REACHED_D2", "UNLOADING_START_D2", "UNLOADING_END_D2"].includes(desired)
+  ) {
+    throw new Error("D2 not applicable for single order");
+  }
 
   validateTransition(currentStatus, desired);
 // ✅ WAREHOUSE REACHED → location validation
@@ -395,18 +386,22 @@ if (desired === "WAREHOUSE_REACHED") {
   let newIdx = idx;
   let newDistributors = distributors;
 
-  // ✅ REACHED STOP (Move index AFTER reaching)
-  if (String(desired).startsWith("REACHED_STOP_")) {
+  if (desired === "REACHED_D1" || desired === "REACHED_D2") {
     if (!stop) throw new Error("No distributor stop found");
 
-    // Location validation
     if (!force) {
+      if (!isFiniteLatLng(stop.lat, stop.lng)) {
+        throw new Error("Distributor location missing or invalid");
+      }
+      if (!isFiniteLatLng(currentLat, currentLng)) {
+        throw new Error("currentLat/currentLng required");
+      }
+
       const check = await validateDriverReach30m({
         orderId,
         currentLat,
         currentLng,
       });
-
       if (!check.within) {
         return {
           ok: false,
@@ -419,43 +414,26 @@ if (desired === "WAREHOUSE_REACHED") {
       }
     }
 
-    // Save reachedAt
     newDistributors = [...newDistributors];
-    newDistributors[idx] = {
-      ...newDistributors[idx],
-      reachedAt: toIsoNow(),
-    };
-
-    
+    newDistributors[idx] = { ...newDistributors[idx], reachedAt: toIsoNow() };
   }
 
+  if (desired === "UNLOADING_START_D1" || desired === "UNLOADING_START_D2") {
+    if (!stop) throw new Error("No distributor stop found");
+    newDistributors = [...newDistributors];
+    newDistributors[idx] = { ...newDistributors[idx], unloadStartAt: toIsoNow() };
+  }
 
-  // ✅ UNLOADING START (Do NOT move index)
-  if (String(desired).startsWith("UNLOADING_START_STOP_")) {
+  if (desired === "UNLOADING_END_D1" || desired === "UNLOADING_END_D2") {
     if (!stop) throw new Error("No distributor stop found");
 
     newDistributors = [...newDistributors];
-    newDistributors[idx] = {
-      ...newDistributors[idx],
-      unloadStartAt: toIsoNow(),
-    };
-  }
-  // ✅ UNLOADING END (Do NOT move index)
-  if (String(desired).startsWith("UNLOADING_END_STOP_")) {
-    if (!stop) throw new Error("No distributor stop found");
+    newDistributors[idx] = { ...newDistributors[idx], unloadEndAt: toIsoNow() };
 
-    newDistributors = [...newDistributors];
-    newDistributors[idx] = {
-      ...newDistributors[idx],
-      unloadEndAt: toIsoNow(),
-    };
-
-    // ✅ Move to next stop ONLY after reaching
     if (idx + 1 < newDistributors.length) {
       newIdx = idx + 1;
     }
   }
-
 
   const tripClosed =
     desired === "WAREHOUSE_REACHED" || desired === "DELIVERY_COMPLETED";
@@ -464,7 +442,7 @@ if (desired === "WAREHOUSE_REACHED") {
     new UpdateCommand({
       TableName: ORDERS_TABLE,
       Key: orderKey(orderId),
-      ConditionExpression: "attribute_exists(#s) AND #s = :current",
+      ConditionExpression: "#s = :current",
       UpdateExpression:
         "SET #s = :next, distributors = :d, currentDistributorIndex = :i, tripClosed = :c, updatedAt = :u",
       ExpressionAttributeNames: { "#s": "status" },
@@ -502,7 +480,8 @@ if (desired === "WAREHOUSE_REACHED") {
   });
   return {
     ok: true,
-    reached: String(desired).startsWith("REACHED_STOP_") ? true : undefined,
+    reached:
+      desired === "REACHED_D1" || desired === "REACHED_D2" ? true : undefined,
     order: after,
   };
 }

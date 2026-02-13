@@ -151,11 +151,9 @@ function prettyTime(ev) {
 
 /* ✅ Build Neat Timeline (alias + gap fix) */
 function buildNeatTimeline(events = [], opts = {}) {
-  const totalStops = Number(opts.totalStops || 1);
+  const includeD2 = Boolean(opts.includeD2);
 
-  /* ---------------- Base Steps (Before Stops) ---------------- */
-
-  const BASE_STEPS = [
+  const STEPS_ALL = [
     { key: "ORDER_CREATED", label: "Order Created" },
     { key: "ORDER_CONFIRMED", label: "Order Confirmed" },
     { key: "SLOT_BOOKING", label: "Slot Booking" },
@@ -165,69 +163,37 @@ function buildNeatTimeline(events = [], opts = {}) {
     { key: "LOADING_COMPLETED", label: "Loading Completed" },
     { key: "DRIVER_ASSIGNED", label: "Driver Assigned" },
     { key: "DRIVE_STARTED", label: "Drive Started" },
-  ];
+    { key: "REACHED_D1", label: "Reached D1" },
+    { key: "UNLOADING_START_D1", label: "Unloading Start D1" },
+    { key: "UNLOADING_END_D1", label: "Unloading End D1" },
 
-  /* ---------------- Dynamic Stop Steps ---------------- */
+    // ✅ D2 steps (single order la hide)
+    { key: "REACHED_D2", label: "Reached D2" },
+    { key: "UNLOADING_START_D2", label: "Unloading Start D2" },
+    { key: "UNLOADING_END_D2", label: "Unloading End D2" },
 
-  function buildStopSteps(count) {
-    const steps = [];
-
-    for (let i = 0; i < count; i++) {
-      const stopNo = i + 1;
-
-      steps.push(
-        {
-          key: `REACHED_STOP_${stopNo}`,
-          label: `Reached Stop ${stopNo}`,
-        },
-        {
-          key: `UNLOADING_START_STOP_${stopNo}`,
-          label: `Unloading Start Stop ${stopNo}`,
-        },
-        {
-          key: `UNLOADING_END_STOP_${stopNo}`,
-          label: `Unloading End Stop ${stopNo}`,
-        }
-      );
-    }
-
-    return steps;
-  }
-
-  /* ---------------- Final Steps ---------------- */
-
-  const END_STEPS = [
     { key: "WAREHOUSE_REACHED", label: "Warehouse Reached" },
     { key: "DELIVERY_COMPLETED", label: "Delivery Completed" },
   ];
-
-  const STEPS = [
-    ...BASE_STEPS,
-    ...buildStopSteps(totalStops),
-    ...END_STEPS,
-  ];
-
-  /* ---------------- Event Alias ---------------- */
+  
+  const STEPS = includeD2
+    ? STEPS_ALL
+    : STEPS_ALL.filter(
+        (s) =>
+          !["REACHED_D2", "UNLOADING_START_D2", "UNLOADING_END_D2"].includes(
+            s.key
+          )
+      );
 
   const ALIAS = {
     LOAD_START: "LOADING_START",
     LOAD_END: "LOADING_COMPLETED",
     LOADING_STARTED: "LOADING_START",
     DRIVER_STARTED: "DRIVE_STARTED",
-
-    // 🔥 Backward compatibility for old D1/D2 events
-    REACHED_D1: "REACHED_STOP_1",
-    REACHED_D2: "REACHED_STOP_2",
-    UNLOADING_START_D1: "UNLOADING_START_STOP_1",
-    UNLOADING_START_D2: "UNLOADING_START_STOP_2",
-    UNLOADING_END_D1: "UNLOADING_END_STOP_1",
-    UNLOADING_END_D2: "UNLOADING_END_STOP_2",
   };
 
-  /* ---------------- Keep Latest Event per Key ---------------- */
-
+  // keep latest event per key
   const map = {};
-
   for (const e of events) {
     if (!e?.event) continue;
 
@@ -243,10 +209,8 @@ function buildNeatTimeline(events = [], opts = {}) {
     }
   }
 
-  /* ---------------- Gap Fix Logic (UNCHANGED) ---------------- */
-
+  // gap fix
   let maxDoneIdx = -1;
-
   STEPS.forEach((s, idx) => {
     if (map[s.key]) maxDoneIdx = Math.max(maxDoneIdx, idx);
   });
@@ -255,7 +219,6 @@ function buildNeatTimeline(events = [], opts = {}) {
     const ev = map[s.key] || null;
 
     let status = "UPCOMING";
-
     if (idx < maxDoneIdx) status = "DONE";
     if (ev) status = "DONE";
     if (!ev && idx === maxDoneIdx + 1) status = "CURRENT";
@@ -271,7 +234,6 @@ function buildNeatTimeline(events = [], opts = {}) {
     };
   });
 }
-
 
 /* ✅ Fetch Raw Timeline */
 async function fetchRawTimeline(orderId) {
@@ -454,16 +416,11 @@ if (!allowedRoles.includes(role)) {
 
     const uiMeta = await buildMeta(meta);
 
-    // ✅ totalStops = number of distributors in this order
-    const totalStops = Array.isArray(meta.distributors)
-      ? meta.distributors.length
-      : 1;
+    // ✅ single => D2 hide | merged => D2 show
+    const includeD2 = Boolean(uiMeta.isMerged && uiMeta.childOrderIds.length > 1);
 
     const rawTimeline = await fetchRawTimeline(targetOrderId);
-
-    // ✅ build neat timeline dynamically
-    let neatTimeline = buildNeatTimeline(rawTimeline, { totalStops });
-
+    let neatTimeline = buildNeatTimeline(rawTimeline, { includeD2 });
 
     // ✅ mergedனா common timeline should start AFTER slot booking completed
     if (uiMeta.isMerged) neatTimeline = trimPostMerge(neatTimeline);
@@ -505,16 +462,11 @@ export async function getOrderTimelineNeat(req, res) {
       return res.status(404).json({ ok: false, message: "Order not found" });
 
     const uiMeta = await buildMeta(meta);
-    // ✅ totalStops = number of distributors
-    const totalStops = Array.isArray(meta.distributors)
-      ? meta.distributors.length
-      : 1;
+    const includeD2 = Boolean(uiMeta.isMerged && uiMeta.childOrderIds.length > 1);
 
     const rawTimeline = await fetchRawTimeline(targetOrderId);
+    let neatTimeline = buildNeatTimeline(rawTimeline, { includeD2 });
 
-    // ✅ dynamic timeline for N stops
-    let neatTimeline = buildNeatTimeline(rawTimeline, { totalStops });
-    
     if (uiMeta.isMerged) neatTimeline = trimPostMerge(neatTimeline);
 
     const preMerge = await buildPreMergeIfNeeded(uiMeta);
