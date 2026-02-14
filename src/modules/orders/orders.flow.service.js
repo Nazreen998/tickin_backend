@@ -716,23 +716,22 @@ export const loadingStart = async (req, res) => {
     if (!key)
       return res.status(400).json({ ok: false, message: "flowKey required" });
 
-    const orderIds = req.body.orderId
-  ? [req.body.orderId]
-  : await resolveOrderIdsFromFlowKey(key);
+    const targetOrderId = await resolveTargetOrderId(key);
 
-// 🔥 ADD HERE
-let fullOrderId =
-  orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
-
-if (!fullOrderId && orderIds.length > 0) {
-  const base = normalizeOrderId(orderIds[0]);
-  if (base && !base.startsWith("ORD_FULL_")) {
-    fullOrderId = `ORD_FULL_${base.replace(/^ORD/, "")}`;
-    orderIds.unshift(fullOrderId);
-  }
+if (!targetOrderId) {
+  return res.status(400).json({
+    ok: false,
+    message: "Invalid flowKey",
+  });
 }
 
-const vehicleOk = await ensureVehicleSelected(orderIds);
+const fullOrderId = targetOrderId;
+
+// ensure FULL is first
+if (!orderIds.includes(fullOrderId)) {
+  orderIds.unshift(fullOrderId);
+}
+const vehicleOk = await ensureVehicleSelected([fullOrderId]);
 
     if (!vehicleOk) {
       return res.status(400).json({
@@ -790,18 +789,24 @@ export const loadingEnd = async (req, res) => {
   : await resolveOrderIdsFromFlowKey(key);
 
 // 🔥 ADD HERE
-let fullOrderId =
-  orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
+const targetOrderId = await resolveTargetOrderId(key);
 
-if (!fullOrderId && orderIds.length > 0) {
-  const base = normalizeOrderId(orderIds[0]);
-  if (base && !base.startsWith("ORD_FULL_")) {
-    fullOrderId = `ORD_FULL_${base.replace(/^ORD/, "")}`;
-    orderIds.unshift(fullOrderId);
-  }
+if (!targetOrderId) {
+  return res.status(400).json({
+    ok: false,
+    message: "Invalid flowKey",
+  });
 }
 
-const vehicleOk = await ensureVehicleSelected(orderIds);
+const fullOrderId = targetOrderId;
+
+// ensure FULL is first
+if (!orderIds.includes(fullOrderId)) {
+  orderIds.unshift(fullOrderId);
+}
+
+
+const vehicleOk = await ensureVehicleSelected([fullOrderId]);
 
     if (!vehicleOk) {
       return res.status(400).json({
@@ -910,9 +915,6 @@ export const assignDriver = async (req, res) => {
     /* --------------------------------------------------
        2️⃣ Find / ensure FULL order
     -------------------------------------------------- */
-    let fullOrderId =
-      orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
-
     if (!fullOrderId) {
       const base = orderIds[0];
       fullOrderId = base

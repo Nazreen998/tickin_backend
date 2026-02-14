@@ -237,17 +237,10 @@ const bookings = bookingsRes.Items || [];
        🔥 FIX: do NOT remove FULL-only flows when qty = 0
     -------------------------------------------------- */
     const finalOrders = Object.values(grouped)
-      .filter((o) => {
-        if (String(o.flowKey).startsWith("LOC#")) return false;
-
-        const qty = Number(o.totalQty || 0);
-        const hasOrders = (o.orderIds || []).length > 0;
-
-        // allow FULL-only flows
-        if (qty <= 0 && !hasOrders) return false;
-
-        return true;
-      })
+     .filter((o) => {
+  if (String(o.flowKey).startsWith("LOC#")) return false;
+  return true;
+})
       .map((g) => {
         const d2 = (g.distributors || []).slice(0, 2);
         const names = d2
