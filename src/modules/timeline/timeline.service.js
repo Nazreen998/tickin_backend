@@ -3,6 +3,7 @@ import { QueryCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import timezone from "dayjs/plugin/timezone.js";
+import { resolveTargetOrderId } from "../../utils/order.helper.js";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -14,42 +15,6 @@ const TABLE_ORDERS = process.env.ORDERS_TABLE || "tickin_orders";
 const TABLE_SLOT_TIMELINE =
   process.env.TABLE_SLOT_TIMELINE || "tickin_timeline_events";
 const TABLE_USERS = process.env.USERS_TABLE || "tickin_users";
-
-/* ✅ Resolve FULL OrderId if HALF merged */
-async function resolveTargetOrderId(orderId) {
-  if (!orderId) return null;
-
-  const oid = String(orderId).trim();
-  if (!oid) return null;
-
-  // ✅ If ORDxxxx passed, prefer ORD_FULL_xxxx if exists
-  if (oid.startsWith("ORD") && !oid.startsWith("ORD_FULL_")) {
-    const fullKey = `ORD_FULL_${oid.replace(/^ORD/, "")}`;
-
-    const fg = await ddb.send(
-      new GetCommand({
-        TableName: TABLE_ORDERS,
-        Key: { pk: `ORDER#${fullKey}`, sk: "META" },
-      })
-    );
-
-    if (fg.Item) return fullKey;
-  }
-
-  // ✅ normal mergedIntoOrderId resolution
-  const res = await ddb.send(
-    new GetCommand({
-      TableName: TABLE_ORDERS,
-      Key: { pk: `ORDER#${oid}`, sk: "META" },
-    })
-  );
-
-  if (!res.Item) return oid;
-
-  if (res.Item.mergedIntoOrderId) return String(res.Item.mergedIntoOrderId);
-
-  return oid;
-}
 
 function normalizeCode(v) {
   return String(v || "").trim().toUpperCase();

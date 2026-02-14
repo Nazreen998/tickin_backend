@@ -2,6 +2,7 @@
 import { ddb } from "../../config/dynamo.js";
 import { GetCommand, UpdateCommand, PutCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import { addTimelineEvent } from "../timeline/timeline.helper.js"; 
+import { resolveTargetOrderId } from "../../utils/order.helper.js";
 
 const ORDERS_TABLE = process.env.ORDERS_TABLE || "tickin_orders";
 const USERS_TABLE = process.env.USERS_TABLE || "tickin_users";
@@ -664,23 +665,14 @@ export const vehicleSelected = async (req, res) => {
       });
     }
 
-    const orderIds = await resolveOrderIdsFromFlowKey(key);
+    const fullOrderId = await resolveTargetOrderId(key);
 
-    let fullOrderId =
-      orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
-
-    if (!fullOrderId && orderIds.length > 0) {
-      const base = normalizeOrderId(orderIds[0]);
-      fullOrderId = `ORD_FULL_${base.replace(/^ORD/, "")}`;
-    }
-
-    if (!fullOrderId) {
-      return res.status(400).json({
-        ok: false,
-        message: "ORD_FULL order required",
-      });
-    }
-
+if (!fullOrderId || !String(fullOrderId).startsWith("ORD_FULL_")) {
+  return res.status(400).json({
+    ok: false,
+    message: "ORD_FULL order required",
+  });
+}
     await updateOrders(fullOrderId, {
       UpdateExpression: `
         SET #s = :st,
@@ -716,22 +708,30 @@ export const loadingStart = async (req, res) => {
     if (!key)
       return res.status(400).json({ ok: false, message: "flowKey required" });
 
+    // ✅ always resolve orderIds list
+    const orderIds = req.body.orderId
+      ? [req.body.orderId]
+      : await resolveOrderIdsFromFlowKey(key);
+
+    // ✅ resolve FULL master
     const targetOrderId = await resolveTargetOrderId(key);
 
-if (!targetOrderId) {
-  return res.status(400).json({
-    ok: false,
-    message: "Invalid flowKey",
-  });
-}
+    if (!targetOrderId) {
+      return res.status(400).json({
+        ok: false,
+        message: "Invalid flowKey",
+      });
+    }
 
-const fullOrderId = targetOrderId;
+    const fullOrderId = targetOrderId;
 
-// ensure FULL is first
-if (!orderIds.includes(fullOrderId)) {
-  orderIds.unshift(fullOrderId);
-}
-const vehicleOk = await ensureVehicleSelected([fullOrderId]);
+    // ensure FULL is first
+    if (!orderIds.includes(fullOrderId)) {
+      orderIds.unshift(fullOrderId);
+    }
+
+    // ✅ vehicle check only on FULL
+    const vehicleOk = await ensureVehicleSelected([fullOrderId]);
 
     if (!vehicleOk) {
       return res.status(400).json({
@@ -740,6 +740,7 @@ const vehicleOk = await ensureVehicleSelected([fullOrderId]);
       });
     }
 
+    // ✅ update FULL order only
     await updateOrders(fullOrderId, {
       UpdateExpression:
         "SET #s = :st, loadingStarted = :ls, loadingStartedAt = :t",
@@ -751,6 +752,7 @@ const vehicleOk = await ensureVehicleSelected([fullOrderId]);
       },
     });
 
+    // ✅ timeline update for all
     for (const oid of orderIds) {
       await addTimelineEvent({
         orderId: oid,
@@ -772,7 +774,6 @@ const vehicleOk = await ensureVehicleSelected([fullOrderId]);
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
-
 /* ============================================================
    ✅ LOADING END
 ============================================================ */
