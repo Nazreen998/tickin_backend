@@ -152,25 +152,46 @@ if (oid.startsWith("ORD") && !oid.startsWith("ORD_FULL_")) {
    ✅ GUARD: Ensure vehicle selected for all orders
    (FULL order might have vehicleNo; child might have vehicleType)
 ============================================================ */
-async function ensureVehicleSelected(orderIds) {
-  for (const raw of orderIds) {
-    const oid = normalizeOrderId(raw);
-    if (!oid || !oid.startsWith("ORD_FULL_")) continue;
+async function ensureVehicleSelected(orderIds = []) {
+  if (!Array.isArray(orderIds) || orderIds.length === 0) return false;
 
-    const g = await ddb.send(
-      new GetCommand({
-        TableName: ORDERS_TABLE,
-        Key: { pk: `ORDER#${oid}`, sk: "META" },
-      })
-    );
+  // always check first order (FULL must be first)
+  const fullOrderId = String(orderIds[0] || "").trim();
+  if (!fullOrderId) return false;
 
-    const item = g.Item;
-    if (item?.vehicleNo || item?.vehicleType) {
-      return true;
-    }
-  }
+  const res = await ddb.send(
+    new GetCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
+    })
+  );
+
+  const meta = res.Item;
+  if (!meta) return false;
+
+  const st = String(meta.status || "").toUpperCase();
+  const vehicleNo = meta.vehicleNo || meta.vehicleNumber || null;
+  const vehicleType = meta.vehicleType || null;
+
+  // if already in loading / driver assigned etc also allow
+  const okStatus = [
+    "VEHICLE_SELECTED",
+    "LOADING_STARTED",
+    "LOADING_COMPLETED",
+    "DRIVER_ASSIGNED",
+    "OUT_FOR_DELIVERY",
+    "DELIVERED",
+    "DELIVERY_COMPLETED",
+  ];
+
+  if (okStatus.includes(st)) return true;
+
+  // fallback check
+  if (vehicleNo || vehicleType) return true;
+
   return false;
 }
+
 /* ============================================================
    ✅ GET FLOW (flowKey = orderId OR mergeKey OR ORD_FULL_)
    ✅ FIX: GEO/FULL flows totals + distributors should match BOOKING (no mismatch)
@@ -673,20 +694,25 @@ if (!fullOrderId || !String(fullOrderId).startsWith("ORD_FULL_")) {
     message: "ORD_FULL order required",
   });
 }
-    await updateOrders(fullOrderId, {
-      UpdateExpression: `
-        SET #s = :st,
-            vehicleType = :vt,
-            vehicleNo = :vn
-      `,
-      ExpressionAttributeNames: { "#s": "status" },
-      ExpressionAttributeValues: {
-        ":st": "VEHICLE_SELECTED",
-        ":vt": vehicleType || "FULL",
-        ":vn": vehicleNo || null,
-      },
-    });
-
+    await ddb.send(
+  new UpdateCommand({
+    TableName: ORDERS_TABLE,
+    Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
+    UpdateExpression: `
+      SET #s = :st,
+          vehicleType = :vt,
+          vehicleNo = :vn,
+          updatedAt = :u
+    `,
+    ExpressionAttributeNames: { "#s": "status" },
+    ExpressionAttributeValues: {
+      ":st": "VEHICLE_SELECTED",
+      ":vt": vehicleType || "FULL",
+      ":vn": vehicleNo || null,
+      ":u": new Date().toISOString(),
+    },
+  })
+);
     return res.json({
       ok: true,
       message: "✅ Vehicle selected",
@@ -912,6 +938,8 @@ export const assignDriver = async (req, res) => {
     }
 
     orderIds = orderIds.map(normalizeOrderId).filter(Boolean);
+    let fullOrderId =
+  orderIds.find((x) => String(x).startsWith("ORD_FULL_")) || null;
 
     /* --------------------------------------------------
        2️⃣ Find / ensure FULL order
