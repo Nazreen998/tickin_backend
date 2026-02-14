@@ -750,10 +750,8 @@ export const confirmOrder = async (req, res) => {
     },
   })
 );
- const fullOrderId = `ORD_FULL_${orderId.replace(/^ORD/, "")}`;
-
 await addTimelineEvent({
-  orderId: fullOrderId,
+  orderId,
   event: "ORDER_CONFIRMED",
   by: user.mobile,
   byUserName: user?.name || user?.userName || null,
@@ -779,105 +777,11 @@ await addTimelineEvent({
         amount,
         orderId,
       });
-      // ✅ FIX: If FULL slot for SINGLE order,
-// create a BOOKINGS_TABLE entry for ORD_FULL_ also
-if (booked?.type === "FULL") {
-  const fullOrderId = `ORD_FULL_${orderId.replace(/^ORD/, "")}`;
-
-  const bookingPk = `COMPANY#${companyCode}#DATE#${slot.date}`;
-
-  // create a mirror booking for FULL orderId
-  await ddb.send(
-    new PutCommand({
-      TableName: BOOKINGS_TABLE,
-      Item: {
-        pk: bookingPk,
-        sk: `SLOT#${slot.time}#POS#${slot.pos}#ORDER#${fullOrderId}`,
-        companyCode,
-        date: slot.date,
-        slotDate: slot.date,
-        slotTime: slot.time,
-        slotPos: slot.pos,
-        slotVehicleType: "FULL",
-        vehicleType: "FULL",
-
-        orderId: fullOrderId,
-
-        distributorCode: order.distributorId || null,
-        distributorName: order.distributorName || null,
-
-        amount: Number(amount || 0),
-        status: "CONFIRMED",
-        isActive: true,
-
-        createdAt: new Date().toISOString(),
-        createdBy: user.mobile || null,
-        mergeKey: null,
-        mergedIntoOrderId: null,
-        type: "FULL",
-      },
-    })
-  );
-}
 
 const slotIdValue =
   booked?.bookingId ||
   `${companyCode}#${slot.date}#${slot.time}#${booked?.type || "FULL"}#${slot.pos}`;
     
-      // 🔥 FIX: SINGLE FULL ORDER → ensure ORD_FULL has data
-// 🔥 FIX: SINGLE FULL ORDER → ensure ORD_FULL has proper distributors[]
-if (booked?.type === "FULL") {
-  const fullOrderId = `ORD_FULL_${orderId.replace(/^ORD/, "")}`;
-
-  const fg = await ddb.send(
-    new GetCommand({
-      TableName: ORDERS_TABLE,
-      Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
-    })
-  );
-
-  if (!fg.Item) {
-    // ✅ BUILD distributors[] PROPERLY
-    const fullDistributors =
-      Array.isArray(order.distributors) && order.distributors.length
-        ? order.distributors
-       : [{
-            distributorId: order.distributorId,
-            distributorName: order.distributorName,
-          }];
-
-    await ddb.send(
-      new PutCommand({
-        TableName: ORDERS_TABLE,
-        Item: {
-          pk: `ORDER#${fullOrderId}`,
-          sk: "META",
-          orderId: fullOrderId,
-          status: "CONFIRMED",
-          mergeKey: null,
-
-          distributorId: order.distributorId,
-          distributorName: order.distributorName,
-
-          items: order.items || [],
-          totalAmount: Number(order.totalAmount || order.grandTotal || 0),
-          totalQty: Number(order.totalQty || 0),
-
-          distributors: fullDistributors, // ✅ MAIN FIX
-
-          currentDistributorIndex: 0,
-          slotBooked: true,
-          slotId: slotIdValue,
-          slotDate: slot.date,
-          slotTime: slot.time,
-          slotPos: slot.pos,
-          slotVehicleType: "FULL",
-          createdAt: new Date().toISOString(),
-        },
-      })
-    );
-  }
-}
   slotBooked = true;
       slotDetails = {
         companyCode,

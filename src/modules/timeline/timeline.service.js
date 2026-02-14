@@ -150,10 +150,21 @@ function prettyTime(ev) {
 }
 
 /* ✅ Build Neat Timeline (alias + gap fix) */
+/* ✅ Build Neat Timeline (alias + gap fix) */
 function buildNeatTimeline(events = [], opts = {}) {
-  const includeD2 = Boolean(opts.includeD2);
+  const stopCount = Math.max(1, Number(opts.stopCount || 1));
 
-  const STEPS_ALL = [
+  // ✅ Dynamic D1..Dn steps
+  const STOP_STEPS = [];
+  for (let i = 1; i <= stopCount; i++) {
+    STOP_STEPS.push(
+      { key: `REACHED_D${i}`, label: `Reached D${i}` },
+      { key: `UNLOADING_START_D${i}`, label: `Unloading Start D${i}` },
+      { key: `UNLOADING_END_D${i}`, label: `Unloading End D${i}` }
+    );
+  }
+
+  const STEPS = [
     { key: "ORDER_CREATED", label: "Order Created" },
     { key: "ORDER_CONFIRMED", label: "Order Confirmed" },
     { key: "SLOT_BOOKING", label: "Slot Booking" },
@@ -163,27 +174,12 @@ function buildNeatTimeline(events = [], opts = {}) {
     { key: "LOADING_COMPLETED", label: "Loading Completed" },
     { key: "DRIVER_ASSIGNED", label: "Driver Assigned" },
     { key: "DRIVE_STARTED", label: "Drive Started" },
-    { key: "REACHED_D1", label: "Reached D1" },
-    { key: "UNLOADING_START_D1", label: "Unloading Start D1" },
-    { key: "UNLOADING_END_D1", label: "Unloading End D1" },
 
-    // ✅ D2 steps (single order la hide)
-    { key: "REACHED_D2", label: "Reached D2" },
-    { key: "UNLOADING_START_D2", label: "Unloading Start D2" },
-    { key: "UNLOADING_END_D2", label: "Unloading End D2" },
+    ...STOP_STEPS,
 
     { key: "WAREHOUSE_REACHED", label: "Warehouse Reached" },
     { key: "DELIVERY_COMPLETED", label: "Delivery Completed" },
   ];
-  
-  const STEPS = includeD2
-    ? STEPS_ALL
-    : STEPS_ALL.filter(
-        (s) =>
-          !["REACHED_D2", "UNLOADING_START_D2", "UNLOADING_END_D2"].includes(
-            s.key
-          )
-      );
 
   const ALIAS = {
     LOAD_START: "LOADING_START",
@@ -234,7 +230,6 @@ function buildNeatTimeline(events = [], opts = {}) {
     };
   });
 }
-
 /* ✅ Fetch Raw Timeline */
 async function fetchRawTimeline(orderId) {
   const out = await ddb.send(
@@ -363,7 +358,7 @@ async function buildPreMergeIfNeeded(uiMeta) {
   const pre = {};
   for (const kidId of kids) {
     const childRaw = await fetchRawTimeline(kidId);
-    const childNeat = buildNeatTimeline(childRaw, { includeD2: false }); // child always single
+    const childNeat = buildNeatTimeline(childRaw, { stopCount: 1 });// child always single
     pre[kidId] = trimPreMerge(childNeat);
   }
   return pre;
@@ -416,13 +411,17 @@ if (!allowedRoles.includes(role)) {
 
     const uiMeta = await buildMeta(meta);
 
-    // ✅ single => D2 hide | merged => D2 show
-    const includeD2 = Boolean(uiMeta.isMerged && uiMeta.childOrderIds.length > 1);
+  // ✅ stopCount = how many distributors / child orders
+const stopCount =
+  uiMeta?.isMerged && Array.isArray(uiMeta.childOrderIds) && uiMeta.childOrderIds.length
+    ? uiMeta.childOrderIds.length
+    : 1;
 
-    const rawTimeline = await fetchRawTimeline(targetOrderId);
-    let neatTimeline = buildNeatTimeline(rawTimeline, { includeD2 });
+const rawTimeline = await fetchRawTimeline(targetOrderId);
+let neatTimeline = buildNeatTimeline(rawTimeline, { stopCount });
 
-    // ✅ mergedனா common timeline should start AFTER slot booking completed
+
+    // ✅ merged common timeline should start AFTER slot booking completed
     if (uiMeta.isMerged) neatTimeline = trimPostMerge(neatTimeline);
 
     const preMerge = await buildPreMergeIfNeeded(uiMeta);
@@ -462,10 +461,14 @@ export async function getOrderTimelineNeat(req, res) {
       return res.status(404).json({ ok: false, message: "Order not found" });
 
     const uiMeta = await buildMeta(meta);
-    const includeD2 = Boolean(uiMeta.isMerged && uiMeta.childOrderIds.length > 1);
+    const stopCount =
+  uiMeta?.isMerged && Array.isArray(uiMeta.childOrderIds) && uiMeta.childOrderIds.length
+    ? uiMeta.childOrderIds.length
+    : 1;
 
-    const rawTimeline = await fetchRawTimeline(targetOrderId);
-    let neatTimeline = buildNeatTimeline(rawTimeline, { includeD2 });
+const rawTimeline = await fetchRawTimeline(targetOrderId);
+let neatTimeline = buildNeatTimeline(rawTimeline, { stopCount });
+
 
     if (uiMeta.isMerged) neatTimeline = trimPostMerge(neatTimeline);
 

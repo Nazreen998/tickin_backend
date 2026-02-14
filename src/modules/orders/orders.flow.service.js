@@ -201,69 +201,6 @@ export const getOrderFlowByKey = async (req, res) => {
        1️⃣ Resolve orderIds from ANY key
     -------------------------------------------------- */
     let orderIds = await resolveOrderIdsFromFlowKey(key);
-
-    /* --------------------------------------------------
-       2️⃣ Ensure ORD_FULL META exists
-       (only if ORD_FULL is inside orderIds)
-    -------------------------------------------------- */
-    for (const raw of orderIds) {
-      const oid = normalizeOrderId(raw);
-      if (!oid || !oid.startsWith("ORD_FULL_")) continue;
-
-      const fg = await ddb.send(
-        new GetCommand({
-          TableName: ORDERS_TABLE,
-          Key: { pk: `ORDER#${oid}`, sk: "META" },
-        })
-      );
-
-      if (!fg.Item) {
-        const baseOrd = `ORD${oid.replace("ORD_FULL_", "")}`;
-
-        const child = await ddb.send(
-          new GetCommand({
-            TableName: ORDERS_TABLE,
-            Key: { pk: `ORDER#${baseOrd}`, sk: "META" },
-          })
-        );
-
-        if (child.Item) {
-          // 🔥 FIX: create ORD_FULL meta properly
-          await ddb.send(
-            new PutCommand({
-              TableName: ORDERS_TABLE,
-              Item: {
-                pk: `ORDER#${oid}`,
-                sk: "META",
-                orderId: oid,
-                status: child.Item.status || "CONFIRMED",
-                mergeKey: child.Item.mergeKey || null,
-
-                distributorId: child.Item.distributorId || null,
-                distributorName: child.Item.distributorName || null,
-                items: child.Item.items || [],
-
-                totalAmount: Number(child.Item.totalAmount || 0),
-                totalQty: Number(child.Item.totalQty || 0),
-
-                distributors: child.Item.distributors || [],
-                currentDistributorIndex: 0,
-
-                slotBooked: child.Item.slotBooked || false,
-                slotId: child.Item.slotId || null,
-                slotDate: child.Item.slotDate || null,
-                slotTime: child.Item.slotTime || null,
-                slotPos: child.Item.slotPos || null,
-                slotVehicleType: child.Item.slotVehicleType || "FULL",
-
-                createdAt: new Date().toISOString(),
-              },
-            })
-          );
-        }
-      }
-    }
-
     /* --------------------------------------------------
        3️⃣ Fetch all orders META
     -------------------------------------------------- */
@@ -352,21 +289,36 @@ export const getOrderFlowByKey = async (req, res) => {
     /* --------------------------------------------------
        8️⃣ Distributors
     -------------------------------------------------- */
-    const distributors = calcOrders.map((o, idx) => ({
-      label: `D${idx + 1}`,
-      distributorId: o.distributorId || null,
-      distributorName: o.distributorName || null,
-      orderId: o.orderId || null,
-      amount: Number(o.totalAmount || o.grandTotal || o.total || 0),
-      qty: Number(o.totalQty || o.qty || 0),
-    }));
+// ✅ Distributors (Dynamic Dn)
+let distributorSource = calcOrders;
 
-    const distributorDisplay =
-      distributors.length <= 1
-        ? distributors[0]?.distributorName || "-"
-        : distributors
-            .map((d) => `${d.label}: ${d.distributorName || "-"}`)
-            .join(" | ");
+// If FULL order has mergedOrderIds, use that exact order sequence
+if (fullOrder && Array.isArray(fullOrder.mergedOrderIds) && fullOrder.mergedOrderIds.length) {
+  distributorSource = [];
+  for (const cid of fullOrder.mergedOrderIds) {
+    const g = await ddb.send(
+      new GetCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${cid}`, sk: "META" },
+      })
+    );
+    if (g.Item) distributorSource.push(g.Item);
+  }
+}
+
+const distributors = distributorSource.map((o, idx) => ({
+  label: `D${idx + 1}`,
+  distributorId: o.distributorId || null,
+  distributorName: o.distributorName || null,
+  orderId: o.orderId || null,
+  amount: Number(o.totalAmount || o.grandTotal || o.total || 0),
+  qty: Number(o.totalQty || o.qty || 0),
+}));
+
+const distributorDisplay =
+  distributors.length <= 1
+    ? distributors[0]?.distributorName || "-"
+    : distributors.map((d) => `${d.label}: ${d.distributorName || "-"}`).join(" | ");
 
     /* --------------------------------------------------
        9️⃣ DRIVER DETAILS (🔥 MAIN FIX)
@@ -427,6 +379,256 @@ export const getOrderFlowByKey = async (req, res) => {
     });
   } catch (err) {
     console.error("getOrderFlowByKey error", err);
+    return res.status(500).json({ ok: false, message: err.message });
+  }
+};
+export const slotCompleted = async (req, res) => {
+  try {
+    const key = req.body.flowKey || req.body.mergeKey || req.body.orderId;
+    const user = req.user;
+
+    if (!key)
+      return res.status(400).json({ ok: false, message: "flowKey required" });
+
+    // 1️⃣ Resolve orders
+    let orderIds = await resolveOrderIdsFromFlowKey(key);
+    orderIds = orderIds.map(normalizeOrderId).filter(Boolean);
+
+    // only base orders
+    const childOrderIds = orderIds.filter((x) => !String(x).startsWith("ORD_FULL_"));
+
+    if (!childOrderIds.length)
+      return res.status(400).json({ ok: false, message: "No child orders found" });
+
+    // 2️⃣ Build FULL id
+    const base = childOrderIds[0];
+    const fullOrderId = `ORD_FULL_${String(base).replace(/^ORD/, "")}`;
+
+    // 3️⃣ Read first child meta (for slot info)
+    const baseRes = await ddb.send(
+      new GetCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${base}`, sk: "META" },
+      })
+    );
+
+    const baseMeta = baseRes.Item;
+    if (!baseMeta)
+      return res.status(404).json({ ok: false, message: "Base order meta missing" });
+
+    const slotDate = baseMeta.slotDate || baseMeta.slot?.date || null;
+    const slotTime = baseMeta.slotTime || baseMeta.slot?.time || null;
+    const slotPos = baseMeta.slotPos || baseMeta.slot?.pos || null;
+
+    if (!slotDate || !slotTime || !slotPos) {
+      return res.status(400).json({
+        ok: false,
+        message: "Slot not booked. Cannot complete slot.",
+      });
+    }
+
+    const companyCode = baseMeta.companyCode || "VAGR_IT";
+    const bookingPk = `COMPANY#${companyCode}#DATE#${slotDate}`;
+
+    // 4️⃣ Create FULL meta if not exists
+    const fg = await ddb.send(
+      new GetCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
+      })
+    );
+
+    if (!fg.Item) {
+      // calculate totals from child orders
+      let totalQty = 0;
+      let totalAmount = 0;
+      const distributors = [];
+
+      for (const cid of childOrderIds) {
+        const cRes = await ddb.send(
+          new GetCommand({
+            TableName: ORDERS_TABLE,
+            Key: { pk: `ORDER#${cid}`, sk: "META" },
+          })
+        );
+        const o = cRes.Item;
+        if (!o) continue;
+
+        totalQty += Number(o.totalQty || 0);
+        totalAmount += Number(o.totalAmount || 0);
+
+        if (o.distributorId || o.distributorName) {
+          distributors.push({
+            distributorId: o.distributorId || null,
+            distributorName: o.distributorName || null,
+            orderId: o.orderId || cid,
+          });
+        }
+      }
+
+      await ddb.send(
+        new PutCommand({
+          TableName: ORDERS_TABLE,
+          Item: {
+            pk: `ORDER#${fullOrderId}`,
+            sk: "META",
+            orderId: fullOrderId,
+
+            status: "SLOT_BOOKING_COMPLETED",
+
+            isMerged: childOrderIds.length > 1,
+            mergedOrderIds: childOrderIds,
+
+            distributorId: baseMeta.distributorId || null,
+            distributorName: baseMeta.distributorName || null,
+
+            items: baseMeta.items || [],
+            totalQty,
+            totalAmount,
+            grandTotal: totalAmount,
+
+            distributors,
+            currentDistributorIndex: 0,
+
+            slotBooked: true,
+            slotDate,
+            slotTime,
+            slotPos,
+            slotVehicleType: "FULL",
+            vehicleType: "FULL",
+
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        })
+      );
+    }
+
+    // 5️⃣ Update all child orders
+    for (const cid of childOrderIds) {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${cid}`, sk: "META" },
+          UpdateExpression:
+            "SET mergedIntoOrderId = :mid, #s = :st, updatedAt = :u",
+          ExpressionAttributeNames: { "#s": "status" },
+          ExpressionAttributeValues: {
+            ":mid": fullOrderId,
+            ":st": "SLOT_BOOKING_COMPLETED",
+            ":u": new Date().toISOString(),
+          },
+        })
+      );
+    }
+
+    // 6️⃣ BOOKINGS update
+    // child bookings => MERGED
+    for (const cid of childOrderIds) {
+      const childScan = await ddb.send(
+        new ScanCommand({
+          TableName: BOOKINGS_TABLE,
+          FilterExpression: "#pk = :pk AND orderId = :oid",
+          ExpressionAttributeNames: { "#pk": "pk" },
+          ExpressionAttributeValues: {
+            ":pk": bookingPk,
+            ":oid": cid,
+          },
+        })
+      );
+
+      const b = (childScan.Items || [])[0];
+      if (!b) continue;
+
+      await ddb.send(
+        new UpdateCommand({
+          TableName: BOOKINGS_TABLE,
+          Key: { pk: b.pk, sk: b.sk },
+          UpdateExpression:
+            "SET #s = :st, mergedIntoOrderId = :mid, updatedAt = :u, isActive = :t",
+          ExpressionAttributeNames: { "#s": "status" },
+          ExpressionAttributeValues: {
+            ":st": "MERGED",
+            ":mid": fullOrderId,
+            ":u": new Date().toISOString(),
+            ":t": true,
+          },
+        })
+      );
+    }
+
+    // FULL booking => create if missing
+    const fullBookingSk = `SLOT#${slotTime}#POS#${slotPos}#ORDER#${fullOrderId}`;
+
+    const fullBookingRes = await ddb.send(
+      new GetCommand({
+        TableName: BOOKINGS_TABLE,
+        Key: { pk: bookingPk, sk: fullBookingSk },
+      })
+    );
+
+    if (!fullBookingRes.Item) {
+      await ddb.send(
+        new PutCommand({
+          TableName: BOOKINGS_TABLE,
+          Item: {
+            pk: bookingPk,
+            sk: fullBookingSk,
+            companyCode,
+            date: slotDate,
+            slotDate,
+            slotTime,
+            slotPos,
+            slotVehicleType: "FULL",
+            vehicleType: "FULL",
+            orderId: fullOrderId,
+
+            distributorCode: baseMeta.distributorId || null,
+            distributorName: baseMeta.distributorName || null,
+
+            amount: Number(baseMeta.totalAmount || 0),
+            status: "CONFIRMED",
+            isActive: true,
+
+            createdAt: new Date().toISOString(),
+            createdBy: user.mobile || null,
+            mergeKey: baseMeta.mergeKey || null,
+            mergedIntoOrderId: null,
+            type: "FULL",
+          },
+        })
+      );
+    }
+
+    // 7️⃣ Timeline
+    await addTimelineEvent({
+      orderId: fullOrderId,
+      event: "SLOT_BOOKING_COMPLETED",
+      by: user.mobile,
+      byUserName: user?.name || user?.userName || null,
+      role: user?.role || "MANAGER",
+      data: { flowKey: key },
+    });
+
+    for (const cid of childOrderIds) {
+      await addTimelineEvent({
+        orderId: cid,
+        event: "SLOT_BOOKING_COMPLETED",
+        by: user.mobile,
+        byUserName: user?.name || user?.userName || null,
+        role: user?.role || "MANAGER",
+        data: { mergedIntoOrderId: fullOrderId },
+      });
+    }
+
+    return res.json({
+      ok: true,
+      message: "✅ SLOT COMPLETED → ORD_FULL created",
+      fullOrderId,
+      childOrderIds,
+    });
+  } catch (err) {
+    console.error("slotCompleted error:", err);
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
