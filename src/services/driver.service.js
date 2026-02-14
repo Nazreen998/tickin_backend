@@ -276,19 +276,20 @@ export async function getDriverOrders(driverId) {
   ];
 
   const allowed = new Set([
-    "DRIVER_ASSIGNED",
-    "DRIVER_STARTED",
-    "DRIVE_STARTED",
-    "REACHED_D1",
-    "REACHED_D2",
-    "UNLOADING_START_D1",
-    "UNLOADING_START_D2",
-    "UNLOADING_END_D1",
-    "UNLOADING_END_D2",
-    "WAREHOUSE_REACHED",
-    "DELIVERY_COMPLETED",
-  ]);
-
+  "DRIVER_ASSIGNED",
+  "LOADING_STARTED",
+  "LOADING_COMPLETED",
+  "DRIVER_STARTED",
+  "DRIVE_STARTED",
+  "REACHED_D1",
+  "REACHED_D2",
+  "UNLOADING_START_D1",
+  "UNLOADING_START_D2",
+  "UNLOADING_END_D1",
+  "UNLOADING_END_D2",
+  "WAREHOUSE_REACHED",
+  "DELIVERY_COMPLETED",
+]);
   return allItems
     .filter(
       (o) =>
