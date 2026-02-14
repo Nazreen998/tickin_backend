@@ -114,10 +114,12 @@ const bookings = bookingsRes.Items || [];
 
       // pick confirmed booking if exists, else first
        // ✅ Only show CONFIRMED bookings in slot confirmed list
-  const booking = bookingList.find(
-    (b) => String(b.status || "").toUpperCase() === "CONFIRMED"
-  );
-  if (!booking) continue;
+// Always pick latest active booking
+const booking = bookingList.find(
+  (b) => b.isActive !== false
+);
+
+if (!booking) continue;
 
       // 🚫 cancelled / inactive booking
       if (booking.isActive === false) continue;
