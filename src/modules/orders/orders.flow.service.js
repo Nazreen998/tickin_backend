@@ -1156,7 +1156,7 @@ export const assignDriver = async (req, res) => {
           ExpressionAttributeValues: {
             ":st": "DRIVER_ASSIGNED",
             ":mid": fullOrderId,
-            ":d": String(driverId).trim(),
+            ":d": normalizeUserPk(driverId),
             ":dn": driverName,
             ":dm": driverMobile,
             ":vn": vehicleNo || null,
