@@ -686,43 +686,50 @@ export const vehicleSelected = async (req, res) => {
       });
     }
 
-    const fullOrderId = await resolveTargetOrderId(key);
+    const targetOrderId = await resolveTargetOrderId(key);
 
-if (!fullOrderId || !String(fullOrderId).startsWith("ORD_FULL_")) {
-  return res.status(400).json({
-    ok: false,
-    message: "ORD_FULL order required",
-  });
-}
+    if (!targetOrderId) {
+      return res.status(400).json({
+        ok: false,
+        message: "Invalid order",
+      });
+    }
+
     await ddb.send(
-  new UpdateCommand({
-    TableName: ORDERS_TABLE,
-    Key: { pk: `ORDER#${fullOrderId}`, sk: "META" },
-    UpdateExpression: `
-      SET #s = :st,
-          vehicleType = :vt,
-          vehicleNo = :vn,
-          updatedAt = :u
-    `,
-    ExpressionAttributeNames: { "#s": "status" },
-    ExpressionAttributeValues: {
-      ":st": "VEHICLE_SELECTED",
-      ":vt": vehicleType || null,
-      ":vn": vehicleNo || null,
-      ":u": new Date().toISOString(),
-    },
-  })
-);
+      new UpdateCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${targetOrderId}`, sk: "META" },
+        UpdateExpression: `
+          SET #s = :st,
+              vehicleType = :vt,
+              vehicleNo = :vn,
+              updatedAt = :u
+        `,
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: {
+          ":st": "VEHICLE_SELECTED",
+          ":vt": vehicleType || null,
+          ":vn": vehicleNo || null,
+          ":u": new Date().toISOString(),
+        },
+      })
+    );
+
+    await addTimelineEvent({
+      orderId: targetOrderId,
+      event: "VEHICLE_SELECTED",
+      data: { vehicleNo, vehicleType },
+    });
+
     return res.json({
       ok: true,
       message: "✅ Vehicle selected",
-      fullOrderId,
+      orderId: targetOrderId,
     });
   } catch (err) {
     return res.status(500).json({ ok: false, message: err.message });
   }
 };
-
 /* ============================================================
    ✅ LOADING START
 ============================================================ */
@@ -952,14 +959,9 @@ export const assignDriver = async (req, res) => {
 
       if (fullOrderId) orderIds = [fullOrderId, ...orderIds];
     }
-
-    if (!fullOrderId) {
-      return res.status(400).json({
-        ok: false,
-        message: "ORD_FULL order required",
-      });
-    }
-
+if (!fullOrderId) {
+  fullOrderId = orderIds[0];
+}
     let childOrderIds = orderIds.filter((id) => id !== fullOrderId);
 
     // 🔥 single FULL fallback

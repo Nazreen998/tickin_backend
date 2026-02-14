@@ -130,10 +130,7 @@ function prettyTime(ev) {
 
   if (!t) return null;
 
-  const dt = dayjs(t);
-  if (!dt.isValid()) return String(t);
-
-  return dt.tz(IST).format("DD MMM YYYY, hh:mm A");
+  return t;
 }
 /* ✅ Build Neat Timeline (alias + gap fix) */
 function buildNeatTimeline(events = [], opts = {}) {
