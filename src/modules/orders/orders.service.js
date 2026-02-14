@@ -23,6 +23,7 @@ const BOOKINGS_TABLE = process.env.BOOKINGS_TABLE || "tickin_slot_bookings";
 export const getSlotConfirmedOrders = async (req, res) => {
   try {
     const { date } = req.query;
+
     if (!date) {
       return res.status(400).json({
         ok: false,
@@ -33,122 +34,54 @@ export const getSlotConfirmedOrders = async (req, res) => {
     const pk = `COMPANY#VAGR_IT#DATE#${date}`;
 
     /* --------------------------------------------------
-       1️⃣ Fetch bookings (ALL ACTIVE for that date)
-       🔥 FIX: don't filter by status (else flow disappears)
+       1️⃣ Fetch ACTIVE bookings for that date
     -------------------------------------------------- */
-   const bookingsRes = await ddb.send(
-  new ScanCommand({
-    TableName: BOOKINGS_TABLE,
-    FilterExpression:
-      "#pk = :pk AND (attribute_not_exists(isActive) OR isActive = :t)",
-    ExpressionAttributeNames: {
-      "#pk": "pk",
-    },
-    ExpressionAttributeValues: {
-      ":pk": pk,
-      ":t": true,
-    },
-  })
-);
+    const bookingsRes = await ddb.send(
+      new ScanCommand({
+        TableName: BOOKINGS_TABLE,
+        FilterExpression:
+          "#pk = :pk AND (attribute_not_exists(isActive) OR isActive = :t)",
+        ExpressionAttributeNames: { "#pk": "pk" },
+        ExpressionAttributeValues: {
+          ":pk": pk,
+          ":t": true,
+        },
+      })
+    );
 
-const bookings = bookingsRes.Items || [];
+    const bookings = bookingsRes.Items || [];
+
+    if (bookings.length === 0) {
+      return res.json({
+        ok: true,
+        count: 0,
+        date,
+        orders: [],
+      });
+    }
 
     /* --------------------------------------------------
-       2️⃣ Group bookings by orderId
+       2️⃣ Group by FLOW KEY
+       flowKey priority:
+       ORD_FULL_ > mergeKey > orderId
     -------------------------------------------------- */
-    const bookingsByOrderId = {};
+    const grouped = {};
+
     for (const b of bookings) {
       const oid = String(b.orderId || "").trim();
       if (!oid) continue;
-      if (!bookingsByOrderId[oid]) bookingsByOrderId[oid] = [];
-      bookingsByOrderId[oid].push(b);
-    }
 
-    const orderIds = Object.keys(bookingsByOrderId);
+      // ignore cancelled
+      if (String(b.status || "").toUpperCase() === "CANCELLED") continue;
+      if (b.isActive === false) continue;
 
-    /* --------------------------------------------------
-       3️⃣ Fetch order metas
-    -------------------------------------------------- */
-    const ordersMeta = [];
-    for (const orderId of orderIds) {
-      const orderRes = await ddb.send(
-        new GetCommand({
-          TableName: ORDERS_TABLE,
-          Key: { pk: `ORDER#${orderId}`, sk: "META" },
-        })
-      );
-      if (orderRes.Item) ordersMeta.push(orderRes.Item);
-    }
-
-    /* --------------------------------------------------
-       4️⃣ Build FULL master → children map
-    -------------------------------------------------- */
-    const fullChildrenMap = {};
-    for (const list of Object.values(bookingsByOrderId)) {
-      for (const b of list) {
-        if (
-          b.mergedIntoOrderId &&
-          String(b.mergedIntoOrderId).startsWith("ORD_FULL_")
-        ) {
-          if (!fullChildrenMap[b.mergedIntoOrderId]) {
-            fullChildrenMap[b.mergedIntoOrderId] = [];
-          }
-          fullChildrenMap[b.mergedIntoOrderId].push(b);
-        }
-      }
-    }
-
-    const grouped = {};
-
-    /* --------------------------------------------------
-       5️⃣ Main grouping loop
-    -------------------------------------------------- */
-    for (const order of ordersMeta) {
-      const oid =
-        order.orderId ||
-        (order.pk ? String(order.pk).replace("ORDER#", "") : null);
-      if (!oid) continue;
-
-      const bookingList = bookingsByOrderId[oid];
-      if (!bookingList || bookingList.length === 0) continue;
-
-      // pick confirmed booking if exists, else first
-       // ✅ Only show CONFIRMED bookings in slot confirmed list
-// Always pick latest active booking
-const booking = bookingList.find(
-  (b) => b.isActive !== false
-);
-
-if (!booking) continue;
-
-      // 🚫 cancelled / inactive booking
-      if (booking.isActive === false) continue;
-      if (String(booking.status || "").toUpperCase() === "CANCELLED") continue;
-
-      // detect FULL master
       const masterId =
-        order.mergedIntoOrderId &&
-        String(order.mergedIntoOrderId).startsWith("ORD_FULL_")
-          ? order.mergedIntoOrderId
-          : booking.mergedIntoOrderId &&
-            String(booking.mergedIntoOrderId).startsWith("ORD_FULL_")
-          ? booking.mergedIntoOrderId
+        b.mergedIntoOrderId &&
+        String(b.mergedIntoOrderId).startsWith("ORD_FULL_")
+          ? b.mergedIntoOrderId
           : null;
 
-      // 🚫 FULL SLOT CANCEL CHECK (ALL children cancelled)
-      if (masterId) {
-        const children = fullChildrenMap[masterId] || [];
-        const hasActiveChild = children.some(
-          (b) =>
-            String(b.status || "").toUpperCase() !== "CANCELLED" &&
-            b.isActive !== false
-        );
-        if (!hasActiveChild) {
-          continue;
-        }
-      }
-
-      let mk = booking.mergeKey || order.mergeKey || null;
+      let mk = b.mergeKey || null;
       if (mk && String(mk).startsWith("LOC#")) mk = null;
 
       const flowKey = masterId || mk || oid;
@@ -158,53 +91,38 @@ if (!booking) continue;
           flowKey,
           mergeKey: mk,
           date,
-          slotTime: booking.slotTime,
-          pos: booking.slotPos || booking.pos || null,
-          vehicleType: masterId ? "FULL" : booking.vehicleType,
+          slotTime: b.slotTime,
+          pos: b.slotPos || b.pos || null,
+          vehicleType: masterId ? "FULL" : b.vehicleType,
 
           orderIds: [],
           distributors: [],
-
           totalQty: 0,
           grandAmount: 0,
-
-          statusList: [],
         };
       }
 
-      // orderIds list
       if (!grouped[flowKey].orderIds.includes(oid)) {
         grouped[flowKey].orderIds.push(oid);
       }
 
-      // distributors list
       const already = grouped[flowKey].distributors.some(
         (d) => d.orderId === oid
       );
+
       if (!already) {
         grouped[flowKey].distributors.push({
           orderId: oid,
-          distributorName: booking.distributorName || order.distributorName,
-          distributorId: booking.distributorCode || order.distributorId,
+          distributorName: b.distributorName || "-",
+          distributorId: b.distributorCode || null,
         });
       }
 
-      // qty: ignore ORD_FULL, take from children
-      if (!String(oid).startsWith("ORD_FULL_")) {
-        grouped[flowKey].totalQty += Number(order.totalQty || order.qty || 0);
-      }
-
-      // amount from booking
-      grouped[flowKey].grandAmount += Number(booking.amount || 0);
-
-      // collect status
-      grouped[flowKey].statusList.push(
-        String(order.status || "CONFIRMED").toUpperCase()
-      );
+      grouped[flowKey].grandAmount += Number(b.amount || 0);
     }
 
     /* --------------------------------------------------
-       6️⃣ Pick FINAL status by priority
+       3️⃣ Fetch correct STATUS + QTY from ORDERS META
     -------------------------------------------------- */
     const PRIORITY = [
       "DELIVERY_COMPLETED",
@@ -219,45 +137,60 @@ if (!booking) continue;
       "CONFIRMED",
     ];
 
+    const finalOrders = [];
+
     for (const g of Object.values(grouped)) {
-      const stList = (g.statusList || []).map((x) => String(x).toUpperCase());
-      let picked = "CONFIRMED";
+      let status = "CONFIRMED";
+      let totalQty = 0;
 
-      for (const p of PRIORITY) {
-        if (stList.includes(p)) {
-          picked = p;
-          break;
+      // fetch FULL order if exists
+      const mainId = g.flowKey;
+
+      try {
+        const metaRes = await ddb.send(
+          new GetCommand({
+            TableName: ORDERS_TABLE,
+            Key: { pk: `ORDER#${mainId}`, sk: "META" },
+          })
+        );
+
+        if (metaRes.Item) {
+          status = String(metaRes.Item.status || "CONFIRMED").toUpperCase();
+          totalQty = Number(metaRes.Item.totalQty || 0);
+        } else {
+          // if not FULL, calculate from child orders
+          for (const oid of g.orderIds) {
+            const child = await ddb.send(
+              new GetCommand({
+                TableName: ORDERS_TABLE,
+                Key: { pk: `ORDER#${oid}`, sk: "META" },
+              })
+            );
+            if (child.Item) {
+              totalQty += Number(child.Item.totalQty || 0);
+              const st = String(child.Item.status || "").toUpperCase();
+              if (PRIORITY.indexOf(st) < PRIORITY.indexOf(status)) {
+                status = st;
+              }
+            }
+          }
         }
-      }
+      } catch (e) {}
 
-      g.status = picked;
-      delete g.statusList;
-    }
+      const d2 = (g.distributors || []).slice(0, 2);
+      const names = d2
+        .map((d, i) => `D${i + 1}: ${d.distributorName || "-"}`)
+        .join(" | ");
 
-    /* --------------------------------------------------
-       7️⃣ Final shaping
-       🔥 FIX: do NOT remove FULL-only flows when qty = 0
-    -------------------------------------------------- */
-    const finalOrders = Object.values(grouped)
-     .filter((o) => {
-  if (String(o.flowKey).startsWith("LOC#")) return false;
-  return true;
-})
-      .map((g) => {
-        const d2 = (g.distributors || []).slice(0, 2);
-        const names = d2
-          .map((d, i) => `D${i + 1}: ${d.distributorName || "-"}`)
-          .join(" | ");
-
-        return {
-          ...g,
-          distributors: d2,
-          distributorName: names || "-",
-          totalQty: g.totalQty,
-          grandAmount: g.grandAmount,
-          orderId: g.flowKey, // important
-        };
+      finalOrders.push({
+        ...g,
+        distributors: d2,
+        distributorName: names || "-",
+        totalQty,
+        status,
+        orderId: g.flowKey,
       });
+    }
 
     return res.json({
       ok: true,
