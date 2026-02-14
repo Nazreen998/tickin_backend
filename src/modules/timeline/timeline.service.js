@@ -121,20 +121,20 @@ async function getDriverName(driverId) {
 
 /* ✅ Force display time (IST) */
 function prettyTime(ev) {
-  const t = ev?.displayTime || ev?.createdAt || ev?.timestamp || null;
-  if (!t) return null;
+  const t =
+    ev?.displayTime ||
+    ev?.createdAt ||
+    ev?.timestamp ||
+    ev?.time ||
+    null;
 
-  // already formatted
-  if (typeof t === "string" && /[A-Za-z]{3}/.test(t) && /AM|PM/i.test(t))
-    return t;
+  if (!t) return null;
 
   const dt = dayjs(t);
   if (!dt.isValid()) return String(t);
 
   return dt.tz(IST).format("DD MMM YYYY, hh:mm A");
 }
-
-/* ✅ Build Neat Timeline (alias + gap fix) */
 /* ✅ Build Neat Timeline (alias + gap fix) */
 function buildNeatTimeline(events = [], opts = {}) {
   const stopCount = Math.max(1, Number(opts.stopCount || 1));
@@ -304,34 +304,39 @@ async function buildMeta(meta) {
 
   const isMerged = Boolean(
     meta.isMerged ||
-      meta.mergedAt ||
-      (Array.isArray(childOrderIds) && childOrderIds.length > 1)
+    meta.mergedAt ||
+    (Array.isArray(childOrderIds) && childOrderIds.length > 1)
   );
 
-  const distributorDisplay = await buildDistributorDisplay(meta, childOrderIds);
+  let distributorDisplay =
+    meta.distributorName ||
+    meta.distributor ||
+    meta.agencyName ||
+    meta.customerName ||
+    null;
+
+  // 🔥 IMPORTANT FALLBACK
+  if (!distributorDisplay && meta.distributorId) {
+    distributorDisplay = meta.distributorId;
+  }
 
   return {
-    distributorName: distributorDisplay,
-
+    distributorName: distributorDisplay || "-",
     vehicleNo:
       meta.vehicleNo ||
       meta.vehicleNumber ||
       meta.vehicle ||
       meta.vehicleId ||
       null,
-
     driverId,
     driverName: driverName || meta.driverName || meta.driverMobile || null,
-
     status: meta.status || null,
     slotId: meta.slotId || meta.slotPk || null,
-
     isMerged,
     childOrderIds: childOrderIds.map(String),
-    mergedAt: meta.mergedAt || meta.mergedOn || meta.mergedTime || null,
+    mergedAt: meta.mergedAt || null,
   };
 }
-
 /* ✅ Build preMerge map: each child timeline till SLOT_BOOKING_COMPLETED */
 async function buildPreMergeIfNeeded(uiMeta) {
   if (!uiMeta?.isMerged) return null;
