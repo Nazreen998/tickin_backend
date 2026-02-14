@@ -707,7 +707,7 @@ if (!fullOrderId || !String(fullOrderId).startsWith("ORD_FULL_")) {
     ExpressionAttributeNames: { "#s": "status" },
     ExpressionAttributeValues: {
       ":st": "VEHICLE_SELECTED",
-      ":vt": vehicleType || "FULL",
+      ":vt": vehicleType || null,
       ":vn": vehicleNo || null,
       ":u": new Date().toISOString(),
     },
