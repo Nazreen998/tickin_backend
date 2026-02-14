@@ -447,14 +447,18 @@ let neatTimeline = buildNeatTimeline(rawTimeline, { stopCount });
     const preMerge = await buildPreMergeIfNeeded(uiMeta);
 
     return res.json({
-      ok: true,
-      requestedOrderId: orderId,
-      orderId: targetOrderId,
-      meta: uiMeta,
-      timeline: rawTimeline,
-      neatTimeline,
-      preMerge, // ✅ frontend already can show this
-    });
+  ok: true,
+
+  // 🔥 IMPORTANT: always send FULL id back
+  requestedOrderId: targetOrderId,
+  orderId: targetOrderId,
+
+  meta: uiMeta,
+  timeline: rawTimeline,
+  neatTimeline,
+  preMerge,
+});
+
   } catch (e) {
     console.error("getOrderTimeline error:", e);
     return res.status(500).json({ ok: false, message: e.message || String(e) });
@@ -494,14 +498,19 @@ let neatTimeline = buildNeatTimeline(rawTimeline, { stopCount });
 
     const preMerge = await buildPreMergeIfNeeded(uiMeta);
 
-    return res.json({
-      ok: true,
-      requestedOrderId: orderId,
-      orderId: targetOrderId,
-      meta: uiMeta,
-      preMerge,
-      neatTimeline,
-    });
+  return res.json({
+  ok: true,
+
+  // 🔥 IMPORTANT: always send FULL id back
+  requestedOrderId: targetOrderId,
+  orderId: targetOrderId,
+
+  meta: uiMeta,
+  timeline: rawTimeline,
+  neatTimeline,
+  preMerge,
+});
+
   } catch (e) {
     console.error("getOrderTimelineNeat error:", e);
     return res.status(500).json({ ok: false, message: e.message || String(e) });

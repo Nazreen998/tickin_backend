@@ -361,9 +361,16 @@ const distributorDisplay =
 
       status: String(status || "").toUpperCase(),
 
-      vehicleType: fullOrder?.vehicleType || null,
-      vehicleNo: fullOrder?.vehicleNo || null,
+     vehicleType:
+  fullOrder?.vehicleType ||
+  orders.find(o => o.vehicleType)?.vehicleType ||
+  null,
 
+vehicleNo:
+  fullOrder?.vehicleNo ||
+  orders.find(o => o.vehicleNo)?.vehicleNo ||
+  null,
+  
       // ✅ slot
       slotDate,
       slotTime,
