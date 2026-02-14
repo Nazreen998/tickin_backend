@@ -66,60 +66,62 @@ export const getSlotConfirmedOrders = async (req, res) => {
        ORD_FULL_ > mergeKey > orderId
     -------------------------------------------------- */
     const grouped = {};
+for (const b of bookings) {
+  const oid = String(b.orderId || "").trim();
+  if (!oid) continue;
 
-    for (const b of bookings) {
-      const oid = String(b.orderId || "").trim();
-      if (!oid) continue;
+  // 🚫 ignore cancelled
+  if (String(b.status || "").toUpperCase() === "CANCELLED") continue;
+  if (b.isActive === false) continue;
 
-      // ignore cancelled
-      if (String(b.status || "").toUpperCase() === "CANCELLED") continue;
-      if (b.isActive === false) continue;
+  // 🚫 ignore incomplete slot bookings
+  if (!b.slotTime || String(b.slotTime).trim() === "") continue;
+  if (!b.slotPos && !b.pos) continue;
 
-      const masterId =
-        b.mergedIntoOrderId &&
-        String(b.mergedIntoOrderId).startsWith("ORD_FULL_")
-          ? b.mergedIntoOrderId
-          : null;
+  const masterId =
+    b.mergedIntoOrderId &&
+    String(b.mergedIntoOrderId).startsWith("ORD_FULL_")
+      ? b.mergedIntoOrderId
+      : null;
 
-      let mk = b.mergeKey || null;
-      if (mk && String(mk).startsWith("LOC#")) mk = null;
+  let mk = b.mergeKey || null;
+  if (mk && String(mk).startsWith("LOC#")) mk = null;
 
-      const flowKey = masterId || mk || oid;
+  const flowKey = masterId || mk || oid;
 
-      if (!grouped[flowKey]) {
-        grouped[flowKey] = {
-          flowKey,
-          mergeKey: mk,
-          date,
-          slotTime: b.slotTime,
-          pos: b.slotPos || b.pos || null,
-          vehicleType: masterId ? "FULL" : b.vehicleType,
+  if (!grouped[flowKey]) {
+    grouped[flowKey] = {
+      flowKey,
+      mergeKey: mk,
+      date,
+      slotTime: b.slotTime,
+      pos: b.slotPos || b.pos || null,
+      vehicleType: masterId ? "FULL" : b.vehicleType || "-",
+      orderIds: [],
+      distributors: [],
+      totalQty: 0,
+      grandAmount: 0,
+    };
+  }
 
-          orderIds: [],
-          distributors: [],
-          totalQty: 0,
-          grandAmount: 0,
-        };
-      }
+  if (!grouped[flowKey].orderIds.includes(oid)) {
+    grouped[flowKey].orderIds.push(oid);
+  }
 
-      if (!grouped[flowKey].orderIds.includes(oid)) {
-        grouped[flowKey].orderIds.push(oid);
-      }
+  const already = grouped[flowKey].distributors.some(
+    (d) => d.orderId === oid
+  );
 
-      const already = grouped[flowKey].distributors.some(
-        (d) => d.orderId === oid
-      );
+  if (!already) {
+    grouped[flowKey].distributors.push({
+      orderId: oid,
+      distributorName: b.distributorName || "-",
+      distributorId: b.distributorCode || null,
+    });
+  }
 
-      if (!already) {
-        grouped[flowKey].distributors.push({
-          orderId: oid,
-          distributorName: b.distributorName || "-",
-          distributorId: b.distributorCode || null,
-        });
-      }
-
-      grouped[flowKey].grandAmount += Number(b.amount || 0);
-    }
+  grouped[flowKey].grandAmount += Number(b.amount || 0);
+}
 
     /* --------------------------------------------------
        3️⃣ Fetch correct STATUS + QTY from ORDERS META
