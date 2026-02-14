@@ -370,7 +370,7 @@ vehicleNo:
   fullOrder?.vehicleNo ||
   orders.find(o => o.vehicleNo)?.vehicleNo ||
   null,
-  
+
       // ✅ slot
       slotDate,
       slotTime,
@@ -690,7 +690,7 @@ export const vehicleSelected = async (req, res) => {
       ExpressionAttributeNames: { "#s": "status" },
       ExpressionAttributeValues: {
         ":st": "VEHICLE_SELECTED",
-        ":vt": vehicleType || null,
+        ":vt": vehicleType || "FULL",
         ":vn": vehicleNo || null,
       },
     });
