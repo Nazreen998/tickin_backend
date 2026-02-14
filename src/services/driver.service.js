@@ -291,12 +291,13 @@ export async function getDriverOrders(driverId) {
   "DELIVERY_COMPLETED",
 ]);
   return allItems
-    .filter(
-      (o) =>
-        allowed.has(String(o.status || "").toUpperCase()) &&
-        o.deletedByDriver !== true
-    )
-    .map(hydrateDriverCard);
+  .filter(
+    (o) =>
+      o.deletedByDriver !== true &&
+      String(o.status || "").toUpperCase() !== "CONFIRMED"
+  )
+  .map(hydrateDriverCard);
+
 }
 
 /* -------- distance validation -------- */
