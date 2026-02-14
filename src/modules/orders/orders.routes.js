@@ -19,7 +19,7 @@ import {
   deleteOrder,
   cancelOrderSlot,
   getOrdersByMergeKey,
-  getSlotConfirmedOrders
+  getSlotConfirmedOrders,
 } from "./orders.service.js";
 import {
   vehicleSelected,
@@ -27,11 +27,18 @@ import {
   loadingEnd,
   getOrderFlowByKey,
    assignDriver,
-  getDriversForDropdown, 
+  getDriversForDropdown,
+  slotCompleted, 
 } from "./orders.flow.service.js";
 
 import { fixDistributors } from "./orders.controller.js";
 const router = express.Router();
+router.post(
+  "/slot-completed",
+  verifyToken,
+  allowRoles("MANAGER", "MASTER"),
+  slotCompleted
+);
 
 router.post("/fix-distributors", fixDistributors);
 router.get("/distributors/:code", async (req, res) => {

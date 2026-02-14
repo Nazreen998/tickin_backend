@@ -19,18 +19,38 @@ const TABLE_USERS = process.env.USERS_TABLE || "tickin_users";
 async function resolveTargetOrderId(orderId) {
   if (!orderId) return null;
 
+  const oid = String(orderId).trim();
+  if (!oid) return null;
+
+  // ✅ If ORDxxxx passed, prefer ORD_FULL_xxxx if exists
+  if (oid.startsWith("ORD") && !oid.startsWith("ORD_FULL_")) {
+    const fullKey = `ORD_FULL_${oid.replace(/^ORD/, "")}`;
+
+    const fg = await ddb.send(
+      new GetCommand({
+        TableName: TABLE_ORDERS,
+        Key: { pk: `ORDER#${fullKey}`, sk: "META" },
+      })
+    );
+
+    if (fg.Item) return fullKey;
+  }
+
+  // ✅ normal mergedIntoOrderId resolution
   const res = await ddb.send(
     new GetCommand({
       TableName: TABLE_ORDERS,
-      Key: { pk: `ORDER#${orderId}`, sk: "META" },
+      Key: { pk: `ORDER#${oid}`, sk: "META" },
     })
   );
 
-  if (!res.Item) return orderId;
+  if (!res.Item) return oid;
+
   if (res.Item.mergedIntoOrderId) return String(res.Item.mergedIntoOrderId);
 
-  return orderId;
+  return oid;
 }
+
 function normalizeCode(v) {
   return String(v || "").trim().toUpperCase();
 }

@@ -110,11 +110,15 @@ async function updateOrders(fullOrderId, updatePayload) {
   for (const raw of orderIds) {
     const oid = normalizeOrderId(raw);
     if (!oid) continue;
+const tryIds = [oid];
 
-    const tryIds = [
-      oid,
-      oid.startsWith("ORD") ? oid.replace("ORD", "") : "ORD" + oid,
-    ];
+// only for numeric orders like "123"
+if (/^\d+$/.test(oid)) tryIds.push(`ORD${oid}`);
+
+// only for ORDxxxx (not FULL)
+if (oid.startsWith("ORD") && !oid.startsWith("ORD_FULL_")) {
+  tryIds.push(oid.replace(/^ORD/, ""));
+}
 
     let found = null;
 

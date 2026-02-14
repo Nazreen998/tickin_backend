@@ -36,22 +36,22 @@ export const getSlotConfirmedOrders = async (req, res) => {
        1️⃣ Fetch bookings (ALL ACTIVE for that date)
        🔥 FIX: don't filter by status (else flow disappears)
     -------------------------------------------------- */
-    const bookingsRes = await ddb.send(
-      new ScanCommand({
-        TableName: BOOKINGS_TABLE,
-        FilterExpression:
-          "#pk = :pk AND (attribute_not_exists(isActive) OR isActive = :t)",
-        ExpressionAttributeNames: {
-          "#pk": "pk",
-        },
-        ExpressionAttributeValues: {
-          ":pk": pk,
-          ":t": true,
-        },
-      })
-    );
+   const bookingsRes = await ddb.send(
+  new ScanCommand({
+    TableName: BOOKINGS_TABLE,
+    FilterExpression:
+      "#pk = :pk AND (attribute_not_exists(isActive) OR isActive = :t)",
+    ExpressionAttributeNames: {
+      "#pk": "pk",
+    },
+    ExpressionAttributeValues: {
+      ":pk": pk,
+      ":t": true,
+    },
+  })
+);
 
-    const bookings = bookingsRes.Items || [];
+const bookings = bookingsRes.Items || [];
 
     /* --------------------------------------------------
        2️⃣ Group bookings by orderId
@@ -113,8 +113,11 @@ export const getSlotConfirmedOrders = async (req, res) => {
       if (!bookingList || bookingList.length === 0) continue;
 
       // pick confirmed booking if exists, else first
-      const booking =
-        bookingList.find((b) => b.status === "CONFIRMED") || bookingList[0];
+       // ✅ Only show CONFIRMED bookings in slot confirmed list
+  const booking = bookingList.find(
+    (b) => String(b.status || "").toUpperCase() === "CONFIRMED"
+  );
+  if (!booking) continue;
 
       // 🚫 cancelled / inactive booking
       if (booking.isActive === false) continue;
