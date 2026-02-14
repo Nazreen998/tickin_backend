@@ -247,8 +247,8 @@ export async function getDriverOrders(driverId) {
 
   // 🔥 FIX: normalize driverId
   const driverPk = driverId.startsWith("USER#")
-    ? driverId
-    : `USER#${driverId}`;
+  ? driverId.replace("USER#", "")
+  : driverId;
 
   const res = await ddb.send(
     new QueryCommand({
