@@ -741,7 +741,8 @@ await ddb.send(
           slotPos = :sp,
           slotVehicleType = :svt,
           slotId = :sid,
-          updatedAt = :u
+          updatedAt = :u,
+          slotBookedAt = :u,
     `,
     ExpressionAttributeValues: {
       ":sb": true,

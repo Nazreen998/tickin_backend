@@ -424,7 +424,14 @@ const driverMobile =
     fullOrder?.vehicleNo ||
     orders.find(o => o.vehicleNo)?.vehicleNo ||
     null,
-
+       //timing
+        createdAt: fullOrder.createdAt,
+        confirmedAt: fullOrder.confirmedAt,
+        loadingStartedAt: fullOrder.loadingStartedAt,
+        loadingEndAt: fullOrder.loadingEndAt,
+        slotBookedAt: fullOrder.slotBookedAt || null,
+        vehicleSelectedAt: fullOrder.vehicleSelectedAt || null,
+        driverAssignedAt: fullOrder.driverAssignedAt || null,
         // ✅ slot
         slotDate,
         slotTime,
@@ -735,7 +742,8 @@ export const vehicleSelected = async (req, res) => {
           SET #s = :st,
               vehicleType = :vt,
               vehicleNo = :vn,
-              updatedAt = :u
+              updatedAt = :u,
+              vehicleSelectedAt = :t,
         `,
         ExpressionAttributeNames: { "#s": "status" },
         ExpressionAttributeValues: {
@@ -743,6 +751,7 @@ export const vehicleSelected = async (req, res) => {
           ":vt": vehicleType || null,
           ":vn": vehicleNo || null,
           ":u": new Date().toISOString(),
+          ":t": new Date().toISOString(),
         },
       })
     );
@@ -1150,7 +1159,8 @@ if (!fullOrderId) {
               isMerged = :im,
               childOrderIds = :kids,
               mergedAt = :u,
-              updatedAt = :u
+              updatedAt = :u,
+              driverAssignedAt = :u,
         `,
         ExpressionAttributeNames: { "#s": "status" },
         ExpressionAttributeValues: {
@@ -1168,6 +1178,7 @@ if (!fullOrderId) {
            ":im": childOrderIds.length > 1,   // 👈 important
          ":kids": childOrderIds,            // 👈 important
           ":u": new Date().toISOString(),
+          
         },
       })
     );

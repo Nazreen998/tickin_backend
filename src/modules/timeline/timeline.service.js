@@ -137,7 +137,22 @@ function prettyTime(ev) {
 }
 /* ✅ Build Neat Timeline (alias + gap fix) */
 function buildNeatTimeline(events = [], opts = {}) {
+  const meta = opts.meta || {};
   const stopCount = Math.max(1, Number(opts.stopCount || 1));
+  //fall back for timeline
+  const META_TIME = {
+  ORDER_CREATED: meta.createdAt,
+  ORDER_CONFIRMED: meta.confirmedAt,
+
+  SLOT_BOOKED: meta.slotBookedAt,
+
+  VEHICLE_SELECTED: meta.vehicleSelectedAt,
+
+  DRIVER_ASSIGNED: meta.driverAssignedAt,
+
+  LOADING_STARTED: meta.loadingStartedAt,
+  LOADING_COMPLETED: meta.loadingEndAt,
+};
 
   // ✅ Dynamic D1..Dn steps
   const STOP_STEPS = [];
@@ -217,7 +232,11 @@ const ALIAS = {
       key: s.key,
       title: s.label,
       status,
-      time: ev ? prettyTime(ev) : null,
+      time: ev
+            ? prettyTime(ev)
+            : META_TIME[s.key]
+            ? dayjs.utc(META_TIME[s.key]).tz(IST).format("DD MMM YYYY, hh:mm A")
+            : null,
       data: ev?.data || null,
       raw: ev,
     };
@@ -433,7 +452,7 @@ const stopCount =
     : 1;
 
 const rawTimeline = await fetchRawTimeline(targetOrderId);
-let neatTimeline = buildNeatTimeline(rawTimeline, { stopCount });
+let neatTimeline = buildNeatTimeline(rawTimeline, meta, { stopCount });
     const preMerge = await buildPreMergeIfNeeded(uiMeta);
     return res.json({
   ok: true,
@@ -480,7 +499,7 @@ export async function getOrderTimelineNeat(req, res) {
     : 1;
 
 const rawTimeline = await fetchRawTimeline(targetOrderId);
-let neatTimeline = buildNeatTimeline(rawTimeline, { stopCount });
+let neatTimeline = buildNeatTimeline(rawTimeline, meta, { stopCount });
     const preMerge = await buildPreMergeIfNeeded(uiMeta);
 
   return res.json({
