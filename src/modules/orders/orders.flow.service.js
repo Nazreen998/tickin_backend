@@ -255,108 +255,125 @@ async function ensureVehicleSelected(orderIds = []) {
       String(o.orderId || "").startsWith("ORD_FULL_")
     );
 
+    // single order fallback
     if (!fullOrder) fullOrder = orders[0];
 
     /* --------------------------------------------------
-       4️⃣ Common Base Order
+       4️⃣ Calc Orders (child orders)
+       ✅ Merge => children only
+       ✅ Single => same order
     -------------------------------------------------- */
-    const baseOrder = fullOrder || orders[0];
+    const childOrders = orders.filter(
+      (o) => !String(o.orderId || "").startsWith("ORD_FULL_")
+    );
+
+    const calcOrders = childOrders.length ? childOrders : orders;
 
     /* --------------------------------------------------
-       5️⃣ Totals Calculation (Always from distributors.items)
+       5️⃣ Totals Calculation
+       ✅ ALWAYS from calcOrders (child orders)
     -------------------------------------------------- */
     let totalQty = 0;
     let grandTotal = 0;
     const loadingItems = [];
 
-    if (
-      Array.isArray(baseOrder.distributors) &&
-      baseOrder.distributors.length
-    ) {
-      for (const d of baseOrder.distributors) {
-        const items = d?.items || [];
-        for (const it of items) {
+    for (const o of calcOrders) {
+      // if distributors exist
+      if (Array.isArray(o.distributors) && o.distributors.length) {
+        for (const d of o.distributors) {
+          const items = d?.items || [];
+          for (const it of items) {
+            totalQty += Number(it.qty || 0);
+            grandTotal += Number(it.total || 0);
+            loadingItems.push(it);
+          }
+        }
+      }
+      // fallback items
+      else if (Array.isArray(o.items) && o.items.length) {
+        for (const it of o.items) {
           totalQty += Number(it.qty || 0);
           grandTotal += Number(it.total || 0);
           loadingItems.push(it);
         }
       }
-    } else {
-      const items = baseOrder.items || [];
-      for (const it of items) {
-        totalQty += Number(it.qty || 0);
-        grandTotal += Number(it.total || 0);
-        loadingItems.push(it);
-      }
     }
 
     /* --------------------------------------------------
-       6️⃣ STATUS
+       6️⃣ STATUS (always from FULL order)
     -------------------------------------------------- */
     const status = String(fullOrder?.status || "CONFIRMED").toUpperCase();
 
     /* --------------------------------------------------
-       7️⃣ Distributors (D1, D2, D3 Support)
+       7️⃣ Distributors (D1 D2 D3 Support)
+       ✅ Always from calcOrders (child orders)
     -------------------------------------------------- */
-    let distributorSource = [];
-
-    if (
-      Array.isArray(baseOrder.distributors) &&
-      baseOrder.distributors.length
-    ) {
-      distributorSource = baseOrder.distributors;
-    } else {
-      distributorSource = [baseOrder];
-    }
-
-    const distributors = distributorSource.map((d, idx) => ({
+    const distributors = calcOrders.map((o, idx) => ({
       label: `D${idx + 1}`,
-      distributorId: d?.distributorCode || d?.distributorId || null,
-      distributorName: d?.distributorName || null,
-      orderId: baseOrder?.orderId || null,
+      distributorId: o?.distributorId || o?.distributorCode || null,
+      distributorName:
+        o?.distributorDisplay ||
+        o?.distributorName ||
+        o?.distributor ||
+        o?.agencyName ||
+        null,
+      orderId: o?.orderId || null,
+      qty: Number(o?.totalQty || 0),
+      amount: Number(o?.totalAmount || o?.grandTotal || 0),
     }));
 
     const distributorDisplay =
       distributors.length <= 1
         ? distributors[0]?.distributorName || "-"
         : distributors
-            .map((d) => `${d.label}: ${d.distributorName || "-"}`)
-            .join(" | ");
+            .map((d) => d?.distributorName || "-")
+            .join(" + ");
 
     /* --------------------------------------------------
-       8️⃣ Driver
+       8️⃣ Driver (always from FULL order)
     -------------------------------------------------- */
     const driverId = fullOrder?.driverId || null;
     const driverName = fullOrder?.driverName || null;
     const driverMobile = fullOrder?.driverMobile || null;
 
     /* --------------------------------------------------
-       9️⃣ Slot
+       9️⃣ Slot (always from FULL order)
     -------------------------------------------------- */
     const slotDate = fullOrder?.slotDate || null;
     const slotTime = fullOrder?.slotTime || null;
     const slotPos = fullOrder?.slotPos || null;
 
     /* --------------------------------------------------
-       🔟 Response
+       🔟 Vehicle (prefer FULL order)
+    -------------------------------------------------- */
+    const vehicleType =
+      fullOrder?.vehicleType || calcOrders.find((x) => x.vehicleType)?.vehicleType || null;
+
+    const vehicleNo =
+      fullOrder?.vehicleNo || calcOrders.find((x) => x.vehicleNo)?.vehicleNo || null;
+
+    /* --------------------------------------------------
+       11️⃣ Response
     -------------------------------------------------- */
     return res.json({
       ok: true,
 
-      flowKey: baseOrder?.orderId,
+      flowKey: fullOrder?.orderId || null,
       fullOrderId: fullOrder?.orderId || null,
+
+      orderIds: calcOrders.map((o) => o.orderId).filter(Boolean),
 
       totalQty,
       grandTotal,
       status,
 
-      vehicleType: baseOrder?.vehicleType || null,
-      vehicleNo: baseOrder?.vehicleNo || null,
+      vehicleType,
+      vehicleNo,
 
-      createdAt: baseOrder?.createdAt || null,
-      confirmedAt: baseOrder?.confirmedAt || null,
-      loadingStartedAt: baseOrder?.loadingStartedAt || null,
-      loadingEndAt: baseOrder?.loadingEndAt || null,
+      createdAt: fullOrder?.createdAt || null,
+      confirmedAt: fullOrder?.confirmedAt || null,
+      loadingStartedAt: fullOrder?.loadingStartedAt || null,
+      loadingEndAt: fullOrder?.loadingEndAt || null,
 
       slotDate,
       slotTime,
@@ -370,7 +387,8 @@ async function ensureVehicleSelected(orderIds = []) {
       distributors,
       distributorDisplay,
 
-      orders,
+      // only child orders
+      orders: calcOrders,
     });
   } catch (err) {
     console.error("getOrderFlowByKey error", err);
