@@ -259,41 +259,40 @@ if (!fullOrder) {
   fullOrder = orders[0];
 }
 /* --------------------------------------------------
-   5️⃣ Calc orders (FINAL)
+   5️⃣ Calc orders (exclude FULL)
 -------------------------------------------------- */
 const childOrders = orders.filter(
   (o) => !String(o.orderId || "").startsWith("ORD_FULL_")
 );
 
-let calcOrders = [];
-
-if (fullOrder) {
-  calcOrders = childOrders;
-} else {
-  calcOrders = orders;
-}
-
-// fallback: FULL exists but child not fetched
-if (fullOrder && calcOrders.length === 0) {
-  calcOrders = orders;
-}
+const calcOrders = childOrders.length > 0 ? childOrders : orders;
 
 /* --------------------------------------------------
-   6️⃣ Totals + Items (FINAL)
+   6️⃣ Totals + Items (FINAL FIX)
+   ✅ Prefer FULL totals if available
 -------------------------------------------------- */
 let totalQty = 0;
 let grandTotal = 0;
 const loadingItems = [];
 
-for (const o of calcOrders) {
-  totalQty += Number(o.totalQty || o.qty || 0);
-  grandTotal += Number(o.totalAmount || o.grandTotal || o.total || 0);
+// ✅ 1) Prefer FULL totals if present
+if (fullOrder && (fullOrder.totalQty != null || fullOrder.totalAmount != null || fullOrder.grandTotal != null)) {
+  totalQty = Number(fullOrder.totalQty || 0);
+  grandTotal = Number(fullOrder.totalAmount || fullOrder.grandTotal || 0);
 
-  const items = o.items || o.loadingItems || [];
-  for (const it of items) {
-    loadingItems.push(it);
+  const items = fullOrder.items || fullOrder.loadingItems || [];
+  for (const it of items) loadingItems.push(it);
+} else {
+  // ✅ 2) Else sum from child orders
+  for (const o of calcOrders) {
+    totalQty += Number(o.totalQty || o.qty || 0);
+    grandTotal += Number(o.totalAmount || o.grandTotal || o.total || o.amount || 0);
+
+    const items = o.items || o.loadingItems || [];
+    for (const it of items) loadingItems.push(it);
   }
 }
+
       /* --------------------------------------------------
         7️⃣ STATUS — ALWAYS FROM ORD_FULL IF EXISTS
       -------------------------------------------------- */
@@ -324,45 +323,27 @@ for (const o of calcOrders) {
         }
       }
 /* --------------------------------------------------
-   8️⃣ Distributors
+   8️⃣ Distributors (FINAL FIX)
 -------------------------------------------------- */
-
-// ✅ detect merge properly
-const isMerged =
-  fullOrder?.isMerged === true ||
-  (Array.isArray(fullOrder?.mergedOrderIds) && fullOrder.mergedOrderIds.length > 1) ||
-  (Array.isArray(fullOrder?.childOrderIds) && fullOrder.childOrderIds.length > 1);
 
 let distributorSource = [];
 
-// ✅ MERGED → use merged children order sequence
-if (isMerged && fullOrder) {
-  const kids =
-    fullOrder.mergedOrderIds ||
-    fullOrder.childOrderIds ||
-    [];
+// 🔥 Always use FULL order if exists
+const baseOrder = fullOrder || orders[0];
 
-  for (const cid of kids) {
-    const g = await ddb.send(
-      new GetCommand({
-        TableName: ORDERS_TABLE,
-        Key: { pk: `ORDER#${cid}`, sk: "META" },
-      })
-    );
-    if (g.Item) distributorSource.push(g.Item);
-  }
+if (Array.isArray(baseOrder?.distributors) && baseOrder.distributors.length) {
+  distributorSource = baseOrder.distributors;
 } else {
-  // ✅ SINGLE → only 1 distributor
-  distributorSource = [uniqCalcOrders[0]];
+  distributorSource = [baseOrder];
 }
 
 const distributors = distributorSource.map((o, idx) => ({
   label: `D${idx + 1}`,
-  distributorId: o?.distributorId || null,
+  distributorId: o?.distributorCode || o?.distributorId || null,
   distributorName: o?.distributorName || null,
-  orderId: o?.orderId || null,
-  amount: Number(o?.totalAmount || o?.grandTotal || o?.total || 0),
-  qty: Number(o?.totalQty || o?.qty || 0),
+  orderId: baseOrder?.orderId || null,
+  amount: Number(baseOrder?.totalAmount || baseOrder?.grandTotal || 0),
+  qty: Number(baseOrder?.totalQty || 0),
 }));
 
 const distributorDisplay =
@@ -371,6 +352,7 @@ const distributorDisplay =
     : distributors
         .map((d) => `${d.label}: ${d.distributorName || "-"}`)
         .join(" | ");
+
       /* --------------------------------------------------
         9️⃣ DRIVER DETAILS (🔥 MAIN FIX)
         Always from FULL order (master)
