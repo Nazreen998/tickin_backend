@@ -196,142 +196,151 @@ async function ensureVehicleSelected(orderIds = []) {
    ✅ GET FLOW (flowKey = orderId OR mergeKey OR ORD_FULL_)
    ✅ FIX: GEO/FULL flows totals + distributors should match BOOKING (no mismatch)
 ============================================================ */
-export const getOrderFlowByKey = async (req, res) => {
-  try {
-    console.log("🔥 FLOW SERVICE HIT", req.params.flowKey);
+  export const getOrderFlowByKey = async (req, res) => {
+    try {
+      console.log("🔥 FLOW SERVICE HIT", req.params.flowKey);
 
-    let key = String(req.params.flowKey || "").trim();
-    if (!key) {
-      return res.status(400).json({ ok: false, message: "flowKey required" });
-    }
-
-    /* --------------------------------------------------
-       0️⃣ HARD GUARD: if ORDxxxx passed, prefer ORD_FULL_xxxx if exists
-    -------------------------------------------------- */
-    if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
-      const fullKey = `ORD_FULL_${key.replace(/^ORD/, "")}`;
-
-      const fg = await ddb.send(
-        new GetCommand({
-          TableName: ORDERS_TABLE,
-          Key: { pk: `ORDER#${fullKey}`, sk: "META" },
-        })
-      );
-
-      if (fg.Item) {
-        key = fullKey;
+      let key = String(req.params.flowKey || "").trim();
+      if (!key) {
+        return res.status(400).json({ ok: false, message: "flowKey required" });
       }
-    }
 
-    /* --------------------------------------------------
-       1️⃣ Resolve orderIds from ANY key
-    -------------------------------------------------- */
-    let orderIds = await resolveOrderIdsFromFlowKey(key);
-    /* --------------------------------------------------
-       3️⃣ Fetch all orders META
-    -------------------------------------------------- */
-    const orders = [];
-    for (const raw of orderIds) {
-      const oid = normalizeOrderId(raw);
-      if (!oid) continue;
+      /* --------------------------------------------------
+        0️⃣ HARD GUARD: if ORDxxxx passed, prefer ORD_FULL_xxxx if exists
+      -------------------------------------------------- */
+      if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
+        const fullKey = `ORD_FULL_${key.replace(/^ORD/, "")}`;
 
-      const g = await ddb.send(
-        new GetCommand({
-          TableName: ORDERS_TABLE,
-          Key: { pk: `ORDER#${oid}`, sk: "META" },
-        })
-      );
+        const fg = await ddb.send(
+          new GetCommand({
+            TableName: ORDERS_TABLE,
+            Key: { pk: `ORDER#${fullKey}`, sk: "META" },
+          })
+        );
 
-      if (g.Item) orders.push(g.Item);
-    }
-
-    if (orders.length === 0) {
-      return res
-        .status(404)
-        .json({ ok: false, message: "Orders meta not found" });
-    }
-
-    /* --------------------------------------------------
-       4️⃣ FULL ORDER (MASTER)
-    -------------------------------------------------- */
-    const fullOrder = orders.find((o) =>
-      String(o.orderId || "").startsWith("ORD_FULL_")
-    );
-
-    /* --------------------------------------------------
-       5️⃣ Calc orders (exclude FULL)
-    -------------------------------------------------- */
-    const childOrders = orders.filter(
-      (o) => !String(o.orderId || "").startsWith("ORD_FULL_")
-    );
-
-    const calcOrders = childOrders.length > 0 ? childOrders : orders;
-// 🔥 DEDUPE calcOrders (prevents double totals)
-const seen = new Set();
-const uniqCalcOrders = [];
-
-for (const o of calcOrders) {
-  const id = String(o.orderId || "");
-  if (!id || seen.has(id)) continue;
-  seen.add(id);
-  uniqCalcOrders.push(o);
-}
-
-    /* --------------------------------------------------
-       6️⃣ Totals + Items
-    -------------------------------------------------- */
-    let totalQty = 0;
-    let grandTotal = 0;
-    const loadingItems = [];
-
-    uniqCalcOrders.forEach((o) => {
-      totalQty += Number(o.totalQty || o.qty || 0);
-      grandTotal += Number(o.totalAmount || o.grandTotal || o.total || 0);
-
-      const items = o.items || o.loadingItems || [];
-      items.forEach((it) => loadingItems.push(it));
-    });
-
-    /* --------------------------------------------------
-       7️⃣ STATUS — ALWAYS FROM ORD_FULL IF EXISTS
-    -------------------------------------------------- */
-    let status = "CONFIRMED";
-
-    if (fullOrder?.status) {
-      status = String(fullOrder.status).toUpperCase();
-    } else {
-      const priority = [
-        "DELIVERY_COMPLETED",
-        "DELIVERED",
-        "OUT_FOR_DELIVERY",
-        "DRIVER_ASSIGNED",
-        "LOADING_COMPLETED",
-        "LOADING_STARTED",
-        "VEHICLE_SELECTED",
-        "SLOT_BOOKED",
-        "CONFIRMED",
-      ];
-
-      const stList = orders.map((o) => String(o.status || "").toUpperCase());
-
-      for (const p of priority) {
-        if (stList.includes(p)) {
-          status = p;
-          break;
+        if (fg.Item) {
+          key = fullKey;
         }
       }
-    }
 
-    /* --------------------------------------------------
-       8️⃣ Distributors
-    -------------------------------------------------- */
-// ✅ Distributors (Dynamic Dn)
-let distributorSource = calcOrders;
+      /* --------------------------------------------------
+        1️⃣ Resolve orderIds from ANY key
+      -------------------------------------------------- */
+      let orderIds = await resolveOrderIdsFromFlowKey(key);
+      /* --------------------------------------------------
+        3️⃣ Fetch all orders META
+      -------------------------------------------------- */
+      const orders = [];
+      for (const raw of orderIds) {
+        const oid = normalizeOrderId(raw);
+        if (!oid) continue;
 
-// If FULL order has mergedOrderIds, use that exact order sequence
-if (fullOrder && Array.isArray(fullOrder.mergedOrderIds) && fullOrder.mergedOrderIds.length) {
-  distributorSource = [];
-  for (const cid of fullOrder.mergedOrderIds) {
+        const g = await ddb.send(
+          new GetCommand({
+            TableName: ORDERS_TABLE,
+            Key: { pk: `ORDER#${oid}`, sk: "META" },
+          })
+        );
+
+        if (g.Item) orders.push(g.Item);
+      }
+
+      if (orders.length === 0) {
+        return res
+          .status(404)
+          .json({ ok: false, message: "Orders meta not found" });
+      }
+
+      /* --------------------------------------------------
+        4️⃣ FULL ORDER (MASTER)
+      -------------------------------------------------- */
+      const fullOrder = orders.find((o) =>
+        String(o.orderId || "").startsWith("ORD_FULL_")
+      );
+
+      /* --------------------------------------------------
+        5️⃣ Calc orders (exclude FULL)
+      -------------------------------------------------- */
+      const childOrders = orders.filter(
+        (o) => !String(o.orderId || "").startsWith("ORD_FULL_")
+      );
+
+      const calcOrders = childOrders.length > 0 ? childOrders : orders;
+  // 🔥 DEDUPE calcOrders (prevents double totals)
+  const seen = new Set();
+  const uniqCalcOrders = [];
+
+  for (const o of calcOrders) {
+    const id = String(o.orderId || "");
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    uniqCalcOrders.push(o);
+  }
+
+      /* --------------------------------------------------
+        6️⃣ Totals + Items
+      -------------------------------------------------- */
+      let totalQty = 0;
+      let grandTotal = 0;
+      const loadingItems = [];
+
+      uniqCalcOrders.forEach((o) => {
+        totalQty += Number(o.totalQty || o.qty || 0);
+        grandTotal += Number(o.totalAmount || o.grandTotal || o.total || 0);
+
+        const items = o.items || o.loadingItems || [];
+        items.forEach((it) => loadingItems.push(it));
+      });
+
+      /* --------------------------------------------------
+        7️⃣ STATUS — ALWAYS FROM ORD_FULL IF EXISTS
+      -------------------------------------------------- */
+      let status = "CONFIRMED";
+
+      if (fullOrder?.status) {
+        status = String(fullOrder.status).toUpperCase();
+      } else {
+        const priority = [
+          "DELIVERY_COMPLETED",
+          "DELIVERED",
+          "OUT_FOR_DELIVERY",
+          "DRIVER_ASSIGNED",
+          "LOADING_COMPLETED",
+          "LOADING_STARTED",
+          "VEHICLE_SELECTED",
+          "SLOT_BOOKED",
+          "CONFIRMED",
+        ];
+
+        const stList = orders.map((o) => String(o.status || "").toUpperCase());
+
+        for (const p of priority) {
+          if (stList.includes(p)) {
+            status = p;
+            break;
+          }
+        }
+      }
+/* --------------------------------------------------
+   8️⃣ Distributors
+-------------------------------------------------- */
+
+// ✅ detect merge properly
+const isMerged =
+  fullOrder?.isMerged === true ||
+  (Array.isArray(fullOrder?.mergedOrderIds) && fullOrder.mergedOrderIds.length > 1) ||
+  (Array.isArray(fullOrder?.childOrderIds) && fullOrder.childOrderIds.length > 1);
+
+let distributorSource = [];
+
+// ✅ MERGED → use merged children order sequence
+if (isMerged && fullOrder) {
+  const kids =
+    fullOrder.mergedOrderIds ||
+    fullOrder.childOrderIds ||
+    [];
+
+  for (const cid of kids) {
     const g = await ddb.send(
       new GetCommand({
         TableName: ORDERS_TABLE,
@@ -340,91 +349,100 @@ if (fullOrder && Array.isArray(fullOrder.mergedOrderIds) && fullOrder.mergedOrde
     );
     if (g.Item) distributorSource.push(g.Item);
   }
+} else {
+  // ✅ SINGLE → only 1 distributor
+  distributorSource = [uniqCalcOrders[0]];
 }
 
 const distributors = distributorSource.map((o, idx) => ({
   label: `D${idx + 1}`,
-  distributorId: o.distributorId || null,
-  distributorName: o.distributorName || null,
-  orderId: o.orderId || null,
-  amount: Number(o.totalAmount || o.grandTotal || o.total || 0),
-  qty: Number(o.totalQty || o.qty || 0),
+  distributorId: o?.distributorId || null,
+  distributorName: o?.distributorName || null,
+  orderId: o?.orderId || null,
+  amount: Number(o?.totalAmount || o?.grandTotal || o?.total || 0),
+  qty: Number(o?.totalQty || o?.qty || 0),
 }));
 
 const distributorDisplay =
   distributors.length <= 1
     ? distributors[0]?.distributorName || "-"
-    : distributors.map((d) => `${d.label}: ${d.distributorName || "-"}`).join(" | ");
+    : distributors
+        .map((d) => `${d.label}: ${d.distributorName || "-"}`)
+        .join(" | ");
+      /* --------------------------------------------------
+        9️⃣ DRIVER DETAILS (🔥 MAIN FIX)
+        Always from FULL order (master)
+      -------------------------------------------------- */
+      const driverId = fullOrder?.driverId || null;
+      const driverName =
+  fullOrder?.driverName ||
+  fullOrder?.driverMobile ||
+  null;
 
-    /* --------------------------------------------------
-       9️⃣ DRIVER DETAILS (🔥 MAIN FIX)
-       Always from FULL order (master)
-    -------------------------------------------------- */
-    const driverId = fullOrder?.driverId || null;
-    const driverName = fullOrder?.driverName || null;
-    const driverMobile = fullOrder?.driverMobile || null;
+const driverMobile =
+  fullOrder?.driverMobile || null;
 
-    /* --------------------------------------------------
-       🔟 SLOT DETAILS (for manager flow summary)
-    -------------------------------------------------- */
-    const slotDate = fullOrder?.slotDate || null;
-    const slotTime = fullOrder?.slotTime || null;
-    const slotPos = fullOrder?.slotPos || null;
+      /* --------------------------------------------------
+        🔟 SLOT DETAILS (for manager flow summary)
+      -------------------------------------------------- */
+      const slotDate = fullOrder?.slotDate || null;
+      const slotTime = fullOrder?.slotTime || null;
+      const slotPos = fullOrder?.slotPos || null;
 
-    /* --------------------------------------------------
-       11️⃣ RESPONSE
-    -------------------------------------------------- */
-    return res.json({
-      ok: true,
+      /* --------------------------------------------------
+        11️⃣ RESPONSE
+      -------------------------------------------------- */
+      return res.json({
+        ok: true,
 
-      mergeKey: fullOrder?.mergeKey || orders[0]?.mergeKey || null,
+        mergeKey: fullOrder?.mergeKey || orders[0]?.mergeKey || null,
 
-      flowKey: fullOrder?.orderId || orders[0]?.orderId,
-      masterOrderId: fullOrder?.orderId || orders[0]?.orderId,
-      trackingOrderId: fullOrder?.orderId || orders[0]?.orderId,
+        flowKey: fullOrder?.orderId || orders[0]?.orderId,
+        masterOrderId: fullOrder?.orderId || orders[0]?.orderId,
+        trackingOrderId: fullOrder?.orderId || orders[0]?.orderId,
 
-      // 🔥 important for flutter
-      fullOrderId: fullOrder?.orderId || null,
+        // 🔥 important for flutter
+        fullOrderId: fullOrder?.orderId || null,
 
-      orderIds: calcOrders.map((o) => o.orderId).filter(Boolean),
+        orderIds: calcOrders.map((o) => o.orderId).filter(Boolean),
 
-      totalQty,
-      grandTotal,
+        totalQty,
+        grandTotal,
 
-      status: String(status || "").toUpperCase(),
+        status: String(status || "").toUpperCase(),
 
-     vehicleType:
-  fullOrder?.vehicleType ||
-  orders.find(o => o.vehicleType)?.vehicleType ||
-  null,
+      vehicleType:
+    fullOrder?.vehicleType ||
+    orders.find(o => o.vehicleType)?.vehicleType ||
+    null,
 
-vehicleNo:
-  fullOrder?.vehicleNo ||
-  orders.find(o => o.vehicleNo)?.vehicleNo ||
-  null,
+  vehicleNo:
+    fullOrder?.vehicleNo ||
+    orders.find(o => o.vehicleNo)?.vehicleNo ||
+    null,
 
-      // ✅ slot
-      slotDate,
-      slotTime,
-      slotPos,
+        // ✅ slot
+        slotDate,
+        slotTime,
+        slotPos,
 
-      // ✅ driver
-      driverId,
-      driverName,
-      driverMobile,
+        // ✅ driver
+        driverId,
+        driverName,
+        driverMobile,
 
-      loadingItems,
-      distributors,
-      distributorDisplay,
+        loadingItems,
+        distributors,
+        distributorDisplay,
 
-      // child orders only
-      orders: calcOrders,
-    });
-  } catch (err) {
-    console.error("getOrderFlowByKey error", err);
-    return res.status(500).json({ ok: false, message: err.message });
-  }
-};
+        // child orders only
+        orders: calcOrders,
+      });
+    } catch (err) {
+      console.error("getOrderFlowByKey error", err);
+      return res.status(500).json({ ok: false, message: err.message });
+    }
+  };
 export const slotCompleted = async (req, res) => {
   try {
     const key = req.body.flowKey || req.body.mergeKey || req.body.orderId;

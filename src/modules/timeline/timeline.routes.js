@@ -246,7 +246,7 @@ router.post(
         byUserName: req.user?.name || req.user?.userName || null,
         role: req.user?.role || "MANAGER",
         // ✅ fixed undefined variables (driverPk/driver.name removed)
-        data: { driverId: String(driverId), driverName: null, vehicleNo: vehicleNo || null },
+        data: { driverId, driverName, driverMobile, vehicleNo },
       });
 
       await ddb.send(

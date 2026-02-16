@@ -123,15 +123,22 @@ async function getDriverName(driverId) {
 function prettyTime(ev) {
   const t =
     ev?.displayTime ||
-    ev?.createdAt ||
     ev?.timestamp ||
-    ev?.time ||
+    ev?.createdAt ||
     null;
 
   if (!t) return null;
 
-  return t;
+  // ✅ if already formatted, return
+  if (String(t).includes("MMM")) return t;
+
+  try {
+    return dayjs(t).tz(IST).format("DD MMM YYYY, hh:mm A");
+  } catch (e) {
+    return String(t);
+  }
 }
+
 /* ✅ Build Neat Timeline (alias + gap fix) */
 function buildNeatTimeline(events = [], opts = {}) {
   const stopCount = Math.max(1, Number(opts.stopCount || 1));

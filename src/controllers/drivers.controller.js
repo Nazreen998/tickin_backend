@@ -85,7 +85,12 @@ export async function updateStatus(req, res) {
   try {
     const { orderId } = req.params;
     const body = req.body || {};
-    const { nextStatus, force = false } = body;
+    let { nextStatus, force = false } = body;
+
+// ✅ AUTO FORCE for reach (temporary fix)
+if (String(nextStatus || "").toUpperCase() === "DRIVER_REACHED_DISTRIBUTOR") {
+  force = true;
+}
 
     if (!orderId) return res.status(400).json({ ok: false, message: "orderId required" });
     if (!nextStatus) return res.status(400).json({ ok: false, message: "nextStatus required" });

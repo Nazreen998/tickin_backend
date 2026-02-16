@@ -8,7 +8,8 @@ const DRIVER_GSI = "GSI_DRIVER_ASSIGNED";
 const WAREHOUSE_LAT = Number(process.env.WAREHOUSE_LAT);
 const WAREHOUSE_LNG = Number(process.env.WAREHOUSE_LNG);
 
-const REACH_RADIUS_METERS = 200;
+const REACH_RADIUS_METERS =
+  Number(process.env.REACH_RADIUS_METERS) || 200;
 
 /* ------------------ helpers ------------------ */
 
