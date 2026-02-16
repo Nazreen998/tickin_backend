@@ -89,27 +89,23 @@ export const getSlotConfirmedOrders = async (req, res) => {
         };
       }
 
-      if (!grouped[flowKey].orderIds.includes(oid)) {
-        grouped[flowKey].orderIds.push(oid);
-      }
+      // ❌ skip FULL orderId
+if (!oid.startsWith("ORD_FULL_")) {
+  if (!grouped[flowKey].orderIds.includes(oid)) {
+    grouped[flowKey].orderIds.push(oid);
+  }
+}
+
 
       // ❌ Skip FULL booking itself
       if (oid.startsWith("ORD_FULL_")) continue;
 
-      /* --------------------------
-         Distributor split (order preserved)
-      -------------------------- */
-      const rawName = String(b.distributorName || "-");
-      const parts = rawName
-        .split("+")
-        .map((x) => x.trim())
-        .filter((x) => x.length > 0);
+      const rawName = String(b.distributorName || "-").trim();
 
-      for (const nm of parts) {
-        if (!grouped[flowKey].distributorOrder.includes(nm)) {
-          grouped[flowKey].distributorOrder.push(nm);
-        }
-      }
+if (!grouped[flowKey].distributorOrder.includes(rawName)) {
+  grouped[flowKey].distributorOrder.push(rawName);
+}
+
 
       // ✅ Amount sum only child bookings
       grouped[flowKey].grandAmount += Number(b.amount || 0);
