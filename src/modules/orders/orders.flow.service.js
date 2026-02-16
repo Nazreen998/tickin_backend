@@ -1115,6 +1115,9 @@ if (!fullOrderId) {
               totalAmount = :ta,
               grandTotal = :ta,
               distributorDisplay = :dd,
+              isMerged = :im,
+              childOrderIds = :kids,
+              mergedAt = :u,
               updatedAt = :u
         `,
         ExpressionAttributeNames: { "#s": "status" },
@@ -1130,6 +1133,8 @@ if (!fullOrderId) {
           ":tq": totalQty,
           ":ta": totalAmount,
           ":dd": distributorDisplay,
+           ":im": childOrderIds.length > 1,   // 👈 important
+         ":kids": childOrderIds,            // 👈 important
           ":u": new Date().toISOString(),
         },
       })
