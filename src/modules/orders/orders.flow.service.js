@@ -287,7 +287,7 @@ let totalQty = 0;
 let grandTotal = 0;
 const loadingItems = [];
 
-for (const o of uniqCalcOrders) {
+for (const o of calcOrders) {
   totalQty += Number(o.totalQty || o.qty || 0);
   grandTotal += Number(o.totalAmount || o.grandTotal || o.total || 0);
 
@@ -296,7 +296,6 @@ for (const o of uniqCalcOrders) {
     loadingItems.push(it);
   }
 }
-
       /* --------------------------------------------------
         7️⃣ STATUS — ALWAYS FROM ORD_FULL IF EXISTS
       -------------------------------------------------- */
