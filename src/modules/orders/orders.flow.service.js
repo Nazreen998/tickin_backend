@@ -266,6 +266,16 @@ export const getOrderFlowByKey = async (req, res) => {
     );
 
     const calcOrders = childOrders.length > 0 ? childOrders : orders;
+// 🔥 DEDUPE calcOrders (prevents double totals)
+const seen = new Set();
+const uniqCalcOrders = [];
+
+for (const o of calcOrders) {
+  const id = String(o.orderId || "");
+  if (!id || seen.has(id)) continue;
+  seen.add(id);
+  uniqCalcOrders.push(o);
+}
 
     /* --------------------------------------------------
        6️⃣ Totals + Items
@@ -274,7 +284,7 @@ export const getOrderFlowByKey = async (req, res) => {
     let grandTotal = 0;
     const loadingItems = [];
 
-    calcOrders.forEach((o) => {
+    uniqCalcOrders.forEach((o) => {
       totalQty += Number(o.totalQty || o.qty || 0);
       grandTotal += Number(o.totalAmount || o.grandTotal || o.total || 0);
 
@@ -1163,7 +1173,7 @@ if (!fullOrderId) {
           ExpressionAttributeValues: {
             ":st": "DRIVER_ASSIGNED",
             ":mid": fullOrderId,
-            ":d": normalizeUserPk(driverId),
+            ":d": String(driverId).trim(),
             ":dn": driverName,
             ":dm": driverMobile,
             ":vn": vehicleNo || null,

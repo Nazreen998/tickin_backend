@@ -162,13 +162,14 @@ function buildNeatTimeline(events = [], opts = {}) {
     { key: "WAREHOUSE_REACHED", label: "Warehouse Reached" },
     { key: "DELIVERY_COMPLETED", label: "Delivery Completed" },
   ];
-
-  const ALIAS = {
-    LOAD_START: "LOADING_START",
-    LOAD_END: "LOADING_COMPLETED",
-    LOADING_STARTED: "LOADING_START",
-    DRIVER_STARTED: "DRIVE_STARTED",
-  };
+const ALIAS = {
+  LOAD_START: "LOADING_START",
+  LOAD_END: "LOADING_COMPLETED",
+  LOADING_STARTED: "LOADING_START",   // already ok
+  LOADING_START: "LOADING_START",     // optional
+  LOADING_END: "LOADING_COMPLETED",   // 🔥 ADD THIS
+  DRIVER_STARTED: "DRIVE_STARTED",
+};
 
   // keep latest event per key
   const map = {};
@@ -181,8 +182,8 @@ function buildNeatTimeline(events = [], opts = {}) {
     if (!map[key]) {
       map[key] = e;
     } else {
-      const oldT = new Date(map[key].createdAt || map[key].timestamp || 0);
-      const newT = new Date(e.createdAt || e.timestamp || 0);
+      const oldT = new Date(map[key].timestamp || map[key].createdAt || 0);
+      const newT = new Date(e.timestamp || e.createdAt || 0);
       if (newT > oldT) map[key] = e;
     }
   }
@@ -290,8 +291,10 @@ async function buildDistributorDisplay(meta, childIds) {
 
 /* ✅ Build Meta (mergedOrderIds support + driverName + D1/D2 only if merged) */
 async function buildMeta(meta) {
-  const driverId = meta.driverId || meta.driverUserId || meta.driverMobile || null;
-  const driverName = await getDriverName(driverId);
+  const driverId =
+    meta.driverId || meta.driverUserId || meta.driverMobile || null;
+
+  const driverNameFromUser = await getDriverName(driverId);
 
   const childOrderIds = Array.isArray(meta.childOrderIds)
     ? meta.childOrderIds
@@ -306,29 +309,42 @@ async function buildMeta(meta) {
   );
 
   let distributorDisplay =
+    meta.distributorDisplay ||   // ✅ MAIN FIX
     meta.distributorName ||
     meta.distributor ||
     meta.agencyName ||
     meta.customerName ||
     null;
 
-  // 🔥 IMPORTANT FALLBACK
   if (!distributorDisplay && meta.distributorId) {
     distributorDisplay = meta.distributorId;
   }
 
   return {
     distributorName: distributorDisplay || "-",
+
     vehicleNo:
       meta.vehicleNo ||
       meta.vehicleNumber ||
       meta.vehicle ||
       meta.vehicleId ||
       null,
+
     driverId,
-    driverName: driverName || meta.driverName || meta.driverMobile || null,
+
+    // ✅ MAIN FIX: prefer meta.driverName
+    driverName:
+      meta.driverName ||
+      driverNameFromUser ||
+      meta.driverMobile ||
+      null,
+
+    // ✅ MAIN FIX: needed for flutter
+    driverMobile: meta.driverMobile || null,
+
     status: meta.status || null,
     slotId: meta.slotId || meta.slotPk || null,
+
     isMerged,
     childOrderIds: childOrderIds.map(String),
     mergedAt: meta.mergedAt || null,

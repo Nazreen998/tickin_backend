@@ -90,12 +90,15 @@ function normalizeDistributors(order) {
   return list.map((d0) => {
     const d = d0?.M ? d0.M : d0;
 
-    let lat = unwrap(d.lat ?? d.latitude);
-    let lng = unwrap(d.lng ?? d.longitude);
+let lat =
+  unwrap(d.lat ?? d.latitude ?? d.distributorLat ?? d.distributor_lat);
+
+let lng =
+  unwrap(d.lng ?? d.longitude ?? d.distributorLng ?? d.distributor_lng);
 
     const mapUrl = unwrap(d.mapUrl ?? d.final_url ?? d.finalUrl);
 
-    if ((!lat || !lng) && mapUrl) {
+    if ((lat == null || lng == null) && mapUrl) {
       const parsed = parseLatLngFromUrl(mapUrl);
       lat = lat ?? parsed.lat;
       lng = lng ?? parsed.lng;
@@ -242,6 +245,7 @@ function hydrateDriverCard(order = {}) {
 }
 
 /**-------GET DRIVER ORDERS--------*/
+/**-------GET DRIVER ORDERS--------*/
 export async function getDriverOrders(driverId) {
   if (!driverId) return [];
 
@@ -270,36 +274,40 @@ export async function getDriverOrders(driverId) {
     ),
   ]);
 
-  const allItems = [
-    ...(resRaw.Items || []),
-    ...(resPk.Items || []),
-  ];
+  const allItems = [...(resRaw.Items || []), ...(resPk.Items || [])];
 
+  // ✅ REMOVE DUPLICATES by orderId
+  const uniqueMap = new Map();
+  for (const o of allItems) {
+    const oid = o?.orderId ? String(o.orderId) : null;
+    if (!oid) continue;
+    uniqueMap.set(oid, o);
+  }
+  const uniqueOrders = Array.from(uniqueMap.values());
+
+  // ✅ Allowed statuses only (driver screen show)
   const allowed = new Set([
-  "DRIVER_ASSIGNED",
-  "LOADING_STARTED",
-  "LOADING_COMPLETED",
-  "DRIVER_STARTED",
-  "DRIVE_STARTED",
-  "REACHED_D1",
-  "REACHED_D2",
-  "UNLOADING_START_D1",
-  "UNLOADING_START_D2",
-  "UNLOADING_END_D1",
-  "UNLOADING_END_D2",
-  "WAREHOUSE_REACHED",
-  "DELIVERY_COMPLETED",
-]);
-  return allItems
-  .filter(
-    (o) =>
-      o.deletedByDriver !== true &&
-      String(o.status || "").toUpperCase() !== "CONFIRMED"
-  )
-  .map(hydrateDriverCard);
+    "DRIVER_ASSIGNED",
+    "LOADING_STARTED",
+    "LOADING_COMPLETED",
+    "DRIVER_STARTED",
+    "DRIVE_STARTED",
+    "REACHED_D1",
+    "REACHED_D2",
+    "UNLOADING_START_D1",
+    "UNLOADING_START_D2",
+    "UNLOADING_END_D1",
+    "UNLOADING_END_D2",
+    "WAREHOUSE_REACHED",
+    "DELIVERY_COMPLETED",
+  ]);
 
+  return uniqueOrders
+    .filter((o) => o.deletedByDriver !== true)
+    .filter((o) => String(o.status || "").toUpperCase() !== "CONFIRMED")
+    .filter((o) => allowed.has(String(o.status || "").toUpperCase()))
+    .map(hydrateDriverCard);
 }
-
 /* -------- distance validation -------- */
 
 export async function validateDriverReach30m({ orderId, currentLat, currentLng }) {
@@ -334,7 +342,7 @@ export async function validateDriverReach30m({ orderId, currentLat, currentLng }
   };
 }
 
-/* ------------------ UPDATE STATUS ------------------ */
+/* ------------------ UxPDATE STATUS ------------------ */
 export async function updateDriverStatus({
   orderId,
   nextStatus,
@@ -402,8 +410,16 @@ if (desired === "WAREHOUSE_REACHED") {
   let newIdx = idx;
   let newDistributors = distributors;
 
-  if (desired === "REACHED_D1" || desired === "REACHED_D2") {
+    if (desired === "REACHED_D1" || desired === "REACHED_D2") {
     if (!stop) throw new Error("No distributor stop found");
+
+    // ✅ DEBUG (Render logs la paaka)
+    console.log("------ REACH DEBUG ------");
+    console.log("orderId:", orderId, "idx:", idx);
+    console.log("STOP:", stop);
+    console.log("STOP LAT:", stop?.lat, "STOP LNG:", stop?.lng);
+    console.log("DRIVER LAT:", currentLat, "DRIVER LNG:", currentLng);
+    console.log("-------------------------");
 
     if (!force) {
       if (!isFiniteLatLng(stop.lat, stop.lng)) {
@@ -418,6 +434,7 @@ if (desired === "WAREHOUSE_REACHED") {
         currentLat,
         currentLng,
       });
+
       if (!check.within) {
         return {
           ok: false,
@@ -426,6 +443,8 @@ if (desired === "WAREHOUSE_REACHED") {
           distanceMeters: check.distanceMeters,
           radiusMeters: check.radiusMeters,
           currentStopIndex: check.currentStopIndex,
+          distributorLat: check.distributorLat,
+          distributorLng: check.distributorLng,
         };
       }
     }
