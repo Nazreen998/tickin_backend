@@ -271,28 +271,42 @@ const calcOrders = childOrders.length > 0 ? childOrders : orders;
    6️⃣ Totals + Items (FINAL FIX)
    ✅ Prefer FULL totals if available
 -------------------------------------------------- */
-let totalQty = 0;
-let grandTotal = 0;
-const loadingItems = [];
+const fullQty = Number(fullOrder?.totalQty || 0);
+const fullAmt = Number(fullOrder?.totalAmount || fullOrder?.grandTotal || 0);
 
-// ✅ 1) Prefer FULL totals if present
-if (fullOrder && (fullOrder.totalQty != null || fullOrder.totalAmount != null || fullOrder.grandTotal != null)) {
-  totalQty = Number(fullOrder.totalQty || 0);
-  grandTotal = Number(fullOrder.totalAmount || fullOrder.grandTotal || 0);
+if (fullOrder && (fullQty > 0 || fullAmt > 0)) {
+  totalQty = fullQty;
+  grandTotal = fullAmt;
 
   const items = fullOrder.items || fullOrder.loadingItems || [];
   for (const it of items) loadingItems.push(it);
+
 } else {
-  // ✅ 2) Else sum from child orders
   for (const o of calcOrders) {
-    totalQty += Number(o.totalQty || o.qty || 0);
-    grandTotal += Number(o.totalAmount || o.grandTotal || o.total || o.amount || 0);
+
+    const q =
+      Number(o.totalQty) ||
+      Number(o.qty) ||
+      (Array.isArray(o.items)
+        ? o.items.reduce((s, it) => s + Number(it.qty || 0), 0)
+        : 0);
+
+    const a =
+      Number(o.totalAmount) ||
+      Number(o.grandTotal) ||
+      Number(o.total) ||
+      Number(o.amount) ||
+      (Array.isArray(o.items)
+        ? o.items.reduce((s, it) => s + Number(it.total || 0), 0)
+        : 0);
+
+    totalQty += q;
+    grandTotal += a;
 
     const items = o.items || o.loadingItems || [];
     for (const it of items) loadingItems.push(it);
   }
 }
-
       /* --------------------------------------------------
         7️⃣ STATUS — ALWAYS FROM ORD_FULL IF EXISTS
       -------------------------------------------------- */
