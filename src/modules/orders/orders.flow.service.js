@@ -266,7 +266,10 @@ const childOrders = orders.filter(
 );
 
 const calcOrders = childOrders.length > 0 ? childOrders : orders;
-
+// ✅ ADD THIS
+let totalQty = 0;
+let grandTotal = 0;
+const loadingItems = [];
 /* --------------------------------------------------
    6️⃣ Totals + Items (FINAL FIX)
    ✅ Prefer FULL totals if available
@@ -351,14 +354,21 @@ if (Array.isArray(baseOrder?.distributors) && baseOrder.distributors.length) {
   distributorSource = [baseOrder];
 }
 
-const distributors = distributorSource.map((o, idx) => ({
-  label: `D${idx + 1}`,
-  distributorId: o?.distributorCode || o?.distributorId || null,
-  distributorName: o?.distributorName || null,
-  orderId: baseOrder?.orderId || null,
-  amount: Number(baseOrder?.totalAmount || baseOrder?.grandTotal || 0),
-  qty: Number(baseOrder?.totalQty || 0),
-}));
+const distributors = distributorSource.map((d, idx) => {
+  const items = d?.items || [];
+
+  const qty = items.reduce((s, it) => s + Number(it.qty || 0), 0);
+  const amount = items.reduce((s, it) => s + Number(it.total || 0), 0);
+
+  return {
+    label: `D${idx + 1}`,
+    distributorId: d?.distributorCode || d?.distributorId || null,
+    distributorName: d?.distributorName || null,
+    orderId: baseOrder?.orderId || null,
+    amount,
+    qty,
+  };
+});
 
 const distributorDisplay =
   distributors.length <= 1
