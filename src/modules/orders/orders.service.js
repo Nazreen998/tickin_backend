@@ -111,14 +111,29 @@ for (const b of bookings) {
   const already = grouped[flowKey].distributors.some(
     (d) => d.orderId === oid
   );
+if (oid.startsWith("ORD_FULL_")) continue;
+  const rawName = (b.distributorName || "-").toString();
 
-  if (!already) {
+const parts = rawName
+  .split("+")
+  .map((x) => x.trim())
+  .filter((x) => x.length > 0);
+
+
+for (const nm of parts) {
+  const exists = grouped[flowKey].distributors.some(
+    (d) => d.distributorName === nm
+  );
+
+  if (!exists) {
     grouped[flowKey].distributors.push({
       orderId: oid,
-      distributorName: b.distributorName || "-",
+      distributorName: nm,
       distributorId: b.distributorCode || null,
     });
   }
+}
+
 
   grouped[flowKey].grandAmount += Number(b.amount || 0);
 }
