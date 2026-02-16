@@ -153,30 +153,37 @@ function buildNeatTimeline(events = [], opts = {}) {
     );
   }
 
-  const STEPS = [
-    { key: "ORDER_CREATED", label: "Order Created" },
-    { key: "ORDER_CONFIRMED", label: "Order Confirmed" },
-    { key: "SLOT_BOOKING", label: "Slot Booking" },
-    { key: "SLOT_BOOKING_COMPLETED", label: "Slot Booking Completed" },
-    { key: "VEHICLE_SELECTED", label: "Vehicle Selected" },
-    { key: "LOADING_START", label: "Loading Start" },
-    { key: "LOADING_COMPLETED", label: "Loading Completed" },
-    { key: "DRIVER_ASSIGNED", label: "Driver Assigned" },
-    { key: "DRIVE_STARTED", label: "Drive Started" },
+ const STEPS = [
+  { key: "ORDER_CREATED", label: "Order Created" },
+  { key: "ORDER_CONFIRMED", label: "Order Confirmed" },
+  { key: "SLOT_BOOKED", label: "Slot Booking" },
+  { key: "SLOT_BOOKING_COMPLETED", label: "Slot Booking Completed" },
+  { key: "VEHICLE_SELECTED", label: "Vehicle Selected" },
+  { key: "LOADING_STARTED", label: "Loading Start" },
+  { key: "LOADING_COMPLETED", label: "Loading Completed" },
+  { key: "DRIVER_ASSIGNED", label: "Driver Assigned" },
+  { key: "DRIVER_STARTED", label: "Drive Started" },
 
-    ...STOP_STEPS,
+  ...STOP_STEPS,
 
-    { key: "WAREHOUSE_REACHED", label: "Warehouse Reached" },
-    { key: "DELIVERY_COMPLETED", label: "Delivery Completed" },
-  ];
+  { key: "WAREHOUSE_REACHED", label: "Warehouse Reached" },
+  { key: "DELIVERY_COMPLETED", label: "Delivery Completed" },
+];
+
 const ALIAS = {
-  LOAD_START: "LOADING_START",
+  SLOT_BOOKING: "SLOT_BOOKED",
+
+  LOAD_START: "LOADING_STARTED",
+  LOADING_START: "LOADING_STARTED",
+  LOADING_STARTED: "LOADING_STARTED",
+
   LOAD_END: "LOADING_COMPLETED",
-  LOADING_STARTED: "LOADING_START",   // already ok
-  LOADING_START: "LOADING_START",     // optional
-  LOADING_END: "LOADING_COMPLETED",   // 🔥 ADD THIS
-  DRIVER_STARTED: "DRIVE_STARTED",
+  LOADING_END: "LOADING_COMPLETED",
+  LOADING_COMPLETED: "LOADING_COMPLETED",
+
+  DRIVE_STARTED: "DRIVER_STARTED",
 };
+
 
   // keep latest event per key
   const map = {};
@@ -299,8 +306,11 @@ async function buildDistributorDisplay(meta, childIds) {
 /* ✅ Build Meta (mergedOrderIds support + driverName + D1/D2 only if merged) */
 async function buildMeta(meta) {
   const driverId =
-    meta.driverId || meta.driverUserId || meta.driverMobile || null;
-
+  meta.driverId ||
+  meta.driverUserId ||
+  meta.driverPk ||
+  meta.driverMobile ||
+  null;
   const driverNameFromUser = await getDriverName(driverId);
 
   const childOrderIds = Array.isArray(meta.childOrderIds)
@@ -340,11 +350,10 @@ async function buildMeta(meta) {
     driverId,
 
     // ✅ MAIN FIX: prefer meta.driverName
-    driverName:
-      meta.driverName ||
-      driverNameFromUser ||
-      meta.driverMobile ||
-      null,
+  driverName:
+  meta.driverName ||
+  driverNameFromUser ||
+  null,
 
     // ✅ MAIN FIX: needed for flutter
     driverMobile: meta.driverMobile || null,
@@ -429,13 +438,7 @@ const stopCount =
 
 const rawTimeline = await fetchRawTimeline(targetOrderId);
 let neatTimeline = buildNeatTimeline(rawTimeline, { stopCount });
-
-
-    // ✅ merged common timeline should start AFTER slot booking completed
-    if (uiMeta.isMerged) neatTimeline = trimPostMerge(neatTimeline);
-
     const preMerge = await buildPreMergeIfNeeded(uiMeta);
-
     return res.json({
   ok: true,
 
@@ -482,10 +485,6 @@ export async function getOrderTimelineNeat(req, res) {
 
 const rawTimeline = await fetchRawTimeline(targetOrderId);
 let neatTimeline = buildNeatTimeline(rawTimeline, { stopCount });
-
-
-    if (uiMeta.isMerged) neatTimeline = trimPostMerge(neatTimeline);
-
     const preMerge = await buildPreMergeIfNeeded(uiMeta);
 
   return res.json({
