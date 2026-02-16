@@ -452,7 +452,25 @@ const stopCount =
     : 1;
 
 const rawTimeline = await fetchRawTimeline(targetOrderId);
-let neatTimeline = buildNeatTimeline(rawTimeline, meta, { stopCount });
+// ✅ Merge child order events also
+if (uiMeta.isMerged && uiMeta.childOrderIds.length) {
+  for (const cid of uiMeta.childOrderIds) {
+    const childRaw = await fetchRawTimeline(cid);
+    rawTimeline.push(...childRaw);
+  }
+}
+
+// ✅ Sort by time
+rawTimeline.sort((a, b) => {
+  const ta = new Date(a.timestamp || a.createdAt || 0).getTime();
+  const tb = new Date(b.timestamp || b.createdAt || 0).getTime();
+  return ta - tb;
+});
+
+let neatTimeline = buildNeatTimeline(rawTimeline, {
+  stopCount,
+  meta,
+});
     const preMerge = await buildPreMergeIfNeeded(uiMeta);
     return res.json({
   ok: true,
@@ -499,7 +517,28 @@ export async function getOrderTimelineNeat(req, res) {
     : 1;
 
 const rawTimeline = await fetchRawTimeline(targetOrderId);
-let neatTimeline = buildNeatTimeline(rawTimeline, meta, { stopCount });
+
+// ✅ Merge child order events also (important after FULL switch)
+if (uiMeta.isMerged && uiMeta.childOrderIds.length) {
+  for (const cid of uiMeta.childOrderIds) {
+    const childRaw = await fetchRawTimeline(cid);
+    rawTimeline.push(...childRaw);
+  }
+}
+
+// ✅ Sort by time
+rawTimeline.sort((a, b) => {
+  const ta = new Date(a.timestamp || a.createdAt || 0).getTime();
+  const tb = new Date(b.timestamp || b.createdAt || 0).getTime();
+  return ta - tb;
+});
+
+// ✅ Build neat timeline with META fallback
+let neatTimeline = buildNeatTimeline(rawTimeline, {
+  stopCount,
+  meta,
+});
+
     const preMerge = await buildPreMergeIfNeeded(uiMeta);
 
   return res.json({
