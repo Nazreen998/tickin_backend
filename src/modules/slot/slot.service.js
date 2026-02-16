@@ -1326,7 +1326,7 @@ const { resolvedName, safeLat, safeLng, resolvedLocationId } =
         TableName: TABLE_ORDERS,
         Key: { pk: `ORDER#${orderId}`, sk: "META" },
         UpdateExpression:
-          "SET slotBooked=:sb, slotId=:sid, slotDate=:d, slotTime=:t, slotVehicleType=:vt, slotPos=:p, updatedAt=:u",
+          "SET slotBooked=:sb,slotBookedAt = :u, slotId=:sid, slotDate=:d, slotTime=:t, slotVehicleType=:vt, slotPos=:p, updatedAt=:u",
         ExpressionAttributeValues: {
           ":sb": true,
           ":sid": slotId,
