@@ -323,45 +323,27 @@ if (fullOrder && (fullOrder.totalQty != null || fullOrder.totalAmount != null ||
         }
       }
 /* --------------------------------------------------
-   8️⃣ Distributors
+   8️⃣ Distributors (FINAL FIX)
 -------------------------------------------------- */
-
-// ✅ detect merge properly
-const isMerged =
-  fullOrder?.isMerged === true ||
-  (Array.isArray(fullOrder?.mergedOrderIds) && fullOrder.mergedOrderIds.length > 1) ||
-  (Array.isArray(fullOrder?.childOrderIds) && fullOrder.childOrderIds.length > 1);
 
 let distributorSource = [];
 
-// ✅ MERGED → use merged children order sequence
-if (isMerged && fullOrder) {
-  const kids =
-    fullOrder.mergedOrderIds ||
-    fullOrder.childOrderIds ||
-    [];
+// 🔥 Always use FULL order if exists
+const baseOrder = fullOrder || orders[0];
 
-  for (const cid of kids) {
-    const g = await ddb.send(
-      new GetCommand({
-        TableName: ORDERS_TABLE,
-        Key: { pk: `ORDER#${cid}`, sk: "META" },
-      })
-    );
-    if (g.Item) distributorSource.push(g.Item);
-  }
+if (Array.isArray(baseOrder?.distributors) && baseOrder.distributors.length) {
+  distributorSource = baseOrder.distributors;
 } else {
-  // ✅ SINGLE → only 1 distributor
-  distributorSource = calcOrders.length > 0 ? [calcOrders[0]] : [];
+  distributorSource = [baseOrder];
 }
 
 const distributors = distributorSource.map((o, idx) => ({
   label: `D${idx + 1}`,
-  distributorId: o?.distributorId || null,
+  distributorId: o?.distributorCode || o?.distributorId || null,
   distributorName: o?.distributorName || null,
-  orderId: o?.orderId || null,
-  amount: Number(o?.totalAmount || o?.grandTotal || o?.total || 0),
-  qty: Number(o?.totalQty || o?.qty || 0),
+  orderId: baseOrder?.orderId || null,
+  amount: Number(baseOrder?.totalAmount || baseOrder?.grandTotal || 0),
+  qty: Number(baseOrder?.totalQty || 0),
 }));
 
 const distributorDisplay =
@@ -370,6 +352,7 @@ const distributorDisplay =
     : distributors
         .map((d) => `${d.label}: ${d.distributorName || "-"}`)
         .join(" | ");
+
       /* --------------------------------------------------
         9️⃣ DRIVER DETAILS (🔥 MAIN FIX)
         Always from FULL order (master)
