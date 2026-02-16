@@ -744,7 +744,7 @@ export const vehicleSelected = async (req, res) => {
               vehicleType = :vt,
               vehicleNo = :vn,
               updatedAt = :u,
-              vehicleSelectedAt = :t,
+              vehicleSelectedAt = :t
         `,
         ExpressionAttributeNames: { "#s": "status" },
         ExpressionAttributeValues: {
@@ -1161,7 +1161,7 @@ if (!fullOrderId) {
               childOrderIds = :kids,
               mergedAt = :u,
               updatedAt = :u,
-              driverAssignedAt = :u,
+              driverAssignedAt = :u
         `,
         ExpressionAttributeNames: { "#s": "status" },
         ExpressionAttributeValues: {
