@@ -305,29 +305,38 @@ async function ensureVehicleSelected(orderIds = []) {
     const status = String(fullOrder?.status || "CONFIRMED").toUpperCase();
 
     /* --------------------------------------------------
-       7️⃣ Distributors (D1 D2 D3 Support)
-       ✅ Always from calcOrders (child orders)
-    -------------------------------------------------- */
-    const distributors = calcOrders.map((o, idx) => ({
-      label: `D${idx + 1}`,
-      distributorId: o?.distributorId || o?.distributorCode || null,
-      distributorName:
-        o?.distributorDisplay ||
-        o?.distributorName ||
-        o?.distributor ||
-        o?.agencyName ||
-        null,
-      orderId: o?.orderId || null,
-      qty: Number(o?.totalQty || 0),
-      amount: Number(o?.totalAmount || o?.grandTotal || 0),
-    }));
+   7️⃣ Distributors (D1 D2 D3 Support)
+   ✅ Always from FULL order distributors[]
+-------------------------------------------------- */
 
-    const distributorDisplay =
-      distributors.length <= 1
-        ? distributors[0]?.distributorName || "-"
-        : distributors
-            .map((d) => d?.distributorName || "-")
-            .join(" + ");
+let distributorSource = [];
+
+if (Array.isArray(fullOrder?.distributors) && fullOrder.distributors.length) {
+  distributorSource = fullOrder.distributors;
+} else {
+  distributorSource = [fullOrder]; // single fallback
+}
+
+const distributors = distributorSource.map((d, idx) => {
+  const items = Array.isArray(d?.items) ? d.items : [];
+
+  const qty = items.reduce((s, it) => s + Number(it.qty || 0), 0);
+  const amount = items.reduce((s, it) => s + Number(it.total || 0), 0);
+
+  return {
+    label: `D${idx + 1}`,
+    distributorId: d?.distributorCode || d?.distributorId || null,
+    distributorName: d?.distributorName || null,
+    orderId: fullOrder?.orderId || null,
+    qty,
+    amount,
+  };
+});
+
+const distributorDisplay =
+  distributors.length <= 1
+    ? distributors[0]?.distributorName || "-"
+    : distributors.map((d) => d?.distributorName || "-").join(" + ");
 
     /* --------------------------------------------------
        8️⃣ Driver (always from FULL order)

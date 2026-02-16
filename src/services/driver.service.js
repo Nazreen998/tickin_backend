@@ -152,17 +152,19 @@ function getCurrentStop(order) {
 
 /* ✅ D1 / D2 helpers */
 function stopLabel(idx) {
-  return idx === 0 ? "D1" : "D2";
+  return `D${Number(idx) + 1}`;
 }
 
 function reachedEventKey(idx) {
-  return idx === 0 ? "REACHED_D1" : "REACHED_D2";
+  return `REACHED_D${Number(idx) + 1}`;
 }
+
 function unloadStartEventKey(idx) {
-  return idx === 0 ? "UNLOADING_START_D1" : "UNLOADING_START_D2";
+  return `UNLOADING_START_D${Number(idx) + 1}`;
 }
+
 function unloadEndEventKey(idx) {
-  return idx === 0 ? "UNLOADING_END_D1" : "UNLOADING_END_D2";
+  return `UNLOADING_END_D${Number(idx) + 1}`;
 }
 
 /* ------------------ core ------------------ */
@@ -285,28 +287,32 @@ export async function getDriverOrders(driverId) {
   const uniqueOrders = Array.from(uniqueMap.values());
 
   // ✅ Allowed statuses only (driver screen show)
-  const allowed = new Set([
-    "DRIVER_ASSIGNED",
-    "LOADING_STARTED",
-    "LOADING_COMPLETED",
-    "DRIVER_STARTED",
-    "DRIVE_STARTED",
-    "REACHED_D1",
-    "REACHED_D2",
-    "UNLOADING_START_D1",
-    "UNLOADING_START_D2",
-    "UNLOADING_END_D1",
-    "UNLOADING_END_D2",
-    "WAREHOUSE_REACHED",
-    "DELIVERY_COMPLETED",
-  ]);
+ return uniqueOrders
+  .filter((o) => o.deletedByDriver !== true)
+  .filter((o) => {
+    const st = String(o.status || "").toUpperCase();
 
-  return uniqueOrders
-    .filter((o) => o.deletedByDriver !== true)
-    .filter((o) => String(o.status || "").toUpperCase() !== "CONFIRMED")
-    .filter((o) => String(o.status || "").toUpperCase() !== "MERGED")
-    .filter((o) => allowed.has(String(o.status || "").toUpperCase()))
-    .map(hydrateDriverCard);
+    if (st === "CONFIRMED") return false;
+    if (st === "MERGED") return false;
+
+    // Static stages
+    if (
+      st === "DRIVER_ASSIGNED" ||
+      st === "LOADING_STARTED" ||
+      st === "LOADING_COMPLETED" ||
+      st === "DRIVER_STARTED" ||
+      st === "WAREHOUSE_REACHED" ||
+      st === "DELIVERY_COMPLETED"
+    ) return true;
+
+    // 🔥 Dynamic D1 / D2 / D3 / D4 ...
+    if (/^REACHED_D\d+$/.test(st)) return true;
+    if (/^UNLOADING_START_D\d+$/.test(st)) return true;
+    if (/^UNLOADING_END_D\d+$/.test(st)) return true;
+
+    return false;
+  })
+  .map(hydrateDriverCard);
 }
 /* -------- distance validation -------- */
 
@@ -368,12 +374,14 @@ export async function updateDriverStatus({
   if (incoming === "UNLOAD_START") desired = unloadStartEventKey(idx);
   if (incoming === "UNLOAD_END") desired = unloadEndEventKey(idx);
 
-  if (
-    !hasD2 &&
-    ["REACHED_D2", "UNLOADING_START_D2", "UNLOADING_END_D2"].includes(desired)
-  ) {
-    throw new Error("D2 not applicable for single order");
-  }
+ if (Number(idx) >= totalStops) {
+  throw new Error("Invalid distributor stop index");
+}
+
+if (totalStops <= 1 && Number(idx) !== 0) {
+  throw new Error("Only D1 applicable for single order");
+}
+
 
   validateTransition(currentStatus, desired);
 // ✅ WAREHOUSE REACHED → location validation
@@ -410,7 +418,7 @@ if (desired === "WAREHOUSE_REACHED") {
   let newIdx = idx;
   let newDistributors = distributors;
 
-    if (desired === "REACHED_D1" || desired === "REACHED_D2") {
+    if (/^REACHED_D\d+$/.test(desired)) {
     if (!stop) throw new Error("No distributor stop found");
 
     // ✅ DEBUG (Render logs la paaka)
@@ -453,13 +461,13 @@ if (desired === "WAREHOUSE_REACHED") {
     newDistributors[idx] = { ...newDistributors[idx], reachedAt: toIsoNow() };
   }
 
-  if (desired === "UNLOADING_START_D1" || desired === "UNLOADING_START_D2") {
+  if (/^UNLOADING_START_D\d+$/.test(desired)) {
     if (!stop) throw new Error("No distributor stop found");
     newDistributors = [...newDistributors];
     newDistributors[idx] = { ...newDistributors[idx], unloadStartAt: toIsoNow() };
   }
 
-  if (desired === "UNLOADING_END_D1" || desired === "UNLOADING_END_D2") {
+  if (/^UNLOADING_END_D\d+$/.test(desired)) {
     if (!stop) throw new Error("No distributor stop found");
 
     newDistributors = [...newDistributors];
@@ -507,7 +515,7 @@ if (desired === "WAREHOUSE_REACHED") {
           ? "WAREHOUSE"
           : desired === "DELIVERY_COMPLETED"
           ? "DONE"
-          : stopLabel(idx),
+          : stopLabel(newIdx),
       stopIndex: idx,
       currentLat,
       currentLng,
@@ -515,8 +523,7 @@ if (desired === "WAREHOUSE_REACHED") {
   });
   return {
     ok: true,
-    reached:
-      desired === "REACHED_D1" || desired === "REACHED_D2" ? true : undefined,
+    reached: /^REACHED_D\d+$/.test(desired) ? true : undefined,
     order: after,
   };
 }
