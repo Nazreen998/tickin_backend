@@ -244,8 +244,6 @@ function hydrateDriverCard(order = {}) {
 
   return out;
 }
-
-/**-------GET DRIVER ORDERS--------*/
 /**-------GET DRIVER ORDERS--------*/
 export async function getDriverOrders(driverId) {
   if (!driverId) return [];
@@ -306,6 +304,7 @@ export async function getDriverOrders(driverId) {
   return uniqueOrders
     .filter((o) => o.deletedByDriver !== true)
     .filter((o) => String(o.status || "").toUpperCase() !== "CONFIRMED")
+    .filter((o) => String(o.status || "").toUpperCase() !== "MERGED")
     .filter((o) => allowed.has(String(o.status || "").toUpperCase()))
     .map(hydrateDriverCard);
 }

@@ -258,6 +258,7 @@ async function ensureVehicleSelected(orderIds = []) {
 if (!fullOrder) {
   fullOrder = orders[0];
 }
+
 /* --------------------------------------------------
    5️⃣ Calc orders (exclude FULL)
 -------------------------------------------------- */
@@ -1173,13 +1174,11 @@ if (!fullOrderId) {
         },
       })
     );
+/* --------------------------------------------------
+   8️⃣ CHILD ORDERS UPDATE
+-------------------------------------------------- */
 
-    /* --------------------------------------------------
-       8️⃣ CHILD ORDERS UPDATE
-       🔥 DO NOT REMOVE driverName/mobile
-       (because timeline screen reads from child sometimes)
-    -------------------------------------------------- */
-    for (const cid of childOrderIds) {// ✅ only if REAL MERGE
+// ✅ MERGE ORDER: children should become MERGED
 if (childOrderIds.length > 1) {
   for (const cid of childOrderIds) {
     await ddb.send(
@@ -1197,7 +1196,7 @@ if (childOrderIds.length > 1) {
         `,
         ExpressionAttributeNames: { "#s": "status" },
         ExpressionAttributeValues: {
-          ":st": "MERGED", // 🔥 MAIN FIX
+          ":st": "MERGED", // 🔥 IMPORTANT
           ":mid": fullOrderId,
           ":d": String(driverId).trim(),
           ":dn": driverName,
@@ -1208,8 +1207,10 @@ if (childOrderIds.length > 1) {
       })
     );
   }
-} else {
-  // ✅ SINGLE ORDER: update same order normally
+}
+
+// ✅ SINGLE ORDER: child is same order → keep DRIVER_ASSIGNED
+else {
   const cid = childOrderIds[0];
 
   await ddb.send(
@@ -1236,7 +1237,6 @@ if (childOrderIds.length > 1) {
     })
   );
 }
-  }
 /* --------------------------------------------------
    9️⃣ BOOKINGS TABLE UPDATE (REAL FIX)
    - find bookings by pk + orderId
