@@ -259,7 +259,7 @@ if (!fullOrder) {
   fullOrder = orders[0];
 }
 /* --------------------------------------------------
-   5️⃣ Calc orders (exclude FULL)
+   5️⃣ Calc orders (FINAL)
 -------------------------------------------------- */
 const childOrders = orders.filter(
   (o) => !String(o.orderId || "").startsWith("ORD_FULL_")
@@ -267,21 +267,19 @@ const childOrders = orders.filter(
 
 let calcOrders = [];
 
-// ✅ If FULL exists → use child orders
 if (fullOrder) {
   calcOrders = childOrders;
 } else {
-  // ✅ If no FULL → use all orders (single flow)
   calcOrders = orders;
 }
 
-// 🔥 fallback: if FULL exists but children not fetched
+// fallback: FULL exists but child not fetched
 if (fullOrder && calcOrders.length === 0) {
   calcOrders = orders;
 }
 
 /* --------------------------------------------------
-   6️⃣ Totals + Items (FINAL FIX)
+   6️⃣ Totals + Items (FINAL)
 -------------------------------------------------- */
 let totalQty = 0;
 let grandTotal = 0;
