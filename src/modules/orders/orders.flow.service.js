@@ -44,13 +44,9 @@ if (key.startsWith("ORD_FULL_")) {
   const merged = Array.isArray(fullMeta?.Item?.mergedOrderIds)
     ? fullMeta.Item.mergedOrderIds
     : [];
-
-  // 🔥 MAIN FIX
   // 👉 If NO merged orders → SINGLE order
-  // 👉 Use ONLY base order (ORDxxxx)
   if (merged.length === 0) {
-  const baseOrd = `ORD${key.replace("ORD_FULL_", "")}`;
-  return [key, baseOrd].map(normalizeOrderId).filter(Boolean);
+  return [key].map(normalizeOrderId).filter(Boolean);
 }
   // 👉 If merged → FULL + children
   return [key, ...merged]
@@ -254,10 +250,14 @@ async function ensureVehicleSelected(orderIds = []) {
       /* --------------------------------------------------
         4️⃣ FULL ORDER (MASTER)
       -------------------------------------------------- */
-      const fullOrder = orders.find((o) =>
-        String(o.orderId || "").startsWith("ORD_FULL_")
-      );
+     let fullOrder = orders.find((o) =>
+  String(o.orderId || "").startsWith("ORD_FULL_")
+);
 
+// 🔥 SINGLE ORDER FALLBACK
+if (!fullOrder) {
+  fullOrder = orders[0];
+}
       /* --------------------------------------------------
         5️⃣ Calc orders (exclude FULL)
       -------------------------------------------------- */
@@ -373,15 +373,18 @@ const distributorDisplay =
         9️⃣ DRIVER DETAILS (🔥 MAIN FIX)
         Always from FULL order (master)
       -------------------------------------------------- */
-      const driverId = fullOrder?.driverId || null;
-      const driverName =
+     const driverId = fullOrder?.driverId || null;
+
+const driverName =
   fullOrder?.driverName ||
   fullOrder?.driverMobile ||
+  orders.find(o => o.driverName)?.driverName ||
   null;
 
 const driverMobile =
-  fullOrder?.driverMobile || null;
-
+  fullOrder?.driverMobile ||
+  orders.find(o => o.driverMobile)?.driverMobile ||
+  null;
       /* --------------------------------------------------
         🔟 SLOT DETAILS (for manager flow summary)
       -------------------------------------------------- */

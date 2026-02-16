@@ -240,7 +240,7 @@ router.post(
       const trackingOrderId = await resolveTrackingOrderId(orderId);
 
       await addTimelineEvent({
-        orderId: trackingOrderId,
+        orderId: fullOrderId,
         event: "DRIVER_ASSIGNED",
         by: req.user?.mobile || "system",
         byUserName: req.user?.name || req.user?.userName || null,
