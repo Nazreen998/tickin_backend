@@ -385,10 +385,9 @@ if (desired === "WAREHOUSE_REACHED") {
 
   if (!force) {
     if (!isFiniteLatLng(currentLat, currentLng)) {
-  console.log("⚠️ No GPS from app. Using warehouse location.");
-  currentLat = WAREHOUSE_LAT;
-  currentLng = WAREHOUSE_LNG;
-}
+      throw new Error("currentLat/currentLng required");
+    }
+
     const dist = haversineMeters(
       Number(currentLat),
       Number(currentLng),
@@ -407,6 +406,7 @@ if (desired === "WAREHOUSE_REACHED") {
     }
   }
 }
+
 
   let newIdx = idx;
   let newDistributors = distributors;
