@@ -259,41 +259,40 @@ if (!fullOrder) {
   fullOrder = orders[0];
 }
 /* --------------------------------------------------
-   5️⃣ Calc orders (FINAL)
+   5️⃣ Calc orders (exclude FULL)
 -------------------------------------------------- */
 const childOrders = orders.filter(
   (o) => !String(o.orderId || "").startsWith("ORD_FULL_")
 );
 
-let calcOrders = [];
-
-if (fullOrder) {
-  calcOrders = childOrders;
-} else {
-  calcOrders = orders;
-}
-
-// fallback: FULL exists but child not fetched
-if (fullOrder && calcOrders.length === 0) {
-  calcOrders = orders;
-}
+const calcOrders = childOrders.length > 0 ? childOrders : orders;
 
 /* --------------------------------------------------
-   6️⃣ Totals + Items (FINAL)
+   6️⃣ Totals + Items (FINAL FIX)
+   ✅ Prefer FULL totals if available
 -------------------------------------------------- */
 let totalQty = 0;
 let grandTotal = 0;
 const loadingItems = [];
 
-for (const o of calcOrders) {
-  totalQty += Number(o.totalQty || o.qty || 0);
-  grandTotal += Number(o.totalAmount || o.grandTotal || o.total || 0);
+// ✅ 1) Prefer FULL totals if present
+if (fullOrder && (fullOrder.totalQty != null || fullOrder.totalAmount != null || fullOrder.grandTotal != null)) {
+  totalQty = Number(fullOrder.totalQty || 0);
+  grandTotal = Number(fullOrder.totalAmount || fullOrder.grandTotal || 0);
 
-  const items = o.items || o.loadingItems || [];
-  for (const it of items) {
-    loadingItems.push(it);
+  const items = fullOrder.items || fullOrder.loadingItems || [];
+  for (const it of items) loadingItems.push(it);
+} else {
+  // ✅ 2) Else sum from child orders
+  for (const o of calcOrders) {
+    totalQty += Number(o.totalQty || o.qty || 0);
+    grandTotal += Number(o.totalAmount || o.grandTotal || o.total || o.amount || 0);
+
+    const items = o.items || o.loadingItems || [];
+    for (const it of items) loadingItems.push(it);
   }
 }
+
       /* --------------------------------------------------
         7️⃣ STATUS — ALWAYS FROM ORD_FULL IF EXISTS
       -------------------------------------------------- */
@@ -353,7 +352,7 @@ if (isMerged && fullOrder) {
   }
 } else {
   // ✅ SINGLE → only 1 distributor
-  distributorSource = [uniqCalcOrders[0]];
+  distributorSource = calcOrders.length > 0 ? [calcOrders[0]] : [];
 }
 
 const distributors = distributorSource.map((o, idx) => ({
