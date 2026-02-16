@@ -258,6 +258,7 @@ async function ensureVehicleSelected(orderIds = []) {
 if (!fullOrder) {
   fullOrder = orders[0];
 }
+
 /* --------------------------------------------------
    5️⃣ Calc orders (exclude FULL)
 -------------------------------------------------- */
@@ -266,33 +267,34 @@ const childOrders = orders.filter(
 );
 
 const calcOrders = childOrders.length > 0 ? childOrders : orders;
-
 /* --------------------------------------------------
    6️⃣ Totals + Items (FINAL FIX)
-   ✅ Prefer FULL totals if available
+   ✅ Always calculate from distributors.items
 -------------------------------------------------- */
-let totalQty = 0;
-let grandTotal = 0;
-const loadingItems = [];
+totalQty = 0;
+grandTotal = 0;
+loadingItems.length = 0;
 
-// ✅ 1) Prefer FULL totals if present
-if (fullOrder && (fullOrder.totalQty != null || fullOrder.totalAmount != null || fullOrder.grandTotal != null)) {
-  totalQty = Number(fullOrder.totalQty || 0);
-  grandTotal = Number(fullOrder.totalAmount || fullOrder.grandTotal || 0);
+// ❌ REMOVE THIS LINE (already declared in step 8)
+// const baseOrder = fullOrder || orders[0];
 
-  const items = fullOrder.items || fullOrder.loadingItems || [];
-  for (const it of items) loadingItems.push(it);
+if (Array.isArray(baseOrder?.distributors) && baseOrder.distributors.length) {
+  for (const d of baseOrder.distributors) {
+    const items = d?.items || [];
+    for (const it of items) {
+      totalQty += Number(it.qty || 0);
+      grandTotal += Number(it.total || 0);
+      loadingItems.push(it);
+    }
+  }
 } else {
-  // ✅ 2) Else sum from child orders
-  for (const o of calcOrders) {
-    totalQty += Number(o.totalQty || o.qty || 0);
-    grandTotal += Number(o.totalAmount || o.grandTotal || o.total || o.amount || 0);
-
-    const items = o.items || o.loadingItems || [];
-    for (const it of items) loadingItems.push(it);
+  const items = baseOrder?.items || [];
+  for (const it of items) {
+    totalQty += Number(it.qty || 0);
+    grandTotal += Number(it.total || 0);
+    loadingItems.push(it);
   }
 }
-
       /* --------------------------------------------------
         7️⃣ STATUS — ALWAYS FROM ORD_FULL IF EXISTS
       -------------------------------------------------- */
@@ -337,14 +339,21 @@ if (Array.isArray(baseOrder?.distributors) && baseOrder.distributors.length) {
   distributorSource = [baseOrder];
 }
 
-const distributors = distributorSource.map((o, idx) => ({
-  label: `D${idx + 1}`,
-  distributorId: o?.distributorCode || o?.distributorId || null,
-  distributorName: o?.distributorName || null,
-  orderId: baseOrder?.orderId || null,
-  amount: Number(baseOrder?.totalAmount || baseOrder?.grandTotal || 0),
-  qty: Number(baseOrder?.totalQty || 0),
-}));
+const distributors = distributorSource.map((d, idx) => {
+  const items = d?.items || [];
+
+  const qty = items.reduce((s, it) => s + Number(it.qty || 0), 0);
+  const amount = items.reduce((s, it) => s + Number(it.total || 0), 0);
+
+  return {
+    label: `D${idx + 1}`,
+    distributorId: d?.distributorCode || d?.distributorId || null,
+    distributorName: d?.distributorName || null,
+    orderId: baseOrder?.orderId || null,
+    amount,
+    qty,
+  };
+});
 
 const distributorDisplay =
   distributors.length <= 1
@@ -1165,39 +1174,69 @@ if (!fullOrderId) {
         },
       })
     );
+/* --------------------------------------------------
+   8️⃣ CHILD ORDERS UPDATE
+-------------------------------------------------- */
 
-    /* --------------------------------------------------
-       8️⃣ CHILD ORDERS UPDATE
-       🔥 DO NOT REMOVE driverName/mobile
-       (because timeline screen reads from child sometimes)
-    -------------------------------------------------- */
-    for (const cid of childOrderIds) {
-      await ddb.send(
-        new UpdateCommand({
-          TableName: ORDERS_TABLE,
-          Key: { pk: `ORDER#${cid}`, sk: "META" },
-          UpdateExpression: `
-            SET #s = :st,
-                mergedIntoOrderId = :mid,
-                driverId = :d,
-                driverName = :dn,
-                driverMobile = :dm,
-                vehicleNo = :vn,
-                updatedAt = :u
-          `,
-          ExpressionAttributeNames: { "#s": "status" },
-          ExpressionAttributeValues: {
-            ":st": "DRIVER_ASSIGNED",
-            ":mid": fullOrderId,
-            ":d": String(driverId).trim(),
-            ":dn": driverName,
-            ":dm": driverMobile,
-            ":vn": vehicleNo || null,
-            ":u": new Date().toISOString(),
-          },
-        })
-      );
-    }
+// ✅ MERGE ORDER: children should become MERGED
+if (childOrderIds.length > 1) {
+  for (const cid of childOrderIds) {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${cid}`, sk: "META" },
+        UpdateExpression: `
+          SET #s = :st,
+              mergedIntoOrderId = :mid,
+              driverId = :d,
+              driverName = :dn,
+              driverMobile = :dm,
+              vehicleNo = :vn,
+              updatedAt = :u
+        `,
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: {
+          ":st": "MERGED", // 🔥 IMPORTANT
+          ":mid": fullOrderId,
+          ":d": String(driverId).trim(),
+          ":dn": driverName,
+          ":dm": driverMobile,
+          ":vn": vehicleNo || null,
+          ":u": new Date().toISOString(),
+        },
+      })
+    );
+  }
+}
+
+// ✅ SINGLE ORDER: child is same order → keep DRIVER_ASSIGNED
+else {
+  const cid = childOrderIds[0];
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: ORDERS_TABLE,
+      Key: { pk: `ORDER#${cid}`, sk: "META" },
+      UpdateExpression: `
+        SET #s = :st,
+            driverId = :d,
+            driverName = :dn,
+            driverMobile = :dm,
+            vehicleNo = :vn,
+            updatedAt = :u
+      `,
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: {
+        ":st": "DRIVER_ASSIGNED",
+        ":d": String(driverId).trim(),
+        ":dn": driverName,
+        ":dm": driverMobile,
+        ":vn": vehicleNo || null,
+        ":u": new Date().toISOString(),
+      },
+    })
+  );
+}
 /* --------------------------------------------------
    9️⃣ BOOKINGS TABLE UPDATE (REAL FIX)
    - find bookings by pk + orderId
