@@ -1143,7 +1143,7 @@ if (!fullOrderId) {
               childOrderIds = :kids,
               mergedAt = :u,
               updatedAt = :u,
-              driverAssignedAt = :u,
+              driverAssignedAt = :u
         `,
         ExpressionAttributeNames: { "#s": "status" },
         ExpressionAttributeValues: {
