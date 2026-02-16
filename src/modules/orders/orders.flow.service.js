@@ -258,28 +258,28 @@ async function ensureVehicleSelected(orderIds = []) {
 if (!fullOrder) {
   fullOrder = orders[0];
 }
-      /* --------------------------------------------------
-        5️⃣ Calc orders (exclude FULL)
-      -------------------------------------------------- */
-      const childOrders = orders.filter(
-        (o) => !String(o.orderId || "").startsWith("ORD_FULL_")
-      );
+/* --------------------------------------------------
+   5️⃣ Calc orders (exclude FULL)
+-------------------------------------------------- */
+const childOrders = orders.filter(
+  (o) => !String(o.orderId || "").startsWith("ORD_FULL_")
+);
 
-      const calcOrders =
-  childOrders.length > 0
-    ? childOrders
-    : orders.filter(o => !String(o.orderId || "").startsWith("ORD_FULL_"));
+let calcOrders = [];
 
-  // 🔥 DEDUPE calcOrders (prevents double totals)
-  const seen = new Set();
-  const uniqCalcOrders = [];
+// ✅ If FULL exists → use child orders
+if (fullOrder) {
+  calcOrders = childOrders;
+} else {
+  // ✅ If no FULL → use all orders (single flow)
+  calcOrders = orders;
+}
 
-  for (const o of calcOrders) {
-    const id = String(o.orderId || "");
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    uniqCalcOrders.push(o);
-  }
+// 🔥 fallback: if FULL exists but children not fetched
+if (fullOrder && calcOrders.length === 0) {
+  calcOrders = orders;
+}
+
 /* --------------------------------------------------
    6️⃣ Totals + Items (FINAL FIX)
 -------------------------------------------------- */
