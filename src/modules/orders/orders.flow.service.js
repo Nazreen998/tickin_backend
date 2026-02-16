@@ -192,260 +192,194 @@ async function ensureVehicleSelected(orderIds = []) {
    ✅ GET FLOW (flowKey = orderId OR mergeKey OR ORD_FULL_)
    ✅ FIX: GEO/FULL flows totals + distributors should match BOOKING (no mismatch)
 ============================================================ */
-  export const getOrderFlowByKey = async (req, res) => {
-    try {
-      console.log("🔥 FLOW SERVICE HIT", req.params.flowKey);
+ export const getOrderFlowByKey = async (req, res) => {
+  try {
+    console.log("🔥 FLOW SERVICE HIT", req.params.flowKey);
 
-      let key = String(req.params.flowKey || "").trim();
-      if (!key) {
-        return res.status(400).json({ ok: false, message: "flowKey required" });
-      }
-
-      /* --------------------------------------------------
-        0️⃣ HARD GUARD: if ORDxxxx passed, prefer ORD_FULL_xxxx if exists
-      -------------------------------------------------- */
-      if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
-        const fullKey = `ORD_FULL_${key.replace(/^ORD/, "")}`;
-
-        const fg = await ddb.send(
-          new GetCommand({
-            TableName: ORDERS_TABLE,
-            Key: { pk: `ORDER#${fullKey}`, sk: "META" },
-          })
-        );
-
-        if (fg.Item) {
-          key = fullKey;
-        }
-      }
-
-      /* --------------------------------------------------
-        1️⃣ Resolve orderIds from ANY key
-      -------------------------------------------------- */
-      let orderIds = await resolveOrderIdsFromFlowKey(key);
-      /* --------------------------------------------------
-        3️⃣ Fetch all orders META
-      -------------------------------------------------- */
-      const orders = [];
-      for (const raw of orderIds) {
-        const oid = normalizeOrderId(raw);
-        if (!oid) continue;
-
-        const g = await ddb.send(
-          new GetCommand({
-            TableName: ORDERS_TABLE,
-            Key: { pk: `ORDER#${oid}`, sk: "META" },
-          })
-        );
-
-        if (g.Item) orders.push(g.Item);
-      }
-
-      if (orders.length === 0) {
-        return res
-          .status(404)
-          .json({ ok: false, message: "Orders meta not found" });
-      }
-
-      /* --------------------------------------------------
-        4️⃣ FULL ORDER (MASTER)
-      -------------------------------------------------- */
-     let fullOrder = orders.find((o) =>
-  String(o.orderId || "").startsWith("ORD_FULL_")
-);
-
-// 🔥 SINGLE ORDER FALLBACK
-if (!fullOrder) {
-  fullOrder = orders[0];
-}
-
-/* --------------------------------------------------
-   5️⃣ Calc orders (exclude FULL)
--------------------------------------------------- */
-const childOrders = orders.filter(
-  (o) => !String(o.orderId || "").startsWith("ORD_FULL_")
-);
-
-const calcOrders = childOrders.length > 0 ? childOrders : orders;
-/* --------------------------------------------------
-   6️⃣ Totals + Items (FINAL FIX)
-   ✅ Always calculate from distributors.items
--------------------------------------------------- */
-totalQty = 0;
-grandTotal = 0;
-loadingItems.length = 0;
-
-// ❌ REMOVE THIS LINE (already declared in step 8)
-// const baseOrder = fullOrder || orders[0];
-
-if (Array.isArray(baseOrder?.distributors) && baseOrder.distributors.length) {
-  for (const d of baseOrder.distributors) {
-    const items = d?.items || [];
-    for (const it of items) {
-      totalQty += Number(it.qty || 0);
-      grandTotal += Number(it.total || 0);
-      loadingItems.push(it);
+    let key = String(req.params.flowKey || "").trim();
+    if (!key) {
+      return res.status(400).json({ ok: false, message: "flowKey required" });
     }
-  }
-} else {
-  const items = baseOrder?.items || [];
-  for (const it of items) {
-    totalQty += Number(it.qty || 0);
-    grandTotal += Number(it.total || 0);
-    loadingItems.push(it);
-  }
-}
-      /* --------------------------------------------------
-        7️⃣ STATUS — ALWAYS FROM ORD_FULL IF EXISTS
-      -------------------------------------------------- */
-      let status = "CONFIRMED";
 
-      if (fullOrder?.status) {
-        status = String(fullOrder.status).toUpperCase();
-      } else {
-        const priority = [
-          "DELIVERY_COMPLETED",
-          "DELIVERED",
-          "OUT_FOR_DELIVERY",
-          "DRIVER_ASSIGNED",
-          "LOADING_COMPLETED",
-          "LOADING_STARTED",
-          "VEHICLE_SELECTED",
-          "SLOT_BOOKED",
-          "CONFIRMED",
-        ];
+    /* --------------------------------------------------
+       0️⃣ If ORDxxxx passed → auto switch to ORD_FULL_xxxx
+    -------------------------------------------------- */
+    if (key.startsWith("ORD") && !key.startsWith("ORD_FULL_")) {
+      const fullKey = `ORD_FULL_${key.replace(/^ORD/, "")}`;
 
-        const stList = orders.map((o) => String(o.status || "").toUpperCase());
+      const fg = await ddb.send(
+        new GetCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${fullKey}`, sk: "META" },
+        })
+      );
 
-        for (const p of priority) {
-          if (stList.includes(p)) {
-            status = p;
-            break;
-          }
-        }
-      }
-/* --------------------------------------------------
-   8️⃣ Distributors (FINAL FIX)
--------------------------------------------------- */
+      if (fg.Item) key = fullKey;
+    }
 
-let distributorSource = [];
+    /* --------------------------------------------------
+       1️⃣ Resolve orderIds
+    -------------------------------------------------- */
+    const orderIds = await resolveOrderIdsFromFlowKey(key);
 
-// 🔥 Always use FULL order if exists
-const baseOrder = fullOrder || orders[0];
+    /* --------------------------------------------------
+       2️⃣ Fetch META for all
+    -------------------------------------------------- */
+    const orders = [];
 
-if (Array.isArray(baseOrder?.distributors) && baseOrder.distributors.length) {
-  distributorSource = baseOrder.distributors;
-} else {
-  distributorSource = [baseOrder];
-}
+    for (const raw of orderIds) {
+      const oid = normalizeOrderId(raw);
+      if (!oid) continue;
 
-const distributors = distributorSource.map((d, idx) => {
-  const items = d?.items || [];
+      const g = await ddb.send(
+        new GetCommand({
+          TableName: ORDERS_TABLE,
+          Key: { pk: `ORDER#${oid}`, sk: "META" },
+        })
+      );
 
-  const qty = items.reduce((s, it) => s + Number(it.qty || 0), 0);
-  const amount = items.reduce((s, it) => s + Number(it.total || 0), 0);
+      if (g.Item) orders.push(g.Item);
+    }
 
-  return {
-    label: `D${idx + 1}`,
-    distributorId: d?.distributorCode || d?.distributorId || null,
-    distributorName: d?.distributorName || null,
-    orderId: baseOrder?.orderId || null,
-    amount,
-    qty,
-  };
-});
-
-const distributorDisplay =
-  distributors.length <= 1
-    ? distributors[0]?.distributorName || "-"
-    : distributors
-        .map((d) => `${d.label}: ${d.distributorName || "-"}`)
-        .join(" | ");
-
-      /* --------------------------------------------------
-        9️⃣ DRIVER DETAILS (🔥 MAIN FIX)
-        Always from FULL order (master)
-      -------------------------------------------------- */
-     const driverId = fullOrder?.driverId || null;
-
-const driverName =
-  fullOrder?.driverName ||
-  fullOrder?.driverMobile ||
-  orders.find(o => o.driverName)?.driverName ||
-  null;
-
-const driverMobile =
-  fullOrder?.driverMobile ||
-  orders.find(o => o.driverMobile)?.driverMobile ||
-  null;
-      /* --------------------------------------------------
-        🔟 SLOT DETAILS (for manager flow summary)
-      -------------------------------------------------- */
-      const slotDate = fullOrder?.slotDate || null;
-      const slotTime = fullOrder?.slotTime || null;
-      const slotPos = fullOrder?.slotPos || null;
-
-      /* --------------------------------------------------
-        11️⃣ RESPONSE
-      -------------------------------------------------- */
-      return res.json({
-        ok: true,
-
-        mergeKey: fullOrder?.mergeKey || orders[0]?.mergeKey || null,
-
-        flowKey: fullOrder?.orderId || orders[0]?.orderId,
-        masterOrderId: fullOrder?.orderId || orders[0]?.orderId,
-        trackingOrderId: fullOrder?.orderId || orders[0]?.orderId,
-
-        // 🔥 important for flutter
-        fullOrderId: fullOrder?.orderId || null,
-
-        orderIds: calcOrders.map((o) => o.orderId).filter(Boolean),
-
-        totalQty,
-        grandTotal,
-
-        status: String(status || "").toUpperCase(),
-
-      vehicleType:
-    fullOrder?.vehicleType ||
-    orders.find(o => o.vehicleType)?.vehicleType ||
-    null,
-
-  vehicleNo:
-    fullOrder?.vehicleNo ||
-    orders.find(o => o.vehicleNo)?.vehicleNo ||
-    null,
-       //timing
-        createdAt: fullOrder.createdAt,
-        confirmedAt: fullOrder.confirmedAt,
-        loadingStartedAt: fullOrder.loadingStartedAt,
-        loadingEndAt: fullOrder.loadingEndAt,
-        slotBookedAt: fullOrder.slotBookedAt || null,
-        vehicleSelectedAt: fullOrder.vehicleSelectedAt || null,
-        driverAssignedAt: fullOrder.driverAssignedAt || null,
-        // ✅ slot
-        slotDate,
-        slotTime,
-        slotPos,
-
-        // ✅ driver
-        driverId,
-        driverName,
-        driverMobile,
-
-        loadingItems,
-        distributors,
-        distributorDisplay,
-
-        // child orders only
-        orders: calcOrders,
+    if (!orders.length) {
+      return res.status(404).json({
+        ok: false,
+        message: "Orders meta not found",
       });
-    } catch (err) {
-      console.error("getOrderFlowByKey error", err);
-      return res.status(500).json({ ok: false, message: err.message });
     }
-  };
+
+    /* --------------------------------------------------
+       3️⃣ FULL ORDER (MASTER)
+    -------------------------------------------------- */
+    let fullOrder = orders.find((o) =>
+      String(o.orderId || "").startsWith("ORD_FULL_")
+    );
+
+    if (!fullOrder) fullOrder = orders[0];
+
+    /* --------------------------------------------------
+       4️⃣ Common Base Order
+    -------------------------------------------------- */
+    const baseOrder = fullOrder || orders[0];
+
+    /* --------------------------------------------------
+       5️⃣ Totals Calculation (Always from distributors.items)
+    -------------------------------------------------- */
+    let totalQty = 0;
+    let grandTotal = 0;
+    const loadingItems = [];
+
+    if (
+      Array.isArray(baseOrder.distributors) &&
+      baseOrder.distributors.length
+    ) {
+      for (const d of baseOrder.distributors) {
+        const items = d?.items || [];
+        for (const it of items) {
+          totalQty += Number(it.qty || 0);
+          grandTotal += Number(it.total || 0);
+          loadingItems.push(it);
+        }
+      }
+    } else {
+      const items = baseOrder.items || [];
+      for (const it of items) {
+        totalQty += Number(it.qty || 0);
+        grandTotal += Number(it.total || 0);
+        loadingItems.push(it);
+      }
+    }
+
+    /* --------------------------------------------------
+       6️⃣ STATUS
+    -------------------------------------------------- */
+    const status = String(fullOrder?.status || "CONFIRMED").toUpperCase();
+
+    /* --------------------------------------------------
+       7️⃣ Distributors (D1, D2, D3 Support)
+    -------------------------------------------------- */
+    let distributorSource = [];
+
+    if (
+      Array.isArray(baseOrder.distributors) &&
+      baseOrder.distributors.length
+    ) {
+      distributorSource = baseOrder.distributors;
+    } else {
+      distributorSource = [baseOrder];
+    }
+
+    const distributors = distributorSource.map((d, idx) => ({
+      label: `D${idx + 1}`,
+      distributorId: d?.distributorCode || d?.distributorId || null,
+      distributorName: d?.distributorName || null,
+      orderId: baseOrder?.orderId || null,
+    }));
+
+    const distributorDisplay =
+      distributors.length <= 1
+        ? distributors[0]?.distributorName || "-"
+        : distributors
+            .map((d) => `${d.label}: ${d.distributorName || "-"}`)
+            .join(" | ");
+
+    /* --------------------------------------------------
+       8️⃣ Driver
+    -------------------------------------------------- */
+    const driverId = fullOrder?.driverId || null;
+    const driverName = fullOrder?.driverName || null;
+    const driverMobile = fullOrder?.driverMobile || null;
+
+    /* --------------------------------------------------
+       9️⃣ Slot
+    -------------------------------------------------- */
+    const slotDate = fullOrder?.slotDate || null;
+    const slotTime = fullOrder?.slotTime || null;
+    const slotPos = fullOrder?.slotPos || null;
+
+    /* --------------------------------------------------
+       🔟 Response
+    -------------------------------------------------- */
+    return res.json({
+      ok: true,
+
+      flowKey: baseOrder?.orderId,
+      fullOrderId: fullOrder?.orderId || null,
+
+      totalQty,
+      grandTotal,
+      status,
+
+      vehicleType: baseOrder?.vehicleType || null,
+      vehicleNo: baseOrder?.vehicleNo || null,
+
+      createdAt: baseOrder?.createdAt || null,
+      confirmedAt: baseOrder?.confirmedAt || null,
+      loadingStartedAt: baseOrder?.loadingStartedAt || null,
+      loadingEndAt: baseOrder?.loadingEndAt || null,
+
+      slotDate,
+      slotTime,
+      slotPos,
+
+      driverId,
+      driverName,
+      driverMobile,
+
+      loadingItems,
+      distributors,
+      distributorDisplay,
+
+      orders,
+    });
+  } catch (err) {
+    console.error("getOrderFlowByKey error", err);
+    return res.status(500).json({
+      ok: false,
+      message: err.message,
+    });
+  }
+};
 export const slotCompleted = async (req, res) => {
   try {
     const key = req.body.flowKey || req.body.mergeKey || req.body.orderId;
