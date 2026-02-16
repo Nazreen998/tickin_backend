@@ -179,7 +179,7 @@ for (const b of bookings) {
         }
       } catch (e) {}
 
-      const d2 = (g.distributors || []).slice(0, 2);
+      const d2 = (g.distributors || []);
       const names = d2
         .map((d, i) => `D${i + 1}: ${d.distributorName || "-"}`)
         .join(" | ");
