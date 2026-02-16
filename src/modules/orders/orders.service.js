@@ -89,11 +89,6 @@ for (const b of bookings) {
 
   const flowKey = masterId || mk || oid;
 
-  /* ❌ skip FULL master booking itself */
-if (oid === flowKey) {
-  continue;
-}
-
   if (!grouped[flowKey]) {
     grouped[flowKey] = {
       flowKey,
