@@ -121,24 +121,20 @@ async function getDriverName(driverId) {
 
 /* ✅ Force display time (IST) */
 function prettyTime(ev) {
-  const t =
-    ev?.displayTime ||
-    ev?.timestamp ||
-    ev?.createdAt ||
-    null;
+  if (!ev) return null;
 
+  // ✅ if already formatted
+  if (ev.displayTime) return ev.displayTime;
+
+  const t = ev.timestamp || ev.createdAt;
   if (!t) return null;
 
-  // ✅ if already formatted, return
-  if (String(t).includes("MMM")) return t;
-
   try {
-    return dayjs(t).tz(IST).format("DD MMM YYYY, hh:mm A");
+    return dayjs.utc(t).tz(IST).format("DD MMM YYYY, hh:mm A");
   } catch (e) {
     return String(t);
   }
 }
-
 /* ✅ Build Neat Timeline (alias + gap fix) */
 function buildNeatTimeline(events = [], opts = {}) {
   const stopCount = Math.max(1, Number(opts.stopCount || 1));

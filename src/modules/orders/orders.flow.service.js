@@ -265,7 +265,11 @@ if (!fullOrder) {
         (o) => !String(o.orderId || "").startsWith("ORD_FULL_")
       );
 
-      const calcOrders = childOrders.length > 0 ? childOrders : orders;
+      const calcOrders =
+  childOrders.length > 0
+    ? childOrders
+    : orders.filter(o => !String(o.orderId || "").startsWith("ORD_FULL_"));
+
   // 🔥 DEDUPE calcOrders (prevents double totals)
   const seen = new Set();
   const uniqCalcOrders = [];
@@ -276,21 +280,22 @@ if (!fullOrder) {
     seen.add(id);
     uniqCalcOrders.push(o);
   }
+/* --------------------------------------------------
+   6️⃣ Totals + Items (FINAL FIX)
+-------------------------------------------------- */
+let totalQty = 0;
+let grandTotal = 0;
+const loadingItems = [];
 
-      /* --------------------------------------------------
-        6️⃣ Totals + Items
-      -------------------------------------------------- */
-      let totalQty = 0;
-      let grandTotal = 0;
-      const loadingItems = [];
+for (const o of uniqCalcOrders) {
+  totalQty += Number(o.totalQty || o.qty || 0);
+  grandTotal += Number(o.totalAmount || o.grandTotal || o.total || 0);
 
-      uniqCalcOrders.forEach((o) => {
-        totalQty += Number(o.totalQty || o.qty || 0);
-        grandTotal += Number(o.totalAmount || o.grandTotal || o.total || 0);
-
-        const items = o.items || o.loadingItems || [];
-        items.forEach((it) => loadingItems.push(it));
-      });
+  const items = o.items || o.loadingItems || [];
+  for (const it of items) {
+    loadingItems.push(it);
+  }
+}
 
       /* --------------------------------------------------
         7️⃣ STATUS — ALWAYS FROM ORD_FULL IF EXISTS
