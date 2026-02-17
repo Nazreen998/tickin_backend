@@ -9,8 +9,9 @@ const WAREHOUSE_LAT = Number(process.env.WAREHOUSE_LAT);
 const WAREHOUSE_LNG = Number(process.env.WAREHOUSE_LNG);
 
 const REACH_RADIUS_METERS =
-  Number(process.env.REACH_RADIUS_METERS) || 200;
-
+  Number(process.env.WAREHOUSE_RADIUS_METERS) ||
+  Number(process.env.REACH_RADIUS_METERS) ||
+  200;
 /* ------------------ helpers ------------------ */
 
 function orderKey(orderId) {
@@ -385,7 +386,12 @@ if (totalStops <= 1 && Number(idx) !== 0) {
 
   validateTransition(currentStatus, desired);
 // ✅ WAREHOUSE REACHED → location validation
-if (desired === "WAREHOUSE_REACHED") {
+// ✅ Warehouse validation (for both WAREHOUSE_REACHED & DELIVERY_COMPLETED)
+const mustBeNearWarehouse =
+  desired === "WAREHOUSE_REACHED" ||
+  desired === "DELIVERY_COMPLETED";
+
+if (mustBeNearWarehouse) {
   if (!isFiniteLatLng(WAREHOUSE_LAT, WAREHOUSE_LNG)) {
     throw new Error("Warehouse location missing or invalid");
   }
@@ -406,15 +412,13 @@ if (desired === "WAREHOUSE_REACHED") {
       return {
         ok: false,
         reached: false,
-        message: "Try again",
+        message: "You are not at warehouse",
         distanceMeters: Math.round(dist),
         radiusMeters: REACH_RADIUS_METERS,
       };
     }
   }
 }
-
-
   let newIdx = idx;
   let newDistributors = distributors;
 
