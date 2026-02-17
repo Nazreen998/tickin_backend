@@ -33,9 +33,6 @@ export const getSlotConfirmedOrders = async (req, res) => {
 
     const pk = `COMPANY#VAGR_IT#DATE#${date}`;
 
-    /* --------------------------------------------------
-       1️⃣ Fetch ACTIVE bookings for that date
-    -------------------------------------------------- */
     const bookingsRes = await ddb.send(
       new ScanCommand({
         TableName: BOOKINGS_TABLE,
@@ -52,80 +49,84 @@ export const getSlotConfirmedOrders = async (req, res) => {
     const bookings = bookingsRes.Items || [];
 
     if (bookings.length === 0) {
-      return res.json({
-        ok: true,
-        count: 0,
-        date,
-        orders: [],
-      });
+      return res.json({ ok: true, count: 0, date, orders: [] });
     }
 
-    /* --------------------------------------------------
-       2️⃣ Group by FLOW KEY
-       flowKey priority:
-       ORD_FULL_ > mergeKey > orderId
-    -------------------------------------------------- */
     const grouped = {};
-for (const b of bookings) {
-  const oid = String(b.orderId || "").trim();
-  if (!oid) continue;
 
-  // 🚫 ignore cancelled
-  if (String(b.status || "").toUpperCase() === "CANCELLED") continue;
-  if (b.isActive === false) continue;
+    /* -------------------------------------------------- */
+    /* 1️⃣ GROUP BOOKINGS */
+    /* -------------------------------------------------- */
 
-  // 🚫 ignore incomplete slot bookings
-  if (!b.slotTime || String(b.slotTime).trim() === "") continue;
-  if (!b.slotPos && !b.pos) continue;
+    for (const b of bookings) {
+      const oid = String(b.orderId || "").trim();
+      if (!oid) continue;
 
-  const masterId =
-    b.mergedIntoOrderId &&
-    String(b.mergedIntoOrderId).startsWith("ORD_FULL_")
-      ? b.mergedIntoOrderId
-      : null;
+      if (String(b.status || "").toUpperCase() === "CANCELLED") continue;
+      if (b.isActive === false) continue;
+      if (!b.slotTime) continue;
 
-  let mk = b.mergeKey || null;
-  if (mk && String(mk).startsWith("LOC#")) mk = null;
+      const masterId =
+        b.mergedIntoOrderId &&
+        String(b.mergedIntoOrderId).startsWith("ORD_FULL_")
+          ? b.mergedIntoOrderId
+          : null;
 
-  const flowKey = masterId || mk || oid;
+      const flowKey = masterId || b.mergeKey || oid;
 
-  if (!grouped[flowKey]) {
-    grouped[flowKey] = {
-      flowKey,
-      mergeKey: mk,
-      date,
-      slotTime: b.slotTime,
-      pos: b.slotPos || b.pos || null,
-      vehicleType: masterId ? "FULL" : b.vehicleType || "-",
-      orderIds: [],
-      distributors: [],
-      totalQty: 0,
-      grandAmount: 0,
-    };
-  }
+      if (!grouped[flowKey]) {
+        grouped[flowKey] = {
+          flowKey,
+          date,
+          slotTime: b.slotTime,
+          pos: b.slotPos || b.pos || null,
+          vehicleType: masterId ? "FULL" : b.vehicleType || "-",
+          orderIds: [],
+          distributors: [],
+          distributorOrder: [], // 👈 preserve original order
+          totalQty: 0,
+          grandAmount: 0,
+        };
+      }
 
-  if (!grouped[flowKey].orderIds.includes(oid)) {
-    grouped[flowKey].orderIds.push(oid);
-  }
+      // ----------------------------
+      // ✅ FULL Booking Record
+      // ----------------------------
+      if (oid.startsWith("ORD_FULL_")) {
 
-  const already = grouped[flowKey].distributors.some(
-    (d) => d.orderId === oid
-  );
+        const rawName = String(b.distributorName || "").trim();
 
-  if (!already) {
-    grouped[flowKey].distributors.push({
-      orderId: oid,
-      distributorName: b.distributorName || "-",
-      distributorId: b.distributorCode || null,
-    });
-  }
+        grouped[flowKey].distributorOrder = rawName
+          .split("+")
+          .map(x => x.trim())
+          .filter(Boolean);
 
-  grouped[flowKey].grandAmount += Number(b.amount || 0);
-}
+        continue; // stop FULL booking processing
+      }
+      
+      // ----------------------------
+      // ✅ CHILD Booking Record
+      // ----------------------------
 
-    /* --------------------------------------------------
-       3️⃣ Fetch correct STATUS + QTY from ORDERS META
-    -------------------------------------------------- */
+      // push child orderId
+      if (!grouped[flowKey].orderIds.includes(oid)) {
+        grouped[flowKey].orderIds.push(oid);
+      }
+
+      // ✅ SINGLE ORDER fallback
+      if (!grouped[flowKey].distributorOrder.length) {
+        const rawName = String(b.distributorName || "").trim();
+        grouped[flowKey].distributorOrder = [rawName];
+      }
+
+      // sum amount
+      grouped[flowKey].grandAmount += Number(b.amount || 0);
+    }
+
+    /* -------------------------------------------------- */
+    /* 2️⃣ FETCH CHILD ORDER QTY + STATUS */
+    /* -------------------------------------------------- */
+
     const PRIORITY = [
       "DELIVERY_COMPLETED",
       "DELIVERED",
@@ -145,50 +146,50 @@ for (const b of bookings) {
       let status = "CONFIRMED";
       let totalQty = 0;
 
-      // fetch FULL order if exists
-      const mainId = g.flowKey;
+      for (const oid of g.orderIds) {
+        if (oid.startsWith("ORD_FULL_")) continue;
 
-      try {
-        const metaRes = await ddb.send(
+        const child = await ddb.send(
           new GetCommand({
             TableName: ORDERS_TABLE,
-            Key: { pk: `ORDER#${mainId}`, sk: "META" },
+            Key: { pk: `ORDER#${oid}`, sk: "META" },
           })
         );
 
-        if (metaRes.Item) {
-          status = String(metaRes.Item.status || "CONFIRMED").toUpperCase();
-          totalQty = Number(metaRes.Item.totalQty || 0);
-        } else {
-          // if not FULL, calculate from child orders
-          for (const oid of g.orderIds) {
-            const child = await ddb.send(
-              new GetCommand({
-                TableName: ORDERS_TABLE,
-                Key: { pk: `ORDER#${oid}`, sk: "META" },
-              })
-            );
-            if (child.Item) {
-              totalQty += Number(child.Item.totalQty || 0);
-              const st = String(child.Item.status || "").toUpperCase();
-              if (PRIORITY.indexOf(st) < PRIORITY.indexOf(status)) {
-                status = st;
-              }
-            }
-          }
-        }
-      } catch (e) {}
+        if (!child.Item) continue;
 
-      const d2 = (g.distributors || []).slice(0, 2);
-      const names = d2
-        .map((d, i) => `D${i + 1}: ${d.distributorName || "-"}`)
+        totalQty += Number(child.Item.totalQty || 0);
+
+        const st = String(child.Item.status || "").toUpperCase();
+        if (PRIORITY.indexOf(st) < PRIORITY.indexOf(status)) {
+          status = st;
+        }
+      }
+
+      /* -------------------------------------------------- */
+      /* 3️⃣ BUILD CLEAN DISTRIBUTOR LIST */
+      /* -------------------------------------------------- */
+
+      const cleanDistributors = g.distributorOrder.map((name, i) => ({
+        distributorName: name,
+        position: `D${i + 1}`,
+      }));
+
+      const distributorString = cleanDistributors
+        .map((d, i) => `D${i + 1}: ${d.distributorName}`)
         .join(" | ");
 
       finalOrders.push({
-        ...g,
-        distributors: d2,
-        distributorName: names || "-",
+        flowKey: g.flowKey,
+        date: g.date,
+        slotTime: g.slotTime,
+        pos: g.pos,
+        vehicleType: g.vehicleType,
+        orderIds: g.orderIds,
+        distributors: cleanDistributors,
+        distributorName: distributorString,
         totalQty,
+        grandAmount: Number(g.grandAmount.toFixed(2)),
         status,
         orderId: g.flowKey,
       });
