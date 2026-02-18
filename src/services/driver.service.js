@@ -388,8 +388,7 @@ if (totalStops <= 1 && Number(idx) !== 0) {
 // ✅ WAREHOUSE REACHED → location validation
 // ✅ Warehouse validation (for both WAREHOUSE_REACHED & DELIVERY_COMPLETED)
 const mustBeNearWarehouse =
-  desired === "WAREHOUSE_REACHED" ||
-  desired === "DELIVERY_COMPLETED";
+  desired === "WAREHOUSE_REACHED";
 
 if (mustBeNearWarehouse) {
   if (!isFiniteLatLng(WAREHOUSE_LAT, WAREHOUSE_LNG)) {
