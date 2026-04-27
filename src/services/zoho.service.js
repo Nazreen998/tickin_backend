@@ -6,7 +6,7 @@ let accessToken = null;
 export const getZohoAccessToken = async () => {
   try {
     const res = await axios.post(
-      "https://accounts.zoho.com/oauth/v2/token",
+      "https://accounts.zoho.in/oauth/v2/token",
       null,
       {
         params: {
