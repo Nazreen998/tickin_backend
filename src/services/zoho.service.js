@@ -159,3 +159,22 @@ export const createZohoSalesOrder = async ({
     throw err;
   }
 };
+// 🗑️ DELETE SALES ORDER
+export const deleteZohoSalesOrder = async (zohoOrderId) => {
+  try {
+    const token = await getToken();
+
+    const res = await axios.delete(
+      `https://www.zohoapis.in/books/v3/salesorders/${zohoOrderId}?organization_id=${process.env.ZOHO_ORG_ID}`,
+      {
+        headers: { Authorization: `Zoho-oauthtoken ${token}` },
+      }
+    );
+
+    console.log("✅ Zoho Order Deleted:", zohoOrderId);
+    return res.data;
+  } catch (err) {
+    console.error("❌ Zoho Delete Error:", err.response?.data || err.message);
+    throw err;
+  }
+};

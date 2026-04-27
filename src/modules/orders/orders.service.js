@@ -11,7 +11,7 @@ import { ddb } from "../../config/dynamo.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
 import { buildOrderStopsFromDistributorId } from "../../services/orderStops.helper.js";
-import { createZohoSalesOrder } from "../../services/zoho.service.js";
+import { createZohoSalesOrder,deleteZohoSalesOrder } from "../../services/zoho.service.js";
 import {
   deductDistributorMonthlyGoalProductWise,
   addBackDistributorMonthlyGoalProductWise,
@@ -458,17 +458,29 @@ const createdAt = new Date().toISOString();
         totalQty,
       },
     });
-// ==========================
-// ✅ ZOHO AUTO SYNC
-// ==========================
+// ZOHO AUTO SYNC section-ல இதை மாத்துங்க
 try {
-  await createZohoSalesOrder({
+  const zohoRes = await createZohoSalesOrder({
     distributorName,
     distributorId,
     items: finalItems,
   });
 
-  console.log("✅ Zoho Draft Order Created");
+  // ✅ Zoho Order ID save பண்றோம்
+  const zohoOrderId = zohoRes?.salesorder?.salesorder_id;
+
+  if (zohoOrderId) {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: ORDERS_TABLE,
+        Key: { pk: `ORDER#${orderId}`, sk: "META" },
+        UpdateExpression: "SET zohoOrderId = :zid",
+        ExpressionAttributeValues: { ":zid": zohoOrderId },
+      })
+    );
+  }
+
+  console.log("✅ Zoho Draft Order Created:", zohoOrderId);
 } catch (e) {
   console.error("❌ Zoho sync failed:", e.message);
 }
@@ -1027,7 +1039,15 @@ await ddb.send(
       by: user.mobile,
       extra: { role: user.role, note: "Order cancelled and goal restored product-wise" },
     });
-
+// ✅ Zoho Delete
+try {
+  if (order.zohoOrderId) {
+    await deleteZohoSalesOrder(order.zohoOrderId);
+    console.log("✅ Zoho Order Deleted:", order.zohoOrderId);
+  }
+} catch (e) {
+  console.error("❌ Zoho delete failed:", e.message);
+}
     return res.json({
       message: "✅ Order cancelled + goal restored (product-wise)",
       orderId,
