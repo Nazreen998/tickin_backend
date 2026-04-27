@@ -11,6 +11,7 @@ import { ddb } from "../../config/dynamo.js";
 import { addTimelineEvent } from "../timeline/timeline.helper.js";
 import { bookSlot } from "../slot/slot.service.js";
 import { buildOrderStopsFromDistributorId } from "../../services/orderStops.helper.js";
+import { createZohoSalesOrder } from "../../services/zoho.service.js";
 import {
   deductDistributorMonthlyGoalProductWise,
   addBackDistributorMonthlyGoalProductWise,
@@ -457,7 +458,21 @@ const createdAt = new Date().toISOString();
         totalQty,
       },
     });
+// ==========================
+// ✅ ZOHO AUTO SYNC
+// ==========================
+try {
+  await createZohoSalesOrder({
+    distributorName,
+    distributorId,
+    items: finalItems,
+  });
 
+  console.log("✅ Zoho Draft Order Created");
+} catch (e) {
+  console.error("❌ Zoho sync failed:", e.message);
+}
+// ==========================
     return res.json({
       ok: true,
       message:
