@@ -41,7 +41,7 @@ export const getOrCreateCustomer = async ({ name, code }) => {
 
     // 🔍 Search by contact_number (BEST)
     const search = await axios.get(
-      `https://www.zohoapis.com/books/v3/contacts?contact_number=${code}&organization_id=${process.env.ZOHO_ORG_ID}`,
+      `https://www.zohoapis.in/books/v3/contacts?contact_number=${code}&organization_id=${process.env.ZOHO_ORG_ID}`,
       {
         headers: { Authorization: `Zoho-oauthtoken ${token}` },
       }
@@ -53,7 +53,7 @@ export const getOrCreateCustomer = async ({ name, code }) => {
 
     // ➕ Create
     const create = await axios.post(
-      `https://www.zohoapis.com/books/v3/contacts?organization_id=${process.env.ZOHO_ORG_ID}`,
+      `https://www.zohoapis.in/books/v3/contacts?organization_id=${process.env.ZOHO_ORG_ID}`,
       {
         contact_name: name,
         contact_type: "customer",
@@ -78,7 +78,7 @@ export const getOrCreateItem = async ({ productId, name, price }) => {
 
     // 🔍 Search by SKU
     const search = await axios.get(
-      `https://www.zohoapis.com/books/v3/items?sku=${productId}&organization_id=${process.env.ZOHO_ORG_ID}`,
+      `https://www.zohoapis.in/books/v3/items?sku=${productId}&organization_id=${process.env.ZOHO_ORG_ID}`,
       {
         headers: { Authorization: `Zoho-oauthtoken ${token}` },
       }
@@ -90,7 +90,7 @@ export const getOrCreateItem = async ({ productId, name, price }) => {
 
     // ➕ Create item
     const create = await axios.post(
-      `https://www.zohoapis.com/books/v3/items?organization_id=${process.env.ZOHO_ORG_ID}`,
+      `https://www.zohoapis.in/books/v3/items?organization_id=${process.env.ZOHO_ORG_ID}`,
       {
         name,
         rate: price,
@@ -141,7 +141,7 @@ export const createZohoSalesOrder = async ({
 
     // ✅ 3. Create Order
     const res = await axios.post(
-      `https://www.zohoapis.com/books/v3/salesorders?organization_id=${process.env.ZOHO_ORG_ID}`,
+      `https://www.zohoapis.in/books/v3/salesorders?organization_id=${process.env.ZOHO_ORG_ID}`,
       {
         customer_id,
         line_items,
