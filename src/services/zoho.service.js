@@ -39,29 +39,52 @@ export const getOrCreateCustomer = async ({ name, code }) => {
   try {
     const token = await getToken();
 
-    // 🔍 Search by contact_number (BEST)
+    // 🔍 1. Search by contact_number
     const search = await axios.get(
       `https://www.zohoapis.in/books/v3/contacts?contact_number=${code}&organization_id=${process.env.ZOHO_ORG_ID}`,
-      {
-        headers: { Authorization: `Zoho-oauthtoken ${token}` },
-      }
+      { headers: { Authorization: `Zoho-oauthtoken ${token}` } }
     );
 
     if (search.data.contacts.length > 0) {
       return search.data.contacts[0].contact_id;
     }
 
-    // ➕ Create
+    // 🔍 2. Search by name (partial match)
+    const nameSearch = await axios.get(
+      `https://www.zohoapis.in/books/v3/contacts?contact_name=${encodeURIComponent(name)}&organization_id=${process.env.ZOHO_ORG_ID}`,
+      { headers: { Authorization: `Zoho-oauthtoken ${token}` } }
+    );
+
+    const matched = nameSearch.data.contacts?.find(
+      (c) =>
+        c.contact_name?.toLowerCase().includes(name.toLowerCase()) ||
+        name.toLowerCase().includes(c.contact_name?.toLowerCase())
+    );
+
+    if (matched) {
+      // ✅ contact_number update பண்றோம் - இனிமேல் duplicate வராது!
+      await axios.put(
+        `https://www.zohoapis.in/books/v3/contacts/${matched.contact_id}?organization_id=${process.env.ZOHO_ORG_ID}`,
+        { 
+          contact_name: matched.contact_name,
+          contact_number: code 
+        },
+        { headers: { Authorization: `Zoho-oauthtoken ${token}` } }
+      );
+
+      console.log(`✅ Zoho contact_number updated for: ${name}`);
+      return matched.contact_id;
+    }
+
+    // ➕ 3. Create new customer
     const create = await axios.post(
       `https://www.zohoapis.in/books/v3/contacts?organization_id=${process.env.ZOHO_ORG_ID}`,
       {
         contact_name: name,
         contact_type: "customer",
-        contact_number: code, // UNIQUE
+        contact_number: code,
       },
-      {
-        headers: { Authorization: `Zoho-oauthtoken ${token}` },
-      }
+      { headers: { Authorization: `Zoho-oauthtoken ${token}` } }
     );
 
     return create.data.contact.contact_id;
